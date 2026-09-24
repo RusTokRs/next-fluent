@@ -3,6 +3,7 @@ import type { Formatter, GetTranslationsOptions, RequestConfigFn, RichTranslatio
 export interface ServerI18nOptions {
     locales?: readonly string[];
     defaultLocale?: string;
+    cookieName?: string;
     cookieNames?: readonly string[];
     headerName?: string;
 }

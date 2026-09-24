@@ -810,16 +810,14 @@ async function getLocale(options) {
   const defLocale = options?.defaultLocale ?? globalDefaultLocale;
   const headerKey = options?.headerName ?? "x-next-locale";
   const cookieList = options?.cookieNames ?? [
-    "NEXT_LOCALE",
-    "rustok-locale",
-    "rustok-admin-locale",
-    "rustok-frontend-locale"
+    ...options?.cookieName ? [options.cookieName] : [],
+    "NEXT_LOCALE"
   ];
   try {
     const { headers, cookies } = await import("next/headers.js").catch(() => import("next/headers"));
     const headerStore = await headers();
     const cookieStore = await cookies();
-    const rawHeader = headerStore.get(headerKey) ?? headerStore.get("x-rustok-effective-locale");
+    const rawHeader = headerStore.get(headerKey);
     if (allowedLocales) {
       const validHeaderLocale = matchSupportedLocale(rawHeader, allowedLocales);
       if (validHeaderLocale) {

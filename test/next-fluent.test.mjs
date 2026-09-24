@@ -147,7 +147,7 @@ test('Middleware correctly redirects unlocalized routes to locale prefix', async
   });
 
   const mockRequest = {
-    url: 'https://rustok.local/',
+    url: 'https://example.com/',
     nextUrl: {
       pathname: '/',
       search: '',
@@ -162,6 +162,6 @@ test('Middleware correctly redirects unlocalized routes to locale prefix', async
 
   const response = await middleware(mockRequest);
   assert.equal(response.status, 307);
-  assert.equal(response.headers.get('location'), 'https://rustok.local/ru');
-  assert.equal(response.headers.get('x-rustok-effective-locale'), 'ru');
+  assert.equal(response.headers.get('location'), 'https://example.com/ru');
+  assert.equal(response.headers.get('x-next-locale'), 'ru');
 });

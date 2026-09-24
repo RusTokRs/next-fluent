@@ -168,7 +168,7 @@ feature-beta = Beta Feature
 test('typegen parses FTL messages and generates TypeScript declarations', () => {
   const ftl = `
 # Core messages
-app-title = RusToK Platform
+app-title = NextFluent Platform
 cart-items = { $count ->
     [one] { $count } item
    *[other] { $count } items

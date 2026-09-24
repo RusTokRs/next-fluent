@@ -152,7 +152,7 @@ export function resolveLocalizedPathname(
     ? (matchSupportedLocale(explicitLocale, locales) ?? defaultLocale)
     : defaultLocale;
 
-  // Localized pathname mapping (e.g. /about -> /about-us for 'en' and /o-nas for 'ru')
+  // Localized pathname mapping (e.g. /about -> /about-us for 'en', /o-nas for 'ru', /ueber-uns for 'de', /a-propos for 'fr')
   let mappedPathname = cleanPathname;
   const pathnamesTarget = pathnames?.[lookupKey] ?? pathnames?.[cleanPathname];
   if (pathnamesTarget) {

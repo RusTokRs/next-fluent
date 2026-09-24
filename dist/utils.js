@@ -176,6 +176,7 @@ function buildKeyCandidates(namespace, key, options) {
 export {
   buildKeyCandidates,
   canonicalizeLocale,
+  localeLookupCandidates,
   matchSupportedLocale,
   normalizeLocaleTag,
   resolveAcceptLanguage,

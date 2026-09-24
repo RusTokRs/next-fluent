@@ -84,8 +84,8 @@ test('NF-02: Middleware propagates request headers to Server Components', async 
   assert.equal(response.status, 200);
 
   // Both response header AND downstream request header must be populated
-  assert.equal(response.headers.get('x-rustok-effective-locale'), 'ru');
-  assert.equal(response.request.headers.get('x-rustok-effective-locale'), 'ru');
+  assert.equal(response.headers.get('x-next-locale'), 'ru');
+  assert.equal(response.request.headers.get('x-next-locale'), 'ru');
   assert.equal(response.request.headers.get('user-agent'), 'TestAgent');
 });
 
@@ -146,12 +146,12 @@ test('NF-04: localePrefix strategies (always, as-needed, never)', async () => {
   // b) default locale path /about should succeed directly without redirect
   const resAsNeededUnprefixed = await mwAsNeeded(makeReq('/about', undefined, undefined));
   assert.equal(resAsNeededUnprefixed.status, 200);
-  assert.equal(resAsNeededUnprefixed.headers.get('x-rustok-effective-locale'), 'en');
+  assert.equal(resAsNeededUnprefixed.headers.get('x-next-locale'), 'en');
 
   // c) non-default locale /ru/about should succeed directly with ru
   const resAsNeededRu = await mwAsNeeded(makeReq('/ru/about', undefined, undefined));
   assert.equal(resAsNeededRu.status, 200);
-  assert.equal(resAsNeededRu.headers.get('x-rustok-effective-locale'), 'ru');
+  assert.equal(resAsNeededRu.headers.get('x-next-locale'), 'ru');
 
   // 3. 'never' strategy:
   const mwNever = createI18nMiddleware({
@@ -167,7 +167,7 @@ test('NF-04: localePrefix strategies (always, as-needed, never)', async () => {
   // b) /about should succeed with resolved locale from cookie
   const resNeverCookie = await mwNever(makeReq('/about', 'ru', undefined));
   assert.equal(resNeverCookie.status, 200);
-  assert.equal(resNeverCookie.headers.get('x-rustok-effective-locale'), 'ru');
+  assert.equal(resNeverCookie.headers.get('x-next-locale'), 'ru');
 });
 
 test('NF-05: Server locale resolution enforces allow-list boundary against malicious inputs', async () => {

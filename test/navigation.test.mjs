@@ -93,20 +93,20 @@ test('resolveLocalizedPathname leaves external URLs unchanged', () => {
   };
 
   assert.equal(
-    resolveLocalizedPathname({ href: 'https://rustok.dev/docs', locale: 'ru' }, config),
-    'https://rustok.dev/docs'
+    resolveLocalizedPathname({ href: 'https://example.com/docs', locale: 'ru' }, config),
+    'https://example.com/docs'
   );
   assert.equal(
     resolveLocalizedPathname({ href: 'http://localhost:3000', locale: 'en' }, config),
     'http://localhost:3000'
   );
   assert.equal(
-    resolveLocalizedPathname({ href: 'mailto:info@rustok.dev', locale: 'ru' }, config),
-    'mailto:info@rustok.dev'
+    resolveLocalizedPathname({ href: 'mailto:info@example.com', locale: 'ru' }, config),
+    'mailto:info@example.com'
   );
   assert.equal(
-    resolveLocalizedPathname({ href: '//cdn.rustok.dev/logo.png', locale: 'en' }, config),
-    '//cdn.rustok.dev/logo.png'
+    resolveLocalizedPathname({ href: '//cdn.example.com/logo.png', locale: 'en' }, config),
+    '//cdn.example.com/logo.png'
   );
 });
 

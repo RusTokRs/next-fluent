@@ -40,7 +40,7 @@ export function normalizeLocaleTag(value?: string | null): string | undefined {
   return canonicalizeLocale(value);
 }
 
-function localeLookupCandidates(canonical: string): string[] {
+export function localeLookupCandidates(canonical: string): string[] {
   const candidates: string[] = [];
   const pushCandidate = (candidate?: string): void => {
     if (candidate && !candidates.some((item) => item.toLowerCase() === candidate.toLowerCase())) {

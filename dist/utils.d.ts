@@ -1,5 +1,6 @@
 export declare function canonicalizeLocale(locale?: string | null): string | undefined;
 export declare function normalizeLocaleTag(value?: string | null): string | undefined;
+export declare function localeLookupCandidates(canonical: string): string[];
 export declare function matchSupportedLocale(value: string | null | undefined, locales: readonly string[]): string | undefined;
 export declare function resolveAcceptLanguage(header: string | null | undefined, locales: readonly string[]): string | undefined;
 export interface BaseI18nConfig {

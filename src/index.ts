@@ -96,6 +96,7 @@ export {
   canonicalizeLocale,
   normalizeLocaleTag,
   matchSupportedLocale,
+  localeLookupCandidates,
   resolveAcceptLanguage,
   validateI18nConfig,
   withKebabKey,

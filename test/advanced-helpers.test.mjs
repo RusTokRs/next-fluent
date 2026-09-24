@@ -44,14 +44,14 @@ notice = Please read our <terms>terms</terms> and <privacy>privacy</privacy>.
 
   const t = createTranslator(bundle, {
     defaultTranslationValues: {
-      company: 'RusToK Platform',
+      company: 'NextFluent Platform',
       terms: (chunks) => `[TERMS: ${chunks}]`,
     },
   });
 
   // Global $company is used when not passed at call-time
   const msg = t('welcome', { name: 'Alice' });
-  assert.equal(msg, 'Welcome to RusToK Platform, Alice!');
+  assert.equal(msg, 'Welcome to NextFluent Platform, Alice!');
 
   // Global <terms> tag is used automatically, call-time <privacy> tag is merged
   const richNotice = t.rich('notice', {
@@ -72,12 +72,12 @@ test('call-time translation values override defaultTranslationValues', () => {
 
   const t = createTranslator(bundle, {
     defaultTranslationValues: {
-      platform: 'RusToK Default',
+      platform: 'NextFluent Default',
     },
   });
 
-  assert.equal(t('header'), 'Powered by RusToK Default');
-  assert.equal(t('header', { platform: 'RusToK Custom' }), 'Powered by RusToK Custom');
+  assert.equal(t('header'), 'Powered by NextFluent Default');
+  assert.equal(t('header', { platform: 'NextFluent Custom' }), 'Powered by NextFluent Custom');
 });
 
 test('createI18n exposes getFormatter, getStaticParams, and navigation on runtime', async () => {

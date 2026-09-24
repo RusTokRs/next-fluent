@@ -18,6 +18,7 @@ let globalDefaultLocale: string = 'en';
 export interface ServerI18nOptions {
   locales?: readonly string[];
   defaultLocale?: string;
+  cookieName?: string;
   cookieNames?: readonly string[];
   headerName?: string;
 }
@@ -76,10 +77,8 @@ export async function getLocale(options?: ServerI18nOptions): Promise<string> {
   const defLocale = options?.defaultLocale ?? globalDefaultLocale;
   const headerKey = options?.headerName ?? 'x-next-locale';
   const cookieList = options?.cookieNames ?? [
+    ...(options?.cookieName ? [options.cookieName] : []),
     'NEXT_LOCALE',
-    'rustok-locale',
-    'rustok-admin-locale',
-    'rustok-frontend-locale',
   ];
 
   try {
@@ -88,7 +87,7 @@ export async function getLocale(options?: ServerI18nOptions): Promise<string> {
     const cookieStore = await cookies();
 
     // 1. Primary effective header with allow-list validation
-    const rawHeader = headerStore.get(headerKey) ?? headerStore.get('x-rustok-effective-locale');
+    const rawHeader = headerStore.get(headerKey);
     if (allowedLocales) {
       const validHeaderLocale = matchSupportedLocale(rawHeader, allowedLocales);
       if (validHeaderLocale) {

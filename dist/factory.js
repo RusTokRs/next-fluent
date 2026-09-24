@@ -232,7 +232,7 @@ function createI18nMiddleware(options) {
     const firstSegment = segments[0];
     const matchedPrefix = matchSupportedLocale(firstSegment, locales);
     const cookieLocale = matchSupportedLocale(
-      request.cookies.get(cookieName)?.value || request.cookies.get("NEXT_LOCALE")?.value || request.cookies.get("rustok-locale")?.value,
+      request.cookies.get(cookieName)?.value || (cookieName !== "NEXT_LOCALE" ? request.cookies.get("NEXT_LOCALE")?.value : void 0),
       locales
     );
     const headerLocale = resolveAcceptLanguage(
@@ -252,9 +252,6 @@ function createI18nMiddleware(options) {
         }
       }
       requestHeaders.set(headerName, effectiveLocale);
-      if (headerName !== "x-rustok-effective-locale") {
-        requestHeaders.set("x-rustok-effective-locale", effectiveLocale);
-      }
       const response = rewritePath ? NextResponse.rewrite(new URL(rewritePath, request.url), {
         request: { headers: requestHeaders }
       }) : NextResponse.next({
@@ -265,9 +262,6 @@ function createI18nMiddleware(options) {
       }
       if (response.headers?.set) {
         response.headers.set(headerName, effectiveLocale);
-        if (headerName !== "x-rustok-effective-locale") {
-          response.headers.set("x-rustok-effective-locale", effectiveLocale);
-        }
       }
       if (response.cookies?.set) {
         response.cookies.set(cookieName, effectiveLocale, {
@@ -282,9 +276,6 @@ function createI18nMiddleware(options) {
       const response = NextResponse.redirect(targetUrl);
       if (response.headers?.set) {
         response.headers.set(headerName, targetLocale);
-        if (headerName !== "x-rustok-effective-locale") {
-          response.headers.set("x-rustok-effective-locale", targetLocale);
-        }
       }
       if (response.cookies?.set) {
         response.cookies.set(cookieName, targetLocale, {
@@ -1276,16 +1267,14 @@ async function getLocale(options) {
   const defLocale = options?.defaultLocale ?? globalDefaultLocale;
   const headerKey = options?.headerName ?? "x-next-locale";
   const cookieList = options?.cookieNames ?? [
-    "NEXT_LOCALE",
-    "rustok-locale",
-    "rustok-admin-locale",
-    "rustok-frontend-locale"
+    ...options?.cookieName ? [options.cookieName] : [],
+    "NEXT_LOCALE"
   ];
   try {
     const { headers, cookies } = await import("next/headers.js").catch(() => import("next/headers"));
     const headerStore = await headers();
     const cookieStore = await cookies();
-    const rawHeader = headerStore.get(headerKey) ?? headerStore.get("x-rustok-effective-locale");
+    const rawHeader = headerStore.get(headerKey);
     if (allowedLocales) {
       const validHeaderLocale = matchSupportedLocale(rawHeader, allowedLocales);
       if (validHeaderLocale) {
