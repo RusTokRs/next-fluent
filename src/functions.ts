@@ -1,4 +1,5 @@
 import type { FluentFunction } from '@fluent/bundle';
+import { LRUCache } from './lru';
 
 /**
  * Unwraps FluentType wrapper to extract raw underlying value.
@@ -12,6 +13,18 @@ export function unwrapFluentValue(val: unknown): unknown {
     return (val as { valueOf: () => unknown }).valueOf();
   }
   return val;
+}
+
+const numberFormatCache = new LRUCache<Intl.NumberFormat>(200);
+
+function getCachedNumberFormat(locale: string, options: Intl.NumberFormatOptions): Intl.NumberFormat {
+  const cacheKey = `${locale}::${options.style}::${options.currency ?? ''}::${options.currencyDisplay ?? ''}::${options.minimumFractionDigits ?? ''}::${options.maximumFractionDigits ?? ''}`;
+  let nf = numberFormatCache.get(cacheKey);
+  if (!nf) {
+    nf = new Intl.NumberFormat(locale, options);
+    numberFormatCache.set(cacheKey, nf);
+  }
+  return nf;
 }
 
 /**
@@ -41,7 +54,7 @@ export function createDefaultFunctions(locale: string): Record<string, FluentFun
           : undefined;
 
       try {
-        return new Intl.NumberFormat(locale, {
+        return getCachedNumberFormat(locale, {
           style: 'currency',
           currency,
           currencyDisplay,
@@ -70,7 +83,7 @@ export function createDefaultFunctions(locale: string): Record<string, FluentFun
           : undefined;
 
       try {
-        return new Intl.NumberFormat(locale, {
+        return getCachedNumberFormat(locale, {
           style: 'percent',
           minimumFractionDigits: minFraction,
           maximumFractionDigits: maxFraction,

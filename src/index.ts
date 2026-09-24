@@ -1,4 +1,16 @@
 export {
+  defineRouting,
+  type RoutingConfig,
+  type DomainConfig,
+  type Pathnames,
+} from './routing';
+
+export {
+  createNextFluentPlugin,
+  type NextConfigLike,
+} from './plugin';
+
+export {
   createI18n,
   type I18nRuntime,
 } from './factory';
@@ -53,6 +65,7 @@ export {
   getCachedFluentBundle,
   clearBundleCache,
   getBundleCacheStats,
+  LRUCache,
   type CreateFluentBundleOptions,
   type CreateTranslatorOptions,
 } from './bundle';
@@ -92,6 +105,9 @@ export type {
   FluentBundle,
   FluentArgs,
   FluentVariable,
+  FluentFunction,
+  FluentMessages,
+  DefaultKey,
   NonEmptyArray,
   TagRenderFn,
   RichTranslationValues,

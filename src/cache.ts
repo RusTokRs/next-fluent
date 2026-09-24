@@ -7,43 +7,58 @@ export interface CreateFluentBundleOptions {
   disableCache?: boolean;
 }
 
+import { LRUCache } from './lru';
+export { LRUCache };
+
 const MAX_RESOURCE_CACHE = 1000;
 const MAX_BUNDLE_CACHE = 500;
 
-// FNV-1a 64-bit hash for fast, deterministic string hashing without external dependencies
-export function fnv1a64(input: string): string {
-  let hash = 0xcbf29ce484222325n;
-  const prime = 0x100000001b3n;
-  const mask = 0xffffffffffffffffn;
-
+/**
+ * Fast 32-bit FNV-1a hash without heap allocations (no BigInt).
+ */
+export function fnv1a32(input: string): string {
+  let hash = 0x811c9dc5;
   for (let i = 0; i < input.length; i++) {
-    hash ^= BigInt(input.charCodeAt(i));
-    hash = (hash * prime) & mask;
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
   }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
 
-  return hash.toString(16).padStart(16, '0');
+/**
+ * Backwards-compatible alias for 64-bit/32-bit string hashing.
+ */
+export function fnv1a64(input: string): string {
+  return fnv1a32(input);
 }
 
 export function computeSourceHash(source: string | readonly string[]): string {
   if (typeof source === 'string') {
-    return `${source.length}:${fnv1a64(source)}`;
+    return `${source.length}:${fnv1a32(source)}`;
   }
-  const joined = source.join('\u0000');
-  return `${source.length}:${joined.length}:${fnv1a64(joined)}`;
+  let totalLen = 0;
+  let combinedHash = 0x811c9dc5;
+  for (const item of source) {
+    if (!item) continue;
+    totalLen += item.length;
+    for (let i = 0; i < item.length; i++) {
+      combinedHash ^= item.charCodeAt(i);
+      combinedHash = Math.imul(combinedHash, 0x01000193);
+    }
+    // Delimiter step
+    combinedHash ^= 0;
+    combinedHash = Math.imul(combinedHash, 0x01000193);
+  }
+  return `${source.length}:${totalLen}:${(combinedHash >>> 0).toString(16).padStart(8, '0')}`;
 }
 
-const resourceCache = new Map<string, FluentResource>();
-const bundleCache = new Map<string, FluentBundle>();
+const resourceCache = new LRUCache<FluentResource>(MAX_RESOURCE_CACHE);
+const bundleCache = new LRUCache<FluentBundle>(MAX_BUNDLE_CACHE);
 
 export function getOrCreateResource(source: string): FluentResource {
-  const hash = `${source.length}:${fnv1a64(source)}`;
+  const hash = `${source.length}:${fnv1a32(source)}`;
   let res = resourceCache.get(hash);
   if (!res) {
-    if (resourceCache.size >= MAX_RESOURCE_CACHE) {
-      // Evict oldest 20%
-      const keys = Array.from(resourceCache.keys()).slice(0, Math.floor(MAX_RESOURCE_CACHE * 0.2));
-      for (const k of keys) resourceCache.delete(k);
-    }
     res = new FluentResource(source);
     resourceCache.set(hash, res);
   }
@@ -58,7 +73,6 @@ export function getCachedFluentBundle(
   const useIsolating = options.useIsolating ?? true;
   const hasCustomFunctions = options.functions && Object.keys(options.functions).length > 0;
 
-  // We can only cache the whole bundle if there are no custom closures/functions
   const sourceHash = computeSourceHash(ftlSource);
   const cacheKey = `${locale}:iso=${useIsolating}:${sourceHash}`;
 
@@ -91,10 +105,6 @@ export function getCachedFluentBundle(
   }
 
   if (!hasCustomFunctions && !options.disableCache) {
-    if (bundleCache.size >= MAX_BUNDLE_CACHE) {
-      const keys = Array.from(bundleCache.keys()).slice(0, Math.floor(MAX_BUNDLE_CACHE * 0.2));
-      for (const k of keys) bundleCache.delete(k);
-    }
     bundleCache.set(cacheKey, bundle);
   }
 

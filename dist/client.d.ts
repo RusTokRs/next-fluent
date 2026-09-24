@@ -1,6 +1,6 @@
 import React from 'react';
-import type { FluentBundle } from '@fluent/bundle';
-import type { FormattedMessageProps, Formatter, RichTranslationValues, Translations } from './types';
+import type { FluentBundle, FluentFunction } from '@fluent/bundle';
+import type { DefaultKey, FormattedMessageProps, Formatter, RichTranslationValues, Translations } from './types';
 import { createFormatter } from './formatter';
 export type { FormattedMessageProps };
 export { createFormatter };
@@ -11,6 +11,8 @@ interface FluentContextValue {
     fallbackBundle: FluentBundle | null;
     fallbackBundles?: readonly FluentBundle[];
     timeZone?: string;
+    now?: Date;
+    functions?: Record<string, FluentFunction>;
     defaultTranslationValues?: RichTranslationValues;
     debug?: boolean;
 }
@@ -21,16 +23,18 @@ export interface FluentProviderProps {
     fallbackMessages?: string | readonly string[] | FluentBundle;
     fallbackBundles?: FluentBundle | readonly FluentBundle[];
     timeZone?: string;
+    now?: Date;
+    functions?: Record<string, FluentFunction>;
     defaultTranslationValues?: RichTranslationValues;
     debug?: boolean;
     children: React.ReactNode;
 }
-export declare function FluentProvider({ locale, messages, fallbackLocale, fallbackMessages, fallbackBundles, timeZone, defaultTranslationValues, debug, children, }: FluentProviderProps): React.FunctionComponentElement<React.ProviderProps<FluentContextValue>>;
+export declare function FluentProvider({ locale, messages, fallbackLocale, fallbackMessages, fallbackBundles, timeZone, now, functions, defaultTranslationValues, debug, children, }: FluentProviderProps): React.FunctionComponentElement<React.ProviderProps<FluentContextValue>>;
 export declare function useLocale(): string;
 export declare function useTimeZone(): string;
 export declare function useFormatter(): Formatter;
 export declare function useNow(options?: {
     updateInterval?: number;
 }): Date;
-export declare function useTranslations<Key extends string = string, ArgsMap extends Record<string, any> = Record<string, any>>(namespace?: string): Translations<Key, ArgsMap>;
-export declare function FormattedMessage<Key extends string = string, ArgsMap extends Record<string, any> = Record<string, any>>({ id, args, values, fallback, className, as: Component, }: FormattedMessageProps<Key, ArgsMap>): React.ReactNode;
+export declare function useTranslations<Key extends string = DefaultKey, ArgsMap extends Record<string, any> = Record<string, any>>(namespace?: string): Translations<Key, ArgsMap>;
+export declare function FormattedMessage<Key extends string = DefaultKey, ArgsMap extends Record<string, any> = Record<string, any>>({ id, args, values, fallback, className, as: Component, }: FormattedMessageProps<Key, ArgsMap>): React.ReactNode;

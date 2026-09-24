@@ -1,29 +1,75 @@
-# @rustok/next-fluent
+# next-fluent
 
 A modern, fast, lightweight localization library for Next.js App Router (React Server Components + Client Components) powered by Mozilla Project Fluent (`.ftl`).
 
+The high-performance Project Fluent alternative to `next-intl`.
+
 ## Features
 
-- **Project Fluent Engine**: Full support for Mozilla Fluent syntax, advanced pluralization (`one`/`few`/`many`), terms, selectors, and variables via official `@fluent/bundle`.
-- **Bidi-Safe Interpolation**: Unicode Bidirectional Isolating characters (FSI/PDI) are enabled by default around interpolated Fluent values so mixed RTL/LTR text remains correctly ordered. Low-level `createFluentBundle` callers can explicitly set `useIsolating: false` only when they intentionally need legacy byte-for-byte output.
-- **RSC Native**: `getTranslations(namespace?)` and `getLocale()` with request-level memoization via React `cache()`.
-- **Client Components**: `<FluentProvider>` context and lightweight `useTranslations(namespace?)`, `useLocale()` hooks.
-- **Middleware**: Built-in `createI18nMiddleware` for App Router URL prefixing, cookie management, and `Accept-Language` detection.
-- **List / Attribute Support**: `t.raw(key)` formats message attributes (e.g. `.item0`, `.item1`) into arrays.
-- **Zero Heavy Dependencies**: Pure TypeScript, minimal footprint.
+- **Project Fluent Engine**: Full support for Mozilla Fluent syntax, asymmetric localization, terms (`-brand`), complex pluralization (`one`/`few`/`many`), selectors, and variables via official `@fluent/bundle`.
+- **First-Class App Router Support**: Strict separation between Server Components (`next-fluent/server`) and Client Components (`next-fluent/client`), fully compatible with React 19.
+- **Rich Text & React Node Interpolation**: Pass React components directly into message variables (`{ user: <UserProfile /> }`) and format interactive tags (`<link>docs</link>`, `<br>`).
+- **Locale-Aware Routing & Navigation**: Centralized `defineRouting` with localized pathnames (`/about` -> `/about-us` / `/o-nas`), custom domain routing, and automatic URL rewriting without 404s.
+- **Next.js Webpack & Turbopack Plugin**: Seamless zero-boilerplate configuration binding via `next-fluent/plugin`.
+- **Zero Hydration Mismatch**: Synchronized server and client timestamp snapshots via `<FluentProvider now={...}>` and `useNow()`.
+- **Full Type Safety**: Type generation powered by `@fluent/syntax` AST with TypeScript declaration merging (`declare global { interface FluentMessages extends AppMessages {} }`) and automatic namespace key autocompletion.
+- **High-Performance LRU Caching**: Bounded true LRU caching and allocation-free 32-bit FNV-1a hashing.
+- **Clean Standards**: Uses standard `NEXT_LOCALE` cookie and `x-next-locale` headers.
+
+---
 
 ## Installation
 
 ```bash
-npm install @rustok/next-fluent
+npm install next-fluent
 ```
+
+---
 
 ## Quick Start
 
-### 1. Server Configuration (`src/i18n/request.ts`)
+### 1. Next.js Configuration (`next.config.mjs`)
+
+Wrap your Next.js config with `createNextFluentPlugin` to automatically bind your server request config across Webpack and Turbopack:
+
+```javascript
+import createNextFluentPlugin from 'next-fluent/plugin';
+
+const withNextFluent = createNextFluentPlugin('./src/i18n/request.ts');
+
+/** @type {import('next').NextConfig} */
+const nextConfig = {};
+
+export default withNextFluent(nextConfig);
+```
+
+### 2. Routing Configuration (`src/i18n/routing.ts`)
+
+Define your locales, prefixes, and optional localized URL slugs:
 
 ```typescript
-import { setRequestConfig } from '@rustok/next-fluent/server';
+import { defineRouting } from 'next-fluent/routing';
+
+export const routing = defineRouting({
+  locales: ['en', 'ru', 'de'] as const,
+  defaultLocale: 'en',
+  localePrefix: 'as-needed', // 'always' | 'as-needed' | 'never'
+  pathnames: {
+    '/about': {
+      en: '/about-us',
+      ru: '/o-nas',
+      de: '/ueber-uns',
+    },
+  },
+});
+```
+
+### 3. Server Configuration (`src/i18n/request.ts`)
+
+Configure message catalogs and request-level settings:
+
+```typescript
+import { setRequestConfig } from 'next-fluent/server';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -39,18 +85,37 @@ export default setRequestConfig(async ({ locale }) => {
 });
 ```
 
-### 2. Root Layout (`app/layout.tsx`)
+### 4. Middleware (`middleware.ts`)
+
+Enable automatic URL prefixing, internal rewrites for App Router `[locale]` folders, and `Accept-Language` detection:
+
+```typescript
+import { createI18nMiddleware } from 'next-fluent/middleware';
+import { routing } from './src/i18n/routing';
+
+export default createI18nMiddleware(routing);
+
+export const config = {
+  matcher: ['/', '/((?!api|_next|_vercel|.*\\..*).*)'],
+};
+```
+
+### 5. Root Layout (`app/[locale]/layout.tsx`)
 
 ```tsx
-import { FluentProvider } from '@rustok/next-fluent';
-import { getLocale, getMessages } from '@rustok/next-fluent/server';
+import { FluentProvider } from 'next-fluent';
+import { getLocale, getMessages, setRequestLocale } from 'next-fluent/server';
 
 export default async function RootLayout({
   children,
+  params,
 }: {
   children: React.ReactNode;
+  params: Promise<{ locale: string }>;
 }) {
-  const locale = await getLocale();
+  const { locale } = await params;
+  setRequestLocale(locale);
+
   const messages = await getMessages();
 
   return (
@@ -65,334 +130,102 @@ export default async function RootLayout({
 }
 ```
 
-### 3. Server Components (RSC)
+### 6. Navigation Helpers (`src/i18n/navigation.ts`)
+
+Create type-safe, locale-aware navigation components and hooks:
+
+```typescript
+import { createNavigation } from 'next-fluent/navigation';
+import { routing } from './routing';
+
+export const { Link, redirect, usePathname, useRouter, getPathname } =
+  createNavigation(routing);
+```
+
+---
+
+## Usage in Components
+
+### Server Components (RSC)
 
 ```tsx
-import { getTranslations } from '@rustok/next-fluent/server';
+import { getTranslations } from 'next-fluent/server';
 
-export default async function Page() {
+export default async function StorePage() {
   const t = await getTranslations('Storefront');
 
   return (
-    <div>
+    <main>
       <h1>{t('title')}</h1>
       <p>{t('welcome', { name: 'Alice' })}</p>
-    </div>
+    </main>
   );
 }
 ```
 
-### 4. Client Components
+### Client Components
 
 ```tsx
 'use client';
 
-import { useTranslations, useLocale } from '@rustok/next-fluent';
+import { useTranslations, useLocale } from 'next-fluent';
+import { Link } from '@/i18n/navigation';
 
 export function Navigation() {
-  const t = useTranslations('app.nav');
+  const t = useTranslations('nav');
   const locale = useLocale();
 
   return (
     <nav>
-      <span>Current locale: {locale}</span>
-      <a href="/">{t('dashboard')}</a>
+      <span>Current: {locale}</span>
+      <Link href="/about">{t('about')}</Link>
     </nav>
   );
 }
 ```
 
-### 5. Rich Text & Interactive Markup (`t.rich` and `<FormattedMessage />`)
+### Rich Text & React Node Interpolation
 
-Format messages with interactive React elements or styled tags:
+Pass React components directly into variables or map interactive markup tags:
 
 ```ftl
-terms-notice = By signing up you agree to our <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>.
+# messages/en.ftl
+welcome-banner = Welcome, { $avatar } { $name }! Visit our <terms>Terms</terms> or <help>Help Center</help>.
+multiline = Notice:<br>Please read carefully.
 ```
 
-Using `t.rich`:
 ```tsx
-const content = t.rich('terms-notice', {
-  terms: (chunks) => <a href="/terms" className="underline font-semibold">{chunks}</a>,
-  privacy: (chunks) => <a href="/privacy" className="underline font-semibold">{chunks}</a>,
+const content = t.rich('welcome-banner', {
+  name: user.name,
+  avatar: <UserAvatar user={user} />,
+  terms: (chunks) => <Link href="/terms" className="underline">{chunks}</Link>,
+  help: <HelpBadge />,
 });
 ```
 
-Or declaratively with `<FormattedMessage />`:
-```tsx
-import { FormattedMessage } from '@rustok/next-fluent';
+---
 
-<FormattedMessage
-  id="terms-notice"
-  values={{
-    terms: (chunks) => <a href="/terms">{chunks}</a>,
-    privacy: (chunks) => <a href="/privacy">{chunks}</a>,
-  }}
-  fallback="Default terms notice"
-/>
-```
+## Type Safety & Autocompletion
 
-### 6. Checking Key Existence (`t.has`)
-
-```tsx
-if (t.has('banner.promotion')) {
-  return <PromoBanner message={t('banner.promotion')} />;
-}
-```
-
-### 7. Type Safety & Code Generation (`next-fluent typegen`)
-
-Generate TypeScript definitions directly from your `.ftl` catalogs for full autocompletion in your IDE:
+Generate full TypeScript definitions from your `.ftl` catalogs using AST-based typegen:
 
 ```bash
 npx next-fluent typegen --input messages/en.ftl --output src/types/i18n.d.ts
 ```
 
-### 8. Fallback Locales & Modular Catalogs
-
-Prevent missing translation keys by specifying a fallback bundle:
-
-```tsx
-<FluentProvider
-  locale="ru"
-  messages={ruCatalog}
-  fallbackLocale="en"
-  fallbackMessages={enCatalog}
->
-  {children}
-</FluentProvider>
-```
-
-Compose modular domain catalogs seamlessly:
-
-```tsx
-const messages = [baseCatalogFtl, blogModuleFtl, forumModuleFtl];
-<FluentProvider locale={locale} messages={messages}>
-  {children}
-</FluentProvider>
-```
-
-### 9. Built-in Intl Functions (`CURRENCY` and `PERCENT`)
-
-Format monetary amounts and percentages directly inside FTL without ad-hoc component code:
-
-```ftl
-cart-total = Total: { CURRENCY($total, currency: "USD") }
-order-discount = Discount: { PERCENT($rate, minimumFractionDigits: 1) }
-```
-
-### 10. Debug Mode
-
-Highlight missing translations in development:
-
-```tsx
-<FluentProvider locale={locale} messages={messages} debug={process.env.NODE_ENV !== 'production'}>
-  {children}
-</FluentProvider>
-```
-
-Missing keys return `[MISSING: key.name]` and output warnings to the developer console.
-
-### 11. Pseudo-localization for UI Testing
-
-Stress-test layout overflow, hardcoded dimensions, and text truncation using pseudo-localization:
-
-```bash
-npx next-fluent pseudo --input messages/en.ftl --output messages/en-XA.ftl
-```
-
-Produces accented, elongated text (`[Šţööŕééƒŕööñţ...]`) while preserving variables, tags, and selectors.
-
-### 12. Direct `.ftl` Asset Imports (Docker & Edge)
-
-Enable bundling `.ftl` catalogs directly into server JS bundles for standalone Docker / Vercel Edge / AWS Lambda:
-
-```javascript
-// next.config.mjs
-export default {
-  webpack(config) {
-    config.module.rules.push({
-      test: /\.ftl$/,
-      type: 'asset/source',
-    });
-    return config;
-  },
-};
-```
-
-Import `.ftl` files directly:
+The generator produces a declaration merging interface:
 
 ```typescript
-import enMessages from '@/messages/en.ftl';
-```
-
-### 13. Middleware (`middleware.ts`)
-
-```typescript
-import { createI18nMiddleware } from '@rustok/next-fluent/middleware';
-
-export default createI18nMiddleware({
-  locales: ['en', 'ru'],
-  defaultLocale: 'en',
-});
-
-export const config = {
-  matcher: ['/', '/((?!api|_next|_vercel|.*\\..*).*)'],
-};
-```
-
-### 14. Locale-Aware Navigation (`@rustok/next-fluent/navigation`)
-
-Set up centralized, type-safe, locale-aware navigation matching your routing strategy (`always`, `as-needed`, or `never`):
-
-```typescript
-// src/i18n/navigation.ts
-import { createNavigation } from '@rustok/next-fluent/navigation';
-
-export const { Link, redirect, usePathname, useRouter, getPathname } =
-  createNavigation({
-    locales: ['en', 'ru'] as const,
-    defaultLocale: 'en',
-    localePrefix: 'as-needed',
-  });
-```
-
-Using in components:
-
-```tsx
-'use client';
-
-import { Link, usePathname, useRouter } from '@/i18n/navigation';
-
-export function NavigationBar() {
-  const pathname = usePathname(); // Clean route without locale prefix (e.g. '/dashboard')
-  const router = useRouter();
-
-  return (
-    <nav>
-      {/* Automatically links to current or targeted locale */}
-      <Link href="/orders">Orders</Link>
-      <Link href="/orders" locale="ru">Заказы (RU)</Link>
-
-      {/* Programmatic navigation with locale switching */}
-      <button onClick={() => router.push('/settings', { locale: 'ru' })}>
-        Switch to Russian
-      </button>
-    </nav>
-  );
+// src/types/i18n.d.ts (auto-generated)
+declare global {
+  interface FluentMessages extends AppMessages {}
 }
 ```
 
-### 15. Intl Formatting Suite (`useFormatter` and `getFormatter`)
+Once declared, `useTranslations('namespace')` and `getTranslations('namespace')` **automatically autocomplete message keys and validate arguments** across your entire project!
 
-Format dates, numbers, currencies, relative times, and lists using standard `Intl` facilities with built-in LRU instance caching:
-
-**Client Components:**
-```tsx
-'use client';
-
-import { useFormatter, useNow, useTimeZone } from '@rustok/next-fluent';
-
-export function InvoiceCard({ amount, dueDate }: { amount: number; dueDate: Date }) {
-  const format = useFormatter();
-  const timeZone = useTimeZone();
-  const now = useNow({ updateInterval: 60000 }); // Updates every minute
-
-  return (
-    <div>
-      <p>Due: {format.dateTime(dueDate, { dateStyle: 'medium' })}</p>
-      <p>Relative: {format.relativeTime(-2, 'day')}</p>
-      <p>Total: {format.number(amount, { style: 'currency', currency: 'USD' })}</p>
-      <p>Items: {format.list(['Widget A', 'Widget B'], { type: 'conjunction' })}</p>
-    </div>
-  );
-}
-```
-
-**Server Components (RSC):**
-```tsx
-import { getFormatter } from '@rustok/next-fluent/server';
-
-export default async function SummaryPage() {
-  const format = await getFormatter();
-
-  return (
-    <div>
-      <p>Generated: {format.dateTime(new Date(), { timeStyle: 'short' })}</p>
-      <p>Price: {format.number(99.99, { style: 'currency', currency: 'EUR' })}</p>
-    </div>
-  );
-}
-```
-
-### 16. Static Site Generation (`getStaticParams`)
-
-Generate static route params for App Router dynamic segments:
-
-```typescript
-// app/[locale]/layout.tsx
-import { getStaticParams } from '@rustok/next-fluent/server';
-
-export function generateStaticParams() {
-  return getStaticParams(['en', 'ru']); // [{ locale: 'en' }, { locale: 'ru' }]
-}
-```
-
-### 17. Default Translation Values & Tags
-
-Configure shared tags (like bold, links) or variables globally at the provider or translator level:
-
-```tsx
-<FluentProvider
-  locale={locale}
-  messages={messages}
-  timeZone="Europe/Berlin"
-  defaultTranslationValues={{
-    platform: 'RusToK',
-    b: (chunks) => <strong>{chunks}</strong>,
-  }}
->
-  {children}
-</FluentProvider>
-```
-
-## Low-Level Bundle Options
-
-`createFluentBundle(locale, source, { useIsolating })` exposes the underlying Fluent isolation switch.
-The default is `true`. Setting it to `false` changes the formatted string contract by removing FSI/PDI
-around interpolated values and should only be done when a consumer deliberately owns bidi handling or
-requires legacy serialized output.
-
-## Fluent `.ftl` Catalog Example
-
-`messages/en.ftl`:
-```ftl
-Storefront-title = Welcome to RusToK Storefront
-Storefront-welcome = Welcome, { $name }!
-Storefront-cartItems = { $count ->
-    [one] { $count } item
-   *[other] { $count } items
-}
-Storefront-features =
-    .item0 = SSR + SEO out of the box
-    .item1 = Fast access to GraphQL API
-```
-
-`messages/ru.ftl`:
-```ftl
-Storefront-title = Добро пожаловать на витрину RusToK
-Storefront-welcome = Добро пожаловать, { $name }!
-Storefront-cartItems = { $count ->
-    [one] { $count } товар
-    [few] { $count } товара
-   *[other] { $count } товаров
-}
-Storefront-features =
-    .item0 = SSR + SEO из коробки
-    .item1 = Быстрый доступ к GraphQL API
-```
+---
 
 ## License
 
-MIT License. Copyright (c) 2026 RusToK Authors.
-
+MIT License.

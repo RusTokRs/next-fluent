@@ -1,40 +1,13 @@
 'use client';
 
 import React, { forwardRef, useMemo } from 'react';
-
-let NextLink: any = 'a';
-let useNextPathname: any = () => '';
-let useNextRouter: any = () => ({
-  push: () => {},
-  replace: () => {},
-  prefetch: () => {},
-  back: () => {},
-  forward: () => {},
-  refresh: () => {},
-});
-let nextRedirect: any = (url: string) => {
-  throw new Error(`NEXT_REDIRECT: ${url}`);
-};
-let nextPermanentRedirect: any = (url: string) => {
-  throw new Error(`NEXT_REDIRECT: ${url}`);
-};
-
-try {
-  const linkMod: any = await import('next/link.js').catch(() => import('next/link'));
-  NextLink = linkMod.default ?? linkMod;
-} catch {
-  // Fallback for non-Next or test runtime
-}
-
-try {
-  const navMod: any = await import('next/navigation.js').catch(() => import('next/navigation'));
-  useNextPathname = navMod.usePathname ?? useNextPathname;
-  useNextRouter = navMod.useRouter ?? useNextRouter;
-  nextRedirect = navMod.redirect ?? nextRedirect;
-  nextPermanentRedirect = navMod.permanentRedirect ?? nextPermanentRedirect;
-} catch {
-  // Fallback for non-Next or test runtime
-}
+import NextLink from 'next/link.js';
+import {
+  usePathname as useNextPathname,
+  useRouter as useNextRouter,
+  redirect as nextRedirect,
+  permanentRedirect as nextPermanentRedirect,
+} from 'next/navigation.js';
 import type {
   GetPathnameOptions,
   Href,
@@ -96,7 +69,7 @@ export function resolveLocalizedPathname(
   config: NavigationConfig
 ): string {
   const { href, locale: explicitLocale } = options;
-  const { locales, defaultLocale, localePrefix = 'always' } = config;
+  const { locales, defaultLocale, localePrefix = 'always', pathnames } = config;
 
   let rawPathname = '';
   let search = '';
@@ -125,7 +98,7 @@ export function resolveLocalizedPathname(
     return '/';
   }
 
-  // Normalize any Windows backslashes in route pathname
+  // Normalize Windows backslashes in route pathname
   rawPathname = rawPathname.replace(/\\+/g, '/');
 
   // Ensure leading slash
@@ -148,6 +121,17 @@ export function resolveLocalizedPathname(
     ? (matchSupportedLocale(explicitLocale, locales) ?? defaultLocale)
     : defaultLocale;
 
+  // Localized pathname mapping (e.g. /about -> /about-us for 'en' and /o-nas for 'ru')
+  let mappedPathname = cleanPathname;
+  if (pathnames && Object.hasOwn(pathnames, cleanPathname)) {
+    const target = pathnames[cleanPathname];
+    if (typeof target === 'string') {
+      mappedPathname = target;
+    } else if (target && typeof target === 'object') {
+      mappedPathname = (target as Record<string, string>)[resolvedLocale] ?? cleanPathname;
+    }
+  }
+
   let prefix = '';
   if (localePrefix === 'never') {
     prefix = '';
@@ -161,10 +145,10 @@ export function resolveLocalizedPathname(
   }
 
   const finalPath = prefix
-    ? cleanPathname === '/'
+    ? mappedPathname === '/'
       ? prefix
-      : `${prefix}${cleanPathname}`
-    : cleanPathname;
+      : `${prefix}${mappedPathname.startsWith('/') ? mappedPathname : `/${mappedPathname}`}`
+    : mappedPathname;
 
   return `${finalPath}${search}${hash}`;
 }
@@ -178,8 +162,7 @@ export function createNavigation<Locales extends readonly string[] = readonly st
     localePrefix: config.localePrefix,
   });
 
-  const { locales, defaultLocale } = config;
-  const ResolvedNextLink = (NextLink as any)?.default ?? NextLink;
+  const { locales, defaultLocale, pathnames } = config;
 
   const getPathname = (options: GetPathnameOptions): string => {
     return resolveLocalizedPathname(options, config);
@@ -198,7 +181,7 @@ export function createNavigation<Locales extends readonly string[] = readonly st
     const targetLocale = propLocale ?? currentLocale ?? defaultLocale;
     const localizedHref = getPathname({ href, locale: targetLocale });
 
-    return React.createElement(ResolvedNextLink, {
+    return React.createElement(NextLink, {
       ...rest,
       href: localizedHref,
       ref,
@@ -207,23 +190,55 @@ export function createNavigation<Locales extends readonly string[] = readonly st
   Link.displayName = 'I18nLink';
 
   function usePathname(): string {
-    const rawPathname = useNextPathname();
+    let rawPathname = '';
+    try {
+      rawPathname = useNextPathname() || '';
+    } catch {
+      return '';
+    }
+
     if (!rawPathname) return rawPathname;
 
     const segments = rawPathname.split('/').filter(Boolean);
     if (segments.length === 0) return '/';
 
+    let cleanPathname = rawPathname;
     const first = segments[0];
     if (matchSupportedLocale(first, locales)) {
       const rest = segments.slice(1).join('/');
-      return rest ? `/${rest}` : '/';
+      cleanPathname = rest ? `/${rest}` : '/';
     }
 
-    return rawPathname;
+    // Reverse map localized slug back to canonical route pathname
+    if (pathnames) {
+      for (const [canonical, mapping] of Object.entries(pathnames)) {
+        if (typeof mapping === 'string') {
+          if (mapping === cleanPathname) return canonical;
+        } else if (mapping && typeof mapping === 'object') {
+          for (const localized of Object.values(mapping as Record<string, string>)) {
+            if (localized === cleanPathname) return canonical;
+          }
+        }
+      }
+    }
+
+    return cleanPathname;
   }
 
   function useRouter() {
-    const router = useNextRouter();
+    let router: any;
+    try {
+      router = useNextRouter();
+    } catch {
+      router = {
+        push: () => {},
+        replace: () => {},
+        prefetch: () => {},
+        back: () => {},
+        forward: () => {},
+        refresh: () => {},
+      };
+    }
 
     let currentLocale: string | undefined;
     try {
@@ -270,7 +285,13 @@ export function createNavigation<Locales extends readonly string[] = readonly st
     url: string,
     options?: { locale?: Locales[number] | string; type?: 'push' | 'replace' }
   ): never {
-    const targetLocale = options?.locale ?? defaultLocale;
+    let currentLocale: string | undefined;
+    try {
+      currentLocale = useLocale();
+    } catch {
+      // Outside provider
+    }
+    const targetLocale = options?.locale ?? currentLocale ?? defaultLocale;
     const target = getPathname({ href: url, locale: targetLocale });
     return nextRedirect(target, options?.type as any) as never;
   }
@@ -279,7 +300,13 @@ export function createNavigation<Locales extends readonly string[] = readonly st
     url: string,
     options?: { locale?: Locales[number] | string; type?: 'push' | 'replace' }
   ): never {
-    const targetLocale = options?.locale ?? defaultLocale;
+    let currentLocale: string | undefined;
+    try {
+      currentLocale = useLocale();
+    } catch {
+      // Outside provider
+    }
+    const targetLocale = options?.locale ?? currentLocale ?? defaultLocale;
     const target = getPathname({ href: url, locale: targetLocale });
     return nextPermanentRedirect(target, options?.type as any) as never;
   }

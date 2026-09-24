@@ -1,7 +1,7 @@
-import type { FluentBundle, FluentVariable } from '@fluent/bundle';
+import type { FluentBundle, FluentFunction, FluentVariable } from '@fluent/bundle';
 import type React from 'react';
 
-export type { FluentBundle, FluentVariable };
+export type { FluentBundle, FluentVariable, FluentFunction };
 
 export type NonEmptyArray<T> = readonly [T, ...T[]];
 
@@ -14,6 +14,23 @@ export type RichTranslationValues = Record<
   FluentVariable | TagRenderFn | React.ReactNode
 >;
 
+/**
+ * Declaration merging target for automatic full-app type safety.
+ *
+ * Example:
+ * ```typescript
+ * declare global {
+ *   interface FluentMessages extends AppMessages {}
+ * }
+ * ```
+ */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface FluentMessages {}
+
+export type DefaultKey = keyof FluentMessages extends never
+  ? string
+  : keyof FluentMessages & string;
+
 export type MessageArgsFor<K extends string, ArgsMap> =
   K extends keyof ArgsMap
     ? ArgsMap[K] extends Record<string, never> | undefined
@@ -22,7 +39,7 @@ export type MessageArgsFor<K extends string, ArgsMap> =
     : [args?: FluentArgs];
 
 export interface TranslationFn<
-  Key extends string = string,
+  Key extends string = DefaultKey,
   ArgsMap extends Record<string, any> = Record<string, any>
 > {
   <K extends Key>(key: K, ...args: MessageArgsFor<K, ArgsMap>): string;
@@ -32,12 +49,12 @@ export interface TranslationFn<
 }
 
 export type Translations<
-  Key extends string = string,
+  Key extends string = DefaultKey,
   ArgsMap extends Record<string, any> = Record<string, any>
 > = TranslationFn<Key, ArgsMap>;
 
 export interface FormattedMessageProps<
-  Key extends string = string,
+  Key extends string = DefaultKey,
   ArgsMap extends Record<string, any> = Record<string, any>
 > {
   id: Key;
@@ -68,10 +85,16 @@ export interface Formatter {
 
 export type LocalePrefixMode = 'always' | 'as-needed' | 'never';
 
+export type Pathnames<Locales extends readonly string[] = readonly string[]> = Record<
+  string,
+  string | Record<Locales[number] | string, string>
+>;
+
 export interface NavigationConfig<Locales extends readonly string[] = readonly string[]> {
   locales: Locales;
   defaultLocale: Locales[number] | string;
   localePrefix?: LocalePrefixMode;
+  pathnames?: Pathnames<Locales>;
 }
 
 export interface UrlObject {
@@ -132,6 +155,8 @@ export interface RequestConfigResult {
   fallbackMessages?: string | readonly string[];
   defaultTranslationValues?: RichTranslationValues;
   timeZone?: string;
+  now?: Date;
+  functions?: Record<string, FluentFunction>;
 }
 
 export type RequestConfigFn = (
@@ -147,6 +172,8 @@ export interface GetTranslationsOptions {
   defaultTranslationValues?: RichTranslationValues;
   namespace?: string;
   debug?: boolean;
+  strictNamespace?: boolean;
+  functions?: Record<string, FluentFunction>;
 }
 
 export interface I18nMiddlewareOptions {
@@ -155,6 +182,7 @@ export interface I18nMiddlewareOptions {
   localePrefix?: 'always' | 'as-needed' | 'never';
   cookieName?: string;
   headerName?: string;
+  pathnames?: Pathnames<any>;
 }
 
 export interface I18nConfig {
@@ -163,7 +191,6 @@ export interface I18nConfig {
   localePrefix?: 'always' | 'as-needed' | 'never';
   cookieName?: string;
   headerName?: string;
+  pathnames?: Pathnames<any>;
   loadMessages?: (locale: string) => Promise<string | readonly string[]> | string | readonly string[];
 }
-
-

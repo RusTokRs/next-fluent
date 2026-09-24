@@ -1,19 +1,32 @@
-import type { FluentBundle, FluentVariable } from '@fluent/bundle';
+import type { FluentBundle, FluentFunction, FluentVariable } from '@fluent/bundle';
 import type React from 'react';
-export type { FluentBundle, FluentVariable };
+export type { FluentBundle, FluentVariable, FluentFunction };
 export type NonEmptyArray<T> = readonly [T, ...T[]];
 export type FluentArgs = Record<string, FluentVariable>;
 export type TagRenderFn = (children: React.ReactNode) => React.ReactNode;
 export type RichTranslationValues = Record<string, FluentVariable | TagRenderFn | React.ReactNode>;
+/**
+ * Declaration merging target for automatic full-app type safety.
+ *
+ * Example:
+ * ```typescript
+ * declare global {
+ *   interface FluentMessages extends AppMessages {}
+ * }
+ * ```
+ */
+export interface FluentMessages {
+}
+export type DefaultKey = keyof FluentMessages extends never ? string : keyof FluentMessages & string;
 export type MessageArgsFor<K extends string, ArgsMap> = K extends keyof ArgsMap ? ArgsMap[K] extends Record<string, never> | undefined ? [args?: FluentArgs] : [args: ArgsMap[K]] : [args?: FluentArgs];
-export interface TranslationFn<Key extends string = string, ArgsMap extends Record<string, any> = Record<string, any>> {
+export interface TranslationFn<Key extends string = DefaultKey, ArgsMap extends Record<string, any> = Record<string, any>> {
     <K extends Key>(key: K, ...args: MessageArgsFor<K, ArgsMap>): string;
     raw<K extends Key>(key: K): string[] | string;
     rich<K extends Key>(key: K, values?: RichTranslationValues): React.ReactNode;
     has<K extends Key>(key: K): boolean;
 }
-export type Translations<Key extends string = string, ArgsMap extends Record<string, any> = Record<string, any>> = TranslationFn<Key, ArgsMap>;
-export interface FormattedMessageProps<Key extends string = string, ArgsMap extends Record<string, any> = Record<string, any>> {
+export type Translations<Key extends string = DefaultKey, ArgsMap extends Record<string, any> = Record<string, any>> = TranslationFn<Key, ArgsMap>;
+export interface FormattedMessageProps<Key extends string = DefaultKey, ArgsMap extends Record<string, any> = Record<string, any>> {
     id: Key;
     args?: Key extends keyof ArgsMap ? ArgsMap[Key] : FluentArgs;
     values?: RichTranslationValues;
@@ -34,10 +47,12 @@ export interface Formatter {
     list(value: Iterable<string>, options?: Intl.ListFormatOptions): string;
 }
 export type LocalePrefixMode = 'always' | 'as-needed' | 'never';
+export type Pathnames<Locales extends readonly string[] = readonly string[]> = Record<string, string | Record<Locales[number] | string, string>>;
 export interface NavigationConfig<Locales extends readonly string[] = readonly string[]> {
     locales: Locales;
     defaultLocale: Locales[number] | string;
     localePrefix?: LocalePrefixMode;
+    pathnames?: Pathnames<Locales>;
 }
 export interface UrlObject {
     auth?: string | null;
@@ -104,6 +119,8 @@ export interface RequestConfigResult {
     fallbackMessages?: string | readonly string[];
     defaultTranslationValues?: RichTranslationValues;
     timeZone?: string;
+    now?: Date;
+    functions?: Record<string, FluentFunction>;
 }
 export type RequestConfigFn = (params: RequestConfigParams) => Promise<RequestConfigResult> | RequestConfigResult;
 export interface GetTranslationsOptions {
@@ -115,6 +132,8 @@ export interface GetTranslationsOptions {
     defaultTranslationValues?: RichTranslationValues;
     namespace?: string;
     debug?: boolean;
+    strictNamespace?: boolean;
+    functions?: Record<string, FluentFunction>;
 }
 export interface I18nMiddlewareOptions {
     locales: readonly string[];
@@ -122,6 +141,7 @@ export interface I18nMiddlewareOptions {
     localePrefix?: 'always' | 'as-needed' | 'never';
     cookieName?: string;
     headerName?: string;
+    pathnames?: Pathnames<any>;
 }
 export interface I18nConfig {
     locales: readonly string[];
@@ -129,5 +149,6 @@ export interface I18nConfig {
     localePrefix?: 'always' | 'as-needed' | 'never';
     cookieName?: string;
     headerName?: string;
+    pathnames?: Pathnames<any>;
     loadMessages?: (locale: string) => Promise<string | readonly string[]> | string | readonly string[];
 }

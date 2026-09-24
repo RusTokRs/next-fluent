@@ -1,3 +1,5 @@
+import { parse, Visitor, type Message, type VariableReference } from '@fluent/syntax';
+
 /**
  * FTL AST Key & Variable Extractor for TypeScript declaration generation.
  */
@@ -9,67 +11,43 @@ export interface ExtractedMessage {
   variables: string[];
 }
 
-function extractVariablesFromLine(line: string): string[] {
-  // Strip quoted strings so $foo inside "price is $100" isn't treated as variable
-  const lineWithoutStrings = line.replace(/"[^"\\]*(?:\\.[^"\\]*)*"/g, '');
-  const matches = lineWithoutStrings.matchAll(/\$([a-zA-Z][a-zA-Z0-9_-]*)/g);
-  return Array.from(matches, (m) => m[1]);
+class VariableExtractor extends Visitor {
+  public variables = new Set<string>();
+
+  visitVariableReference(node: VariableReference): void {
+    if (node.id?.name) {
+      this.variables.add(node.id.name);
+    }
+    this.genericVisit(node);
+  }
 }
 
 export function extractMessagesFromFtl(ftlContent: string): ExtractedMessage[] {
+  const resource = parse(ftlContent, { withSpans: false });
   const messages: ExtractedMessage[] = [];
-  const lines = ftlContent.split(/\r?\n/);
 
-  let currentMsg: ExtractedMessage | null = null;
-
-  for (const line of lines) {
-    // Comment or empty line
-    if (line.startsWith('#') || !line.trim()) {
-      continue;
-    }
-
-    // Message definition: `my-message-id = ...`
-    // FTL terms start with `-` (e.g. `-brand-name = ...`) and are not callable
-    // messages — they must not appear in generated type declarations.
-    const msgMatch = line.match(/^([a-zA-Z][a-zA-Z0-9_-]*)\s*=/);
-    if (msgMatch) {
-      const id = msgMatch[1];
+  for (const entry of resource.body) {
+    if (entry.type === 'Message') {
+      const msg = entry as Message;
+      const id = msg.id.name;
       const dotId = id.replace(/-/g, '.');
-      currentMsg = {
+
+      const extractor = new VariableExtractor();
+      extractor.visit(msg);
+
+      const attributes: string[] = [];
+      if (msg.attributes) {
+        for (const attr of msg.attributes) {
+          attributes.push(attr.id.name);
+        }
+      }
+
+      messages.push({
         id,
         dotId,
-        attributes: [],
-        variables: [],
-      };
-      messages.push(currentMsg);
-
-      for (const v of extractVariablesFromLine(line)) {
-        if (!currentMsg.variables.includes(v)) {
-          currentMsg.variables.push(v);
-        }
-      }
-      continue;
-    }
-
-    // Attribute definition: `  .label = ...`
-    const attrMatch = line.match(/^\s+\.([a-zA-Z][a-zA-Z0-9_-]*)\s*=/);
-    if (attrMatch && currentMsg) {
-      currentMsg.attributes.push(attrMatch[1]);
-      for (const v of extractVariablesFromLine(line)) {
-        if (!currentMsg.variables.includes(v)) {
-          currentMsg.variables.push(v);
-        }
-      }
-      continue;
-    }
-
-    // Continuation line with variables
-    if (currentMsg) {
-      for (const v of extractVariablesFromLine(line)) {
-        if (!currentMsg.variables.includes(v)) {
-          currentMsg.variables.push(v);
-        }
-      }
+        attributes,
+        variables: Array.from(extractor.variables).sort(),
+      });
     }
   }
 
@@ -87,7 +65,7 @@ export function generateTypeDeclarations(
     const extracted = extractMessagesFromFtl(content);
     for (const msg of extracted) {
       if (seenIds.has(msg.id)) {
-        // Last definition wins, matching runtime allowOverrides: true semantics.
+        // Last definition wins, matching runtime allowOverrides semantics
         const idx = allMessages.findIndex((m) => m.id === msg.id);
         if (idx !== -1) {
           allMessages[idx] = msg;
@@ -99,7 +77,6 @@ export function generateTypeDeclarations(
     }
   }
 
-  // Sort messages
   allMessages.sort((a, b) => a.id.localeCompare(b.id));
 
   const keyUnion = allMessages
@@ -120,10 +97,27 @@ export function generateTypeDeclarations(
 /* eslint-disable */
 
 export type AppMessageKey =
-${keyUnion || "  | string"};
+${keyUnion || '  | string'};
 
 export interface AppMessageArgs {
 ${argsEntries.join('\n')}
+}
+
+export interface AppMessages {
+${allMessages
+  .map((m) => {
+    const varsType =
+      m.variables.length === 0
+        ? 'Record<string, never>'
+        : `{ ${m.variables.map((v) => `'${v}': string | number | Date`).join('; ')} }`;
+    return `  '${m.dotId}': ${varsType};\n  '${m.id}': ${varsType};`;
+  })
+  .join('\n')}
+}
+
+declare global {
+  // eslint-disable-next-line @typescript-eslint/no-empty-object-type
+  interface FluentMessages extends AppMessages {}
 }
 `;
 }

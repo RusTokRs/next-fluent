@@ -145,7 +145,7 @@ function validateI18nConfig(options) {
 function withKebabKey(key) {
   return key.replaceAll(".", "-");
 }
-function buildKeyCandidates(namespace, key) {
+function buildKeyCandidates(namespace, key, options) {
   const candidates = [];
   const pushCandidate = (candidate) => {
     if (!candidates.includes(candidate)) {
@@ -161,10 +161,60 @@ function buildKeyCandidates(namespace, key) {
     if (nsHyphen !== cleanNs) {
       pushCandidate(`${nsHyphen}-${key}`);
     }
+    if (options?.strictNamespace) {
+      return candidates;
+    }
   }
   pushCandidate(withKebabKey(key));
   pushCandidate(key);
   return candidates;
+}
+
+// src/routing.ts
+function defineRouting(config) {
+  validateI18nConfig({
+    locales: config.locales,
+    defaultLocale: config.defaultLocale,
+    localePrefix: config.localePrefix,
+    cookieName: config.cookieName,
+    headerName: config.headerName
+  });
+  return Object.freeze({
+    ...config,
+    localePrefix: config.localePrefix ?? "always",
+    cookieName: config.cookieName ?? "NEXT_LOCALE",
+    headerName: config.headerName ?? "x-next-locale"
+  });
+}
+
+// src/plugin.ts
+import path from "node:path";
+function createNextFluentPlugin(i18nRequestPath = "./src/i18n/request.ts") {
+  return function withNextFluent(nextConfig = {}) {
+    const resolvedPath = path.resolve(process.cwd(), i18nRequestPath);
+    return {
+      ...nextConfig,
+      webpack(config, context) {
+        config.resolve = config.resolve || {};
+        config.resolve.alias = config.resolve.alias || {};
+        config.resolve.alias["next-fluent/config"] = resolvedPath;
+        if (typeof nextConfig.webpack === "function") {
+          return nextConfig.webpack(config, context);
+        }
+        return config;
+      },
+      experimental: {
+        ...nextConfig.experimental,
+        turbo: {
+          ...nextConfig.experimental?.turbo,
+          resolveAlias: {
+            ...nextConfig.experimental?.turbo?.resolveAlias,
+            "next-fluent/config": resolvedPath
+          }
+        }
+      }
+    };
+  };
 }
 
 // src/middleware.ts
@@ -174,14 +224,14 @@ function createI18nMiddleware(options) {
     locales,
     defaultLocale: rawDefaultLocale,
     localePrefix = "always",
-    cookieName = "rustok-locale",
-    headerName = "x-rustok-effective-locale"
+    cookieName = "NEXT_LOCALE",
+    headerName = "x-next-locale"
   } = options;
   const defaultLocale = matchSupportedLocale(rawDefaultLocale, locales) ?? rawDefaultLocale;
   return async function middleware(request) {
     let NextResponse;
     try {
-      const nextServer = await import("next/server");
+      const nextServer = await import("next/server.js").catch(() => import("next/server"));
       NextResponse = nextServer.NextResponse;
     } catch {
       NextResponse = class MockNextResponse {
@@ -191,6 +241,19 @@ function createI18nMiddleware(options) {
           return {
             status: 200,
             headers,
+            request: { headers: reqHeaders },
+            cookies: {
+              set: (name, val) => headers.append("Set-Cookie", `${name}=${val}; Path=/`)
+            }
+          };
+        }
+        static rewrite(url, opts) {
+          const headers = new Headers();
+          const reqHeaders = opts?.request?.headers ?? new Headers();
+          return {
+            status: 200,
+            headers,
+            rewriteUrl: String(url),
             request: { headers: reqHeaders },
             cookies: {
               set: (name, val) => headers.append("Set-Cookie", `${name}=${val}; Path=/`)
@@ -215,7 +278,7 @@ function createI18nMiddleware(options) {
     const firstSegment = segments[0];
     const matchedPrefix = matchSupportedLocale(firstSegment, locales);
     const cookieLocale = matchSupportedLocale(
-      request.cookies.get(cookieName)?.value || request.cookies.get("rustok-admin-locale")?.value || request.cookies.get("rustok-frontend-locale")?.value || request.cookies.get("NEXT_LOCALE")?.value,
+      request.cookies.get(cookieName)?.value || request.cookies.get("NEXT_LOCALE")?.value || request.cookies.get("rustok-locale")?.value,
       locales
     );
     const headerLocale = resolveAcceptLanguage(
@@ -223,7 +286,7 @@ function createI18nMiddleware(options) {
       locales
     );
     const preferredLocale = cookieLocale || headerLocale || defaultLocale;
-    const createSuccessResponse = (effectiveLocale) => {
+    const createSuccessResponse = (effectiveLocale, rewritePath) => {
       const requestHeaders = new Headers();
       if (request.headers) {
         if (typeof request.headers.forEach === "function") {
@@ -235,13 +298,22 @@ function createI18nMiddleware(options) {
         }
       }
       requestHeaders.set(headerName, effectiveLocale);
-      const response = NextResponse.next({
-        request: {
-          headers: requestHeaders
-        }
+      if (headerName !== "x-rustok-effective-locale") {
+        requestHeaders.set("x-rustok-effective-locale", effectiveLocale);
+      }
+      const response = rewritePath ? NextResponse.rewrite(new URL(rewritePath, request.url), {
+        request: { headers: requestHeaders }
+      }) : NextResponse.next({
+        request: { headers: requestHeaders }
       });
+      if (!response.request) {
+        response.request = { headers: requestHeaders };
+      }
       if (response.headers?.set) {
         response.headers.set(headerName, effectiveLocale);
+        if (headerName !== "x-rustok-effective-locale") {
+          response.headers.set("x-rustok-effective-locale", effectiveLocale);
+        }
       }
       if (response.cookies?.set) {
         response.cookies.set(cookieName, effectiveLocale, {
@@ -256,6 +328,9 @@ function createI18nMiddleware(options) {
       const response = NextResponse.redirect(targetUrl);
       if (response.headers?.set) {
         response.headers.set(headerName, targetLocale);
+        if (headerName !== "x-rustok-effective-locale") {
+          response.headers.set("x-rustok-effective-locale", targetLocale);
+        }
       }
       if (response.cookies?.set) {
         response.cookies.set(cookieName, targetLocale, {
@@ -271,7 +346,8 @@ function createI18nMiddleware(options) {
         const remainingPath = `/${segments.slice(1).join("/")}${search}`;
         return createRedirect(new URL(remainingPath, request.url), matchedPrefix);
       }
-      return createSuccessResponse(preferredLocale);
+      const rewritePath = `/${preferredLocale}${pathname === "/" ? "" : pathname}${search}`;
+      return createSuccessResponse(preferredLocale, rewritePath);
     }
     if (localePrefix === "as-needed") {
       if (matchedPrefix === defaultLocale) {
@@ -282,7 +358,8 @@ function createI18nMiddleware(options) {
         return createSuccessResponse(matchedPrefix);
       }
       if (preferredLocale === defaultLocale) {
-        return createSuccessResponse(defaultLocale);
+        const rewritePath = `/${defaultLocale}${pathname === "/" ? "" : pathname}${search}`;
+        return createSuccessResponse(defaultLocale, rewritePath);
       }
       const targetPath2 = `/${preferredLocale}${pathname === "/" ? "" : pathname}${search}`;
       return createRedirect(new URL(targetPath2, request.url), preferredLocale);
@@ -296,32 +373,64 @@ function createI18nMiddleware(options) {
 }
 var createMiddleware = createI18nMiddleware;
 
+// src/lru.ts
+var LRUCache = class {
+  constructor(maxSize) {
+    this.maxSize = maxSize;
+  }
+  maxSize;
+  map = /* @__PURE__ */ new Map();
+  get(key) {
+    const val = this.map.get(key);
+    if (val !== void 0) {
+      this.map.delete(key);
+      this.map.set(key, val);
+    }
+    return val;
+  }
+  set(key, value) {
+    if (this.map.has(key)) {
+      this.map.delete(key);
+    } else if (this.map.size >= this.maxSize) {
+      const oldestKey = this.map.keys().next().value;
+      if (oldestKey !== void 0) {
+        this.map.delete(oldestKey);
+      }
+    }
+    this.map.set(key, value);
+  }
+  has(key) {
+    return this.map.has(key);
+  }
+  delete(key) {
+    return this.map.delete(key);
+  }
+  clear() {
+    this.map.clear();
+  }
+  get size() {
+    return this.map.size;
+  }
+};
+
 // src/formatter.ts
 var MAX_CACHE_SIZE = 200;
-function createBoundedCache() {
-  const map = /* @__PURE__ */ new Map();
-  return {
-    get(key) {
-      return map.get(key);
-    },
-    set(key, value) {
-      if (!map.has(key) && map.size >= MAX_CACHE_SIZE) {
-        const firstKey = map.keys().next().value;
-        if (firstKey !== void 0) {
-          map.delete(firstKey);
-        }
-      }
-      map.set(key, value);
-    },
-    clear() {
-      map.clear();
-    }
-  };
+function stringifySorted(obj) {
+  if (obj === null || typeof obj !== "object") {
+    return JSON.stringify(obj);
+  }
+  if (Array.isArray(obj)) {
+    return `[${obj.map(stringifySorted).join(",")}]`;
+  }
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map(
+    (k) => `${JSON.stringify(k)}:${stringifySorted(obj[k])}`
+  ).join(",")}}`;
 }
-var dtfCache = createBoundedCache();
-var nfCache = createBoundedCache();
-var rtfCache = createBoundedCache();
-var lfCache = createBoundedCache();
+var dtfCache = new LRUCache(MAX_CACHE_SIZE);
+var nfCache = new LRUCache(MAX_CACHE_SIZE);
+var rtfCache = new LRUCache(MAX_CACHE_SIZE);
+var lfCache = new LRUCache(MAX_CACHE_SIZE);
 function clearFormatterCache() {
   dtfCache.clear();
   nfCache.clear();
@@ -345,7 +454,7 @@ function createFormatter(optionsOrLocale) {
         ...timeZone && !dtfOptions?.timeZone ? { timeZone } : {},
         ...dtfOptions
       };
-      const cacheKey = `${locale}::${JSON.stringify(mergedOptions)}`;
+      const cacheKey = `${locale}::${stringifySorted(mergedOptions)}`;
       let formatter = dtfCache.get(cacheKey);
       if (!formatter) {
         try {
@@ -362,7 +471,7 @@ function createFormatter(optionsOrLocale) {
       }
     },
     number(value, nfOptions) {
-      const cacheKey = `${locale}::${JSON.stringify(nfOptions ?? {})}`;
+      const cacheKey = `${locale}::${stringifySorted(nfOptions ?? {})}`;
       let formatter = nfCache.get(cacheKey);
       if (!formatter) {
         try {
@@ -379,7 +488,7 @@ function createFormatter(optionsOrLocale) {
       }
     },
     relativeTime(value, unit, rtfOptions) {
-      const cacheKey = `${locale}::${JSON.stringify(rtfOptions ?? {})}`;
+      const cacheKey = `${locale}::${stringifySorted(rtfOptions ?? {})}`;
       let formatter = rtfCache.get(cacheKey);
       if (!formatter) {
         try {
@@ -399,7 +508,7 @@ function createFormatter(optionsOrLocale) {
       if (!value || typeof value[Symbol.iterator] !== "function") {
         return String(value ?? "");
       }
-      const cacheKey = `${locale}::${JSON.stringify(lfOptions ?? {})}`;
+      const cacheKey = `${locale}::${stringifySorted(lfOptions ?? {})}`;
       let formatter = lfCache.get(cacheKey);
       if (!formatter) {
         try {
@@ -419,77 +528,122 @@ function createFormatter(optionsOrLocale) {
 }
 
 // src/navigation.ts
-import React3, { forwardRef, useMemo as useMemo2 } from "react";
+import React4, { forwardRef, useMemo as useMemo2 } from "react";
+import NextLink from "next/link.js";
+import {
+  usePathname as useNextPathname,
+  useRouter as useNextRouter,
+  redirect as nextRedirect,
+  permanentRedirect as nextPermanentRedirect
+} from "next/navigation.js";
 
 // src/client.ts
-import React2, { createContext, useContext, useEffect, useMemo, useState } from "react";
+import React3, { createContext, useContext, useEffect, useMemo, useState } from "react";
+
+// src/bundle.ts
+import React2 from "react";
 
 // src/rich.ts
 import React from "react";
+var VOID_TAGS = /* @__PURE__ */ new Set([
+  "br",
+  "hr",
+  "img",
+  "input",
+  "wbr"
+]);
+var REACT_ELEMENT_TOKEN_PREFIX = "\uE000NF_EL_";
+var REACT_ELEMENT_TOKEN_SUFFIX = "_\uE001";
+function createReactElementToken(key) {
+  return `${REACT_ELEMENT_TOKEN_PREFIX}${key}${REACT_ELEMENT_TOKEN_SUFFIX}`;
+}
+var TOKEN_OR_TAG_REGEX = /(?:\u2068)?\uE000NF_EL_([a-zA-Z0-9_-]+)_\uE001(?:\u2069)?|<\/?([a-zA-Z][a-zA-Z0-9_-]*)\s*\/?>/g;
 function parseRichText(text, values) {
-  if (!values || !text.includes("<")) {
+  if (!values) {
     return text;
   }
-  const hasInteractiveTags = Object.keys(values).some(
+  const hasTokens = text.includes(REACT_ELEMENT_TOKEN_PREFIX);
+  const hasTags = text.includes("<");
+  if (!hasTokens && !hasTags) {
+    return text;
+  }
+  const hasInteractive = Object.keys(values).some(
     (k) => typeof values[k] === "function" || React.isValidElement(values[k])
   );
-  if (!hasInteractiveTags) {
+  if (!hasInteractive) {
     return text;
   }
-  const tagRegex = /<\/?([a-zA-Z][a-zA-Z0-9_-]*)\s*\/?>/g;
   const root = { children: [] };
   const stack = [root];
   let lastIndex = 0;
   let match;
-  while ((match = tagRegex.exec(text)) !== null) {
-    const [fullMatch, tagName] = match;
+  TOKEN_OR_TAG_REGEX.lastIndex = 0;
+  while ((match = TOKEN_OR_TAG_REGEX.exec(text)) !== null) {
+    const [fullMatch, elementTokenKey, tagName] = match;
     const matchIndex = match.index;
     if (matchIndex > lastIndex) {
       const textChunk = text.slice(lastIndex, matchIndex);
       stack[stack.length - 1].children.push(textChunk);
     }
-    lastIndex = tagRegex.lastIndex;
-    const isClose = fullMatch.startsWith("</");
-    const isSelfClosing = fullMatch.endsWith("/>");
-    if (isSelfClosing) {
-      if (Object.hasOwn(values, tagName)) {
-        const renderFnOrEl = values[tagName];
-        if (typeof renderFnOrEl === "function") {
-          stack[stack.length - 1].children.push(renderFnOrEl(null));
-        } else if (React.isValidElement(renderFnOrEl)) {
-          stack[stack.length - 1].children.push(renderFnOrEl);
+    lastIndex = TOKEN_OR_TAG_REGEX.lastIndex;
+    if (elementTokenKey) {
+      if (Object.hasOwn(values, elementTokenKey)) {
+        const val = values[elementTokenKey];
+        if (React.isValidElement(val)) {
+          stack[stack.length - 1].children.push(val);
+        } else if (typeof val === "function") {
+          stack[stack.length - 1].children.push(val(null));
+        } else if (val !== void 0 && val !== null) {
+          stack[stack.length - 1].children.push(String(val));
+        }
+      } else {
+        stack[stack.length - 1].children.push(fullMatch);
+      }
+      continue;
+    }
+    if (tagName) {
+      const isClose = fullMatch.startsWith("</");
+      const isSelfClosing = fullMatch.endsWith("/>") || VOID_TAGS.has(tagName.toLowerCase());
+      if (isSelfClosing && !isClose) {
+        if (Object.hasOwn(values, tagName)) {
+          const renderFnOrEl = values[tagName];
+          if (typeof renderFnOrEl === "function") {
+            stack[stack.length - 1].children.push(renderFnOrEl(null));
+          } else if (React.isValidElement(renderFnOrEl)) {
+            stack[stack.length - 1].children.push(renderFnOrEl);
+          } else {
+            stack[stack.length - 1].children.push(fullMatch);
+          }
+        } else {
+          stack[stack.length - 1].children.push(fullMatch);
+        }
+      } else if (isClose) {
+        if (stack.length > 1 && stack[stack.length - 1].tag === tagName) {
+          const finishedNode = stack.pop();
+          const renderFnOrEl = Object.hasOwn(values, tagName) ? values[tagName] : void 0;
+          const innerChildren = finishedNode.children.length === 1 ? finishedNode.children[0] : React.createElement(React.Fragment, null, ...finishedNode.children);
+          if (typeof renderFnOrEl === "function") {
+            stack[stack.length - 1].children.push(renderFnOrEl(innerChildren));
+          } else if (React.isValidElement(renderFnOrEl)) {
+            stack[stack.length - 1].children.push(
+              React.cloneElement(renderFnOrEl, void 0, innerChildren)
+            );
+          } else {
+            stack[stack.length - 1].children.push(
+              `<${tagName}>`,
+              innerChildren,
+              `</${tagName}>`
+            );
+          }
         } else {
           stack[stack.length - 1].children.push(fullMatch);
         }
       } else {
-        stack[stack.length - 1].children.push(fullMatch);
-      }
-    } else if (isClose) {
-      if (stack.length > 1 && stack[stack.length - 1].tag === tagName) {
-        const finishedNode = stack.pop();
-        const renderFnOrEl = Object.hasOwn(values, tagName) ? values[tagName] : void 0;
-        const innerChildren = finishedNode.children.length === 1 ? finishedNode.children[0] : React.createElement(React.Fragment, null, ...finishedNode.children);
-        if (typeof renderFnOrEl === "function") {
-          stack[stack.length - 1].children.push(renderFnOrEl(innerChildren));
-        } else if (React.isValidElement(renderFnOrEl)) {
-          stack[stack.length - 1].children.push(
-            React.cloneElement(renderFnOrEl, void 0, innerChildren)
-          );
+        if (Object.hasOwn(values, tagName)) {
+          stack.push({ tag: tagName, children: [] });
         } else {
-          stack[stack.length - 1].children.push(
-            `<${tagName}>`,
-            innerChildren,
-            `</${tagName}>`
-          );
+          stack[stack.length - 1].children.push(fullMatch);
         }
-      } else {
-        stack[stack.length - 1].children.push(fullMatch);
-      }
-    } else {
-      if (Object.hasOwn(values, tagName)) {
-        stack.push({ tag: tagName, children: [] });
-      } else {
-        stack[stack.length - 1].children.push(fullMatch);
       }
     }
   }
@@ -518,6 +672,16 @@ function unwrapFluentValue(val) {
   }
   return val;
 }
+var numberFormatCache = new LRUCache(200);
+function getCachedNumberFormat(locale, options) {
+  const cacheKey = `${locale}::${options.style}::${options.currency ?? ""}::${options.currencyDisplay ?? ""}::${options.minimumFractionDigits ?? ""}::${options.maximumFractionDigits ?? ""}`;
+  let nf = numberFormatCache.get(cacheKey);
+  if (!nf) {
+    nf = new Intl.NumberFormat(locale, options);
+    numberFormatCache.set(cacheKey, nf);
+  }
+  return nf;
+}
 function createDefaultFunctions(locale) {
   return {
     CURRENCY: (positional, named) => {
@@ -531,7 +695,7 @@ function createDefaultFunctions(locale) {
       const minFraction = named.minimumFractionDigits !== void 0 ? Number(unwrapFluentValue(named.minimumFractionDigits)) : void 0;
       const maxFraction = named.maximumFractionDigits !== void 0 ? Number(unwrapFluentValue(named.maximumFractionDigits)) : void 0;
       try {
-        return new Intl.NumberFormat(locale, {
+        return getCachedNumberFormat(locale, {
           style: "currency",
           currency,
           currencyDisplay,
@@ -551,7 +715,7 @@ function createDefaultFunctions(locale) {
       const minFraction = named.minimumFractionDigits !== void 0 ? Number(unwrapFluentValue(named.minimumFractionDigits)) : void 0;
       const maxFraction = named.maximumFractionDigits !== void 0 ? Number(unwrapFluentValue(named.maximumFractionDigits)) : void 0;
       try {
-        return new Intl.NumberFormat(locale, {
+        return getCachedNumberFormat(locale, {
           style: "percent",
           minimumFractionDigits: minFraction,
           maximumFractionDigits: maxFraction
@@ -566,33 +730,38 @@ function createDefaultFunctions(locale) {
 // src/cache.ts
 var MAX_RESOURCE_CACHE = 1e3;
 var MAX_BUNDLE_CACHE = 500;
-function fnv1a64(input) {
-  let hash = 0xcbf29ce484222325n;
-  const prime = 0x100000001b3n;
-  const mask = 0xffffffffffffffffn;
+function fnv1a32(input) {
+  let hash = 2166136261;
   for (let i = 0; i < input.length; i++) {
-    hash ^= BigInt(input.charCodeAt(i));
-    hash = hash * prime & mask;
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
   }
-  return hash.toString(16).padStart(16, "0");
+  return (hash >>> 0).toString(16).padStart(8, "0");
 }
 function computeSourceHash(source) {
   if (typeof source === "string") {
-    return `${source.length}:${fnv1a64(source)}`;
+    return `${source.length}:${fnv1a32(source)}`;
   }
-  const joined = source.join("\0");
-  return `${source.length}:${joined.length}:${fnv1a64(joined)}`;
+  let totalLen = 0;
+  let combinedHash = 2166136261;
+  for (const item of source) {
+    if (!item) continue;
+    totalLen += item.length;
+    for (let i = 0; i < item.length; i++) {
+      combinedHash ^= item.charCodeAt(i);
+      combinedHash = Math.imul(combinedHash, 16777619);
+    }
+    combinedHash ^= 0;
+    combinedHash = Math.imul(combinedHash, 16777619);
+  }
+  return `${source.length}:${totalLen}:${(combinedHash >>> 0).toString(16).padStart(8, "0")}`;
 }
-var resourceCache = /* @__PURE__ */ new Map();
-var bundleCache = /* @__PURE__ */ new Map();
+var resourceCache = new LRUCache(MAX_RESOURCE_CACHE);
+var bundleCache = new LRUCache(MAX_BUNDLE_CACHE);
 function getOrCreateResource(source) {
-  const hash = `${source.length}:${fnv1a64(source)}`;
+  const hash = `${source.length}:${fnv1a32(source)}`;
   let res = resourceCache.get(hash);
   if (!res) {
-    if (resourceCache.size >= MAX_RESOURCE_CACHE) {
-      const keys = Array.from(resourceCache.keys()).slice(0, Math.floor(MAX_RESOURCE_CACHE * 0.2));
-      for (const k of keys) resourceCache.delete(k);
-    }
     res = new FluentResource(source);
     resourceCache.set(hash, res);
   }
@@ -627,10 +796,6 @@ function getCachedFluentBundle(locale, ftlSource, options = {}) {
     }
   }
   if (!hasCustomFunctions && !options.disableCache) {
-    if (bundleCache.size >= MAX_BUNDLE_CACHE) {
-      const keys = Array.from(bundleCache.keys()).slice(0, Math.floor(MAX_BUNDLE_CACHE * 0.2));
-      for (const k of keys) bundleCache.delete(k);
-    }
     bundleCache.set(cacheKey, bundle);
   }
   return bundle;
@@ -673,6 +838,7 @@ function createTranslator(bundle, namespaceOrFallbackOrOpts, maybeNamespace) {
   let namespace;
   let debug = false;
   let defaultTranslationValues;
+  let strictNamespace;
   if (typeof namespaceOrFallbackOrOpts === "string") {
     namespace = namespaceOrFallbackOrOpts;
   } else if (namespaceOrFallbackOrOpts && typeof namespaceOrFallbackOrOpts === "object") {
@@ -694,6 +860,7 @@ function createTranslator(bundle, namespaceOrFallbackOrOpts, maybeNamespace) {
       namespace = opts.namespace ?? maybeNamespace;
       debug = opts.debug ?? false;
       defaultTranslationValues = opts.defaultTranslationValues;
+      strictNamespace = opts.strictNamespace;
     }
   } else {
     namespace = maybeNamespace;
@@ -701,7 +868,9 @@ function createTranslator(bundle, namespaceOrFallbackOrOpts, maybeNamespace) {
   const defaultFluentArgs = {};
   if (defaultTranslationValues) {
     for (const [k, v] of Object.entries(defaultTranslationValues)) {
-      if (typeof v === "string" || typeof v === "number" || v instanceof Date || typeof v === "object" && v !== null && "type" in v) {
+      if (React2.isValidElement(v)) {
+        defaultFluentArgs[k] = createReactElementToken(k);
+      } else if (typeof v === "string" || typeof v === "number" || v instanceof Date || typeof v === "object" && v !== null && "type" in v) {
         defaultFluentArgs[k] = v;
       }
     }
@@ -721,7 +890,7 @@ function createTranslator(bundle, namespaceOrFallbackOrOpts, maybeNamespace) {
   };
   const tFn = (key, args) => {
     const mergedArgs = defaultTranslationValues && Object.keys(defaultFluentArgs).length > 0 ? { ...defaultFluentArgs, ...args } : args;
-    const candidates = buildKeyCandidates(namespace, key);
+    const candidates = buildKeyCandidates(namespace, key, { strictNamespace });
     const fallbackKey = namespace ? `${namespace}.${key}` : key;
     for (const b of allBundles) {
       for (const candidate of candidates) {
@@ -786,7 +955,7 @@ function createTranslator(bundle, namespaceOrFallbackOrOpts, maybeNamespace) {
     return null;
   };
   tFn.raw = (key) => {
-    const candidates = buildKeyCandidates(namespace, key);
+    const candidates = buildKeyCandidates(namespace, key, { strictNamespace });
     const fallbackKey = namespace ? `${namespace}.${key}` : key;
     for (const b of allBundles) {
       for (const candidate of candidates) {
@@ -806,7 +975,9 @@ function createTranslator(bundle, namespaceOrFallbackOrOpts, maybeNamespace) {
     const fluentArgs = {};
     if (mergedValues) {
       for (const [k, v] of Object.entries(mergedValues)) {
-        if (typeof v === "string" || typeof v === "number" || v instanceof Date || typeof v === "object" && v !== null && "type" in v) {
+        if (React2.isValidElement(v)) {
+          fluentArgs[k] = createReactElementToken(k);
+        } else if (typeof v === "string" || typeof v === "number" || v instanceof Date || typeof v === "object" && v !== null && "type" in v) {
           fluentArgs[k] = v;
         }
       }
@@ -815,7 +986,7 @@ function createTranslator(bundle, namespaceOrFallbackOrOpts, maybeNamespace) {
     return parseRichText(formattedText, mergedValues);
   };
   tFn.has = (key) => {
-    const candidates = buildKeyCandidates(namespace, key);
+    const candidates = buildKeyCandidates(namespace, key, { strictNamespace });
     for (const candidate of candidates) {
       for (const b of allBundles) {
         if (b.hasMessage(candidate)) return true;
@@ -840,6 +1011,8 @@ function FluentProvider({
   fallbackMessages,
   fallbackBundles,
   timeZone,
+  now,
+  functions,
   defaultTranslationValues,
   debug,
   children
@@ -849,18 +1022,18 @@ function FluentProvider({
   const bundle = useMemo(() => {
     if (!messages) return null;
     if (typeof messages === "string" || Array.isArray(messages)) {
-      return createFluentBundle(locale, messages);
+      return createFluentBundle(locale, messages, { functions });
     }
     return messages;
-  }, [locale, messagesKey ?? messages]);
+  }, [locale, messagesKey ?? messages, functions]);
   const fallbackBundle = useMemo(() => {
     if (!fallbackMessages) return null;
     const fLocale = fallbackLocale || "en";
     if (typeof fallbackMessages === "string" || Array.isArray(fallbackMessages)) {
-      return createFluentBundle(fLocale, fallbackMessages);
+      return createFluentBundle(fLocale, fallbackMessages, { functions });
     }
     return fallbackMessages;
-  }, [fallbackLocale, fallbackMessagesKey ?? fallbackMessages]);
+  }, [fallbackLocale, fallbackMessagesKey ?? fallbackMessages, functions]);
   const resolvedFallbackBundles = useMemo(() => {
     if (fallbackBundles) {
       return Array.isArray(fallbackBundles) ? fallbackBundles : [fallbackBundles];
@@ -878,6 +1051,8 @@ function FluentProvider({
       fallbackBundle,
       fallbackBundles: resolvedFallbackBundles,
       timeZone,
+      now,
+      functions,
       defaultTranslationValues,
       debug
     }),
@@ -888,11 +1063,13 @@ function FluentProvider({
       fallbackBundle,
       resolvedFallbackBundles,
       timeZone,
+      now,
+      functions,
       defaultTranslationValues,
       debug
     ]
   );
-  return React2.createElement(FluentContext.Provider, { value }, children);
+  return React3.createElement(FluentContext.Provider, { value }, children);
 }
 function useLocale() {
   const context = useContext(FluentContext);
@@ -915,7 +1092,9 @@ function useFormatter() {
   return useMemo(() => createFormatter({ locale, timeZone }), [locale, timeZone]);
 }
 function useNow(options) {
-  const [now, setNow] = useState(() => /* @__PURE__ */ new Date());
+  const context = useContext(FluentContext);
+  const initialDate = context.now ?? /* @__PURE__ */ new Date();
+  const [now, setNow] = useState(() => initialDate);
   const interval = options?.updateInterval;
   useEffect(() => {
     if (!interval || interval <= 0) return;
@@ -961,50 +1140,15 @@ function FormattedMessage({
   };
   const content = t.rich(id, combinedValues);
   if (Component) {
-    return React2.createElement(Component, { className }, content);
+    return React3.createElement(Component, { className }, content);
   }
   if (className) {
-    return React2.createElement("span", { className }, content);
+    return React3.createElement("span", { className }, content);
   }
   return content;
 }
 
 // src/navigation.ts
-var NextLink = "a";
-var useNextPathname = () => "";
-var useNextRouter = () => ({
-  push: () => {
-  },
-  replace: () => {
-  },
-  prefetch: () => {
-  },
-  back: () => {
-  },
-  forward: () => {
-  },
-  refresh: () => {
-  }
-});
-var nextRedirect = (url) => {
-  throw new Error(`NEXT_REDIRECT: ${url}`);
-};
-var nextPermanentRedirect = (url) => {
-  throw new Error(`NEXT_REDIRECT: ${url}`);
-};
-try {
-  const linkMod = await import("next/link.js").catch(() => import("next/link"));
-  NextLink = linkMod.default ?? linkMod;
-} catch {
-}
-try {
-  const navMod = await import("next/navigation.js").catch(() => import("next/navigation"));
-  useNextPathname = navMod.usePathname ?? useNextPathname;
-  useNextRouter = navMod.useRouter ?? useNextRouter;
-  nextRedirect = navMod.redirect ?? nextRedirect;
-  nextPermanentRedirect = navMod.permanentRedirect ?? nextPermanentRedirect;
-} catch {
-}
 function isExternalUrl(url) {
   return /^(?:[a-zA-Z][a-zA-Z\d+\-.]*:|\/\/|\\\\)/.test(url);
 }
@@ -1044,7 +1188,7 @@ function formatUrlObject(urlObj) {
 }
 function resolveLocalizedPathname(options, config) {
   const { href, locale: explicitLocale } = options;
-  const { locales, defaultLocale, localePrefix = "always" } = config;
+  const { locales, defaultLocale, localePrefix = "always", pathnames } = config;
   let rawPathname = "";
   let search = "";
   let hash = "";
@@ -1083,6 +1227,15 @@ function resolveLocalizedPathname(options, config) {
     }
   }
   const resolvedLocale = explicitLocale ? matchSupportedLocale(explicitLocale, locales) ?? defaultLocale : defaultLocale;
+  let mappedPathname = cleanPathname;
+  if (pathnames && Object.hasOwn(pathnames, cleanPathname)) {
+    const target = pathnames[cleanPathname];
+    if (typeof target === "string") {
+      mappedPathname = target;
+    } else if (target && typeof target === "object") {
+      mappedPathname = target[resolvedLocale] ?? cleanPathname;
+    }
+  }
   let prefix = "";
   if (localePrefix === "never") {
     prefix = "";
@@ -1093,7 +1246,7 @@ function resolveLocalizedPathname(options, config) {
   } else {
     prefix = `/${resolvedLocale}`;
   }
-  const finalPath = prefix ? cleanPathname === "/" ? prefix : `${prefix}${cleanPathname}` : cleanPathname;
+  const finalPath = prefix ? mappedPathname === "/" ? prefix : `${prefix}${mappedPathname.startsWith("/") ? mappedPathname : `/${mappedPathname}`}` : mappedPathname;
   return `${finalPath}${search}${hash}`;
 }
 function createNavigation(config) {
@@ -1102,8 +1255,7 @@ function createNavigation(config) {
     defaultLocale: config.defaultLocale,
     localePrefix: config.localePrefix
   });
-  const { locales, defaultLocale } = config;
-  const ResolvedNextLink = NextLink?.default ?? NextLink;
+  const { locales, defaultLocale, pathnames } = config;
   const getPathname = (options) => {
     return resolveLocalizedPathname(options, config);
   };
@@ -1116,7 +1268,7 @@ function createNavigation(config) {
     }
     const targetLocale = propLocale ?? currentLocale ?? defaultLocale;
     const localizedHref = getPathname({ href, locale: targetLocale });
-    return React3.createElement(ResolvedNextLink, {
+    return React4.createElement(NextLink, {
       ...rest,
       href: localizedHref,
       ref
@@ -1124,19 +1276,54 @@ function createNavigation(config) {
   });
   Link.displayName = "I18nLink";
   function usePathname() {
-    const rawPathname = useNextPathname();
+    let rawPathname = "";
+    try {
+      rawPathname = useNextPathname() || "";
+    } catch {
+      return "";
+    }
     if (!rawPathname) return rawPathname;
     const segments = rawPathname.split("/").filter(Boolean);
     if (segments.length === 0) return "/";
+    let cleanPathname = rawPathname;
     const first = segments[0];
     if (matchSupportedLocale(first, locales)) {
       const rest = segments.slice(1).join("/");
-      return rest ? `/${rest}` : "/";
+      cleanPathname = rest ? `/${rest}` : "/";
     }
-    return rawPathname;
+    if (pathnames) {
+      for (const [canonical, mapping] of Object.entries(pathnames)) {
+        if (typeof mapping === "string") {
+          if (mapping === cleanPathname) return canonical;
+        } else if (mapping && typeof mapping === "object") {
+          for (const localized of Object.values(mapping)) {
+            if (localized === cleanPathname) return canonical;
+          }
+        }
+      }
+    }
+    return cleanPathname;
   }
   function useRouter() {
-    const router = useNextRouter();
+    let router;
+    try {
+      router = useNextRouter();
+    } catch {
+      router = {
+        push: () => {
+        },
+        replace: () => {
+        },
+        prefetch: () => {
+        },
+        back: () => {
+        },
+        forward: () => {
+        },
+        refresh: () => {
+        }
+      };
+    }
     let currentLocale;
     try {
       currentLocale = useLocale();
@@ -1176,12 +1363,22 @@ function createNavigation(config) {
     );
   }
   function redirect(url, options) {
-    const targetLocale = options?.locale ?? defaultLocale;
+    let currentLocale;
+    try {
+      currentLocale = useLocale();
+    } catch {
+    }
+    const targetLocale = options?.locale ?? currentLocale ?? defaultLocale;
     const target = getPathname({ href: url, locale: targetLocale });
     return nextRedirect(target, options?.type);
   }
   function permanentRedirect(url, options) {
-    const targetLocale = options?.locale ?? defaultLocale;
+    let currentLocale;
+    try {
+      currentLocale = useLocale();
+    } catch {
+    }
+    const targetLocale = options?.locale ?? currentLocale ?? defaultLocale;
     const target = getPathname({ href: url, locale: targetLocale });
     return nextPermanentRedirect(target, options?.type);
   }
@@ -1223,35 +1420,45 @@ async function getLocale(options) {
   if (store.locale) {
     return store.locale;
   }
-  const allowedLocales = options?.locales ?? globalLocales;
+  const allowedLocales = options?.locales && options.locales.length > 0 ? options.locales : globalLocales.length > 0 ? globalLocales : void 0;
   const defLocale = options?.defaultLocale ?? globalDefaultLocale;
-  const headerKey = options?.headerName ?? "x-rustok-effective-locale";
+  const headerKey = options?.headerName ?? "x-next-locale";
   const cookieList = options?.cookieNames ?? [
+    "NEXT_LOCALE",
     "rustok-locale",
     "rustok-admin-locale",
-    "rustok-frontend-locale",
-    "NEXT_LOCALE"
+    "rustok-frontend-locale"
   ];
   try {
-    const { headers, cookies } = await import("next/headers");
+    const { headers, cookies } = await import("next/headers.js").catch(() => import("next/headers"));
     const headerStore = await headers();
     const cookieStore = await cookies();
-    const rawHeader = headerStore.get(headerKey);
-    const validHeaderLocale = matchSupportedLocale(rawHeader, allowedLocales);
-    if (validHeaderLocale) {
-      store.locale = validHeaderLocale;
-      return validHeaderLocale;
+    const rawHeader = headerStore.get(headerKey) ?? headerStore.get("x-rustok-effective-locale");
+    if (allowedLocales) {
+      const validHeaderLocale = matchSupportedLocale(rawHeader, allowedLocales);
+      if (validHeaderLocale) {
+        store.locale = validHeaderLocale;
+        return validHeaderLocale;
+      }
+    } else if (rawHeader) {
+      store.locale = rawHeader;
+      return rawHeader;
     }
     for (const cName of cookieList) {
       const cVal = cookieStore.get(cName)?.value;
-      const validCookieLocale = matchSupportedLocale(cVal, allowedLocales);
-      if (validCookieLocale) {
-        store.locale = validCookieLocale;
-        return validCookieLocale;
+      if (allowedLocales) {
+        const validCookieLocale = matchSupportedLocale(cVal, allowedLocales);
+        if (validCookieLocale) {
+          store.locale = validCookieLocale;
+          return validCookieLocale;
+        }
+      } else if (cVal) {
+        store.locale = cVal;
+        return cVal;
       }
     }
     const acceptLang = headerStore.get("accept-language");
-    if (acceptLang) {
+    if (acceptLang && allowedLocales) {
       const resolved = resolveAcceptLanguage(acceptLang, allowedLocales);
       if (resolved) {
         store.locale = resolved;
@@ -1263,16 +1470,36 @@ async function getLocale(options) {
   store.locale = defLocale;
   return defLocale;
 }
+async function resolveConfigFn() {
+  if (globalConfigFn) return globalConfigFn;
+  try {
+    const mod = await import("next-fluent/config");
+    const fn = mod.default ?? mod;
+    if (typeof fn === "function") {
+      globalConfigFn = fn;
+      return fn;
+    }
+  } catch {
+  }
+  return null;
+}
 async function getMessages(localeArg) {
   const locale = localeArg ?? await getLocale();
-  if (globalConfigFn) {
-    const res = await globalConfigFn({ locale });
+  const configFn = await resolveConfigFn();
+  if (configFn) {
+    const res = await configFn({ locale });
     const store = getRequestStore();
     if (res.defaultTranslationValues && !store.defaultTranslationValues) {
       store.defaultTranslationValues = res.defaultTranslationValues;
     }
     if (res.timeZone && !store.timeZone) {
       store.timeZone = res.timeZone;
+    }
+    if (res.now && !store.now) {
+      store.now = res.now;
+    }
+    if (res.functions && !store.functions) {
+      store.functions = res.functions;
     }
     return res.messages;
   }
@@ -1288,7 +1515,8 @@ function getTimeZone() {
   }
 }
 function getNow() {
-  return /* @__PURE__ */ new Date();
+  const store = getRequestStore();
+  return store.now ?? /* @__PURE__ */ new Date();
 }
 async function getFormatter(options) {
   const locale = options?.locale ?? await getLocale();
@@ -1308,6 +1536,8 @@ async function forLocale(locale, options) {
   let explicitMessages;
   let defaultTranslationValues;
   let debug = false;
+  let strictNamespace;
+  let customFunctions;
   if (typeof options === "string") {
     namespace = options;
   } else if (options) {
@@ -1318,19 +1548,25 @@ async function forLocale(locale, options) {
     explicitMessages = options.messages;
     defaultTranslationValues = options.defaultTranslationValues;
     debug = options.debug ?? false;
+    strictNamespace = options.strictNamespace;
+    customFunctions = options.functions;
   }
   const store = getRequestStore();
   if (!defaultTranslationValues && store.defaultTranslationValues) {
     defaultTranslationValues = store.defaultTranslationValues;
   }
+  const mergedFunctions = {
+    ...store.functions,
+    ...customFunctions
+  };
   let bundle;
   if (explicitMessages) {
-    bundle = createFluentBundle(locale, explicitMessages);
+    bundle = createFluentBundle(locale, explicitMessages, { functions: mergedFunctions });
   } else {
     let cached = store.bundles.get(locale);
     if (!cached) {
       const messages = await getMessages(locale);
-      cached = createFluentBundle(locale, messages);
+      cached = createFluentBundle(locale, messages, { functions: mergedFunctions });
       store.bundles.set(locale, cached);
     }
     bundle = cached;
@@ -1338,7 +1574,9 @@ async function forLocale(locale, options) {
   const fallbackBundleList = [];
   if (fallbackMessages) {
     const fbLoc = fallbackLocale ?? "en";
-    fallbackBundleList.push(createFluentBundle(fbLoc, fallbackMessages));
+    fallbackBundleList.push(
+      createFluentBundle(fbLoc, fallbackMessages, { functions: mergedFunctions })
+    );
   }
   const fallbacksToLoad = /* @__PURE__ */ new Set();
   if (fallbackLocale && fallbackLocale !== locale && !fallbackMessages) {
@@ -1354,7 +1592,7 @@ async function forLocale(locale, options) {
       let fbBundle = store.bundles.get(fbLocale);
       if (!fbBundle) {
         const fbMessages = await getMessages(fbLocale);
-        fbBundle = createFluentBundle(fbLocale, fbMessages);
+        fbBundle = createFluentBundle(fbLocale, fbMessages, { functions: mergedFunctions });
         store.bundles.set(fbLocale, fbBundle);
       }
       fallbackBundleList.push(fbBundle);
@@ -1364,7 +1602,8 @@ async function forLocale(locale, options) {
     fallbackBundles: fallbackBundleList,
     namespace,
     debug,
-    defaultTranslationValues
+    defaultTranslationValues,
+    strictNamespace
   });
 }
 async function getTranslations(options) {
@@ -1396,12 +1635,12 @@ function createI18n(config) {
   const navigationInstance = createNavigation({
     locales: config.locales,
     defaultLocale: config.defaultLocale,
-    localePrefix: config.localePrefix
+    localePrefix: config.localePrefix,
+    pathnames: config.pathnames
   });
   return {
     config,
     middleware: middlewareFn,
-    proxy: middlewareFn,
     navigation: navigationInstance,
     getLocale: () => getLocale(serverOptions),
     getTranslations: async (options) => {
@@ -1573,53 +1812,38 @@ function pseudoLocalizeFtl(ftlContent, options = {}) {
 }
 
 // src/typegen.ts
-function extractVariablesFromLine(line) {
-  const lineWithoutStrings = line.replace(/"[^"\\]*(?:\\.[^"\\]*)*"/g, "");
-  const matches = lineWithoutStrings.matchAll(/\$([a-zA-Z][a-zA-Z0-9_-]*)/g);
-  return Array.from(matches, (m) => m[1]);
-}
-function extractMessagesFromFtl(ftlContent) {
-  const messages = [];
-  const lines = ftlContent.split(/\r?\n/);
-  let currentMsg = null;
-  for (const line of lines) {
-    if (line.startsWith("#") || !line.trim()) {
-      continue;
+import { parse, Visitor } from "@fluent/syntax";
+var VariableExtractor = class extends Visitor {
+  variables = /* @__PURE__ */ new Set();
+  visitVariableReference(node) {
+    if (node.id?.name) {
+      this.variables.add(node.id.name);
     }
-    const msgMatch = line.match(/^([a-zA-Z][a-zA-Z0-9_-]*)\s*=/);
-    if (msgMatch) {
-      const id = msgMatch[1];
+    this.genericVisit(node);
+  }
+};
+function extractMessagesFromFtl(ftlContent) {
+  const resource = parse(ftlContent, { withSpans: false });
+  const messages = [];
+  for (const entry of resource.body) {
+    if (entry.type === "Message") {
+      const msg = entry;
+      const id = msg.id.name;
       const dotId = id.replace(/-/g, ".");
-      currentMsg = {
+      const extractor = new VariableExtractor();
+      extractor.visit(msg);
+      const attributes = [];
+      if (msg.attributes) {
+        for (const attr of msg.attributes) {
+          attributes.push(attr.id.name);
+        }
+      }
+      messages.push({
         id,
         dotId,
-        attributes: [],
-        variables: []
-      };
-      messages.push(currentMsg);
-      for (const v of extractVariablesFromLine(line)) {
-        if (!currentMsg.variables.includes(v)) {
-          currentMsg.variables.push(v);
-        }
-      }
-      continue;
-    }
-    const attrMatch = line.match(/^\s+\.([a-zA-Z][a-zA-Z0-9_-]*)\s*=/);
-    if (attrMatch && currentMsg) {
-      currentMsg.attributes.push(attrMatch[1]);
-      for (const v of extractVariablesFromLine(line)) {
-        if (!currentMsg.variables.includes(v)) {
-          currentMsg.variables.push(v);
-        }
-      }
-      continue;
-    }
-    if (currentMsg) {
-      for (const v of extractVariablesFromLine(line)) {
-        if (!currentMsg.variables.includes(v)) {
-          currentMsg.variables.push(v);
-        }
-      }
+        attributes,
+        variables: Array.from(extractor.variables).sort()
+      });
     }
   }
   return messages;
@@ -1662,11 +1886,25 @@ ${keyUnion || "  | string"};
 export interface AppMessageArgs {
 ${argsEntries.join("\n")}
 }
+
+export interface AppMessages {
+${allMessages.map((m) => {
+    const varsType = m.variables.length === 0 ? "Record<string, never>" : `{ ${m.variables.map((v) => `'${v}': string | number | Date`).join("; ")} }`;
+    return `  '${m.dotId}': ${varsType};
+  '${m.id}': ${varsType};`;
+  }).join("\n")}
+}
+
+declare global {
+  // eslint-disable-next-line @typescript-eslint/no-empty-object-type
+  interface FluentMessages extends AppMessages {}
+}
 `;
 }
 export {
   FluentProvider,
   FormattedMessage,
+  LRUCache,
   buildKeyCandidates,
   canonicalizeLocale,
   clearBundleCache,
@@ -1679,7 +1917,9 @@ export {
   createI18nMiddleware,
   createMiddleware,
   createNavigation,
+  createNextFluentPlugin,
   createTranslator,
+  defineRouting,
   extractMessagesFromFtl,
   forLocale,
   formatUrlObject,

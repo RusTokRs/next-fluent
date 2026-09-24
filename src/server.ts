@@ -1,7 +1,8 @@
 import { cache } from 'react';
-import type { FluentBundle } from '@fluent/bundle';
+import type { FluentBundle, FluentFunction } from '@fluent/bundle';
 import type {
   Formatter,
+  GetTranslationsOptions,
   RequestConfigFn,
   RichTranslationValues,
   Translations,
@@ -45,7 +46,9 @@ export function getRequestConfig(): RequestConfigFn | null {
 interface RequestStore {
   locale?: string;
   timeZone?: string;
+  now?: Date;
   defaultTranslationValues?: RichTranslationValues;
+  functions?: Record<string, FluentFunction>;
   bundles: Map<string, FluentBundle>;
 }
 
@@ -63,42 +66,58 @@ export async function getLocale(options?: ServerI18nOptions): Promise<string> {
     return store.locale;
   }
 
-  const allowedLocales = options?.locales ?? globalLocales;
+  const allowedLocales =
+    options?.locales && options.locales.length > 0
+      ? options.locales
+      : globalLocales.length > 0
+        ? globalLocales
+        : undefined;
+
   const defLocale = options?.defaultLocale ?? globalDefaultLocale;
-  const headerKey = options?.headerName ?? 'x-rustok-effective-locale';
+  const headerKey = options?.headerName ?? 'x-next-locale';
   const cookieList = options?.cookieNames ?? [
+    'NEXT_LOCALE',
     'rustok-locale',
     'rustok-admin-locale',
     'rustok-frontend-locale',
-    'NEXT_LOCALE',
   ];
 
   try {
-    const { headers, cookies } = await import('next/headers');
+    const { headers, cookies }: any = await import('next/headers.js').catch(() => import('next/headers'));
     const headerStore = await headers();
     const cookieStore = await cookies();
 
-    // 1. Effective header with allow-list validation
-    const rawHeader = headerStore.get(headerKey);
-    const validHeaderLocale = matchSupportedLocale(rawHeader, allowedLocales);
-    if (validHeaderLocale) {
-      store.locale = validHeaderLocale;
-      return validHeaderLocale;
+    // 1. Primary effective header with allow-list validation
+    const rawHeader = headerStore.get(headerKey) ?? headerStore.get('x-rustok-effective-locale');
+    if (allowedLocales) {
+      const validHeaderLocale = matchSupportedLocale(rawHeader, allowedLocales);
+      if (validHeaderLocale) {
+        store.locale = validHeaderLocale;
+        return validHeaderLocale;
+      }
+    } else if (rawHeader) {
+      store.locale = rawHeader;
+      return rawHeader;
     }
 
     // 2. Cookies with allow-list validation
     for (const cName of cookieList) {
       const cVal = cookieStore.get(cName)?.value;
-      const validCookieLocale = matchSupportedLocale(cVal, allowedLocales);
-      if (validCookieLocale) {
-        store.locale = validCookieLocale;
-        return validCookieLocale;
+      if (allowedLocales) {
+        const validCookieLocale = matchSupportedLocale(cVal, allowedLocales);
+        if (validCookieLocale) {
+          store.locale = validCookieLocale;
+          return validCookieLocale;
+        }
+      } else if (cVal) {
+        store.locale = cVal;
+        return cVal;
       }
     }
 
     // 3. Accept-Language with allow-list negotiation
     const acceptLang = headerStore.get('accept-language');
-    if (acceptLang) {
+    if (acceptLang && allowedLocales) {
       const resolved = resolveAcceptLanguage(acceptLang, allowedLocales);
       if (resolved) {
         store.locale = resolved;
@@ -106,25 +125,52 @@ export async function getLocale(options?: ServerI18nOptions): Promise<string> {
       }
     }
   } catch {
-    // Outside request context (e.g. build time or test environment)
+    // Outside request context (e.g. build time or static export)
   }
 
   store.locale = defLocale;
   return defLocale;
 }
 
+async function resolveConfigFn(): Promise<RequestConfigFn | null> {
+  if (globalConfigFn) return globalConfigFn;
+
+  try {
+    // Dynamically attempt to load plugin-aliased configuration if present
+    // @ts-expect-error Virtual alias created by next-fluent plugin
+    const mod = await import('next-fluent/config');
+    const fn = mod.default ?? mod;
+    if (typeof fn === 'function') {
+      globalConfigFn = fn;
+      return fn;
+    }
+  } catch {
+    // Config file not configured via plugin
+  }
+
+  return null;
+}
+
 export async function getMessages(
   localeArg?: string
 ): Promise<string | readonly string[]> {
   const locale = localeArg ?? (await getLocale());
-  if (globalConfigFn) {
-    const res = await globalConfigFn({ locale });
+  const configFn = await resolveConfigFn();
+
+  if (configFn) {
+    const res = await configFn({ locale });
     const store = getRequestStore();
     if (res.defaultTranslationValues && !store.defaultTranslationValues) {
       store.defaultTranslationValues = res.defaultTranslationValues;
     }
     if (res.timeZone && !store.timeZone) {
       store.timeZone = res.timeZone;
+    }
+    if (res.now && !store.now) {
+      store.now = res.now;
+    }
+    if (res.functions && !store.functions) {
+      store.functions = res.functions;
     }
     return res.messages;
   }
@@ -142,7 +188,8 @@ export function getTimeZone(): string {
 }
 
 export function getNow(): Date {
-  return new Date();
+  const store = getRequestStore();
+  return store.now ?? new Date();
 }
 
 export async function getFormatter(options?: {
@@ -168,6 +215,8 @@ export interface ForLocaleOptions {
   defaultTranslationValues?: RichTranslationValues;
   namespace?: string;
   debug?: boolean;
+  strictNamespace?: boolean;
+  functions?: Record<string, FluentFunction>;
 }
 
 export async function forLocale<
@@ -184,6 +233,8 @@ export async function forLocale<
   let explicitMessages: string | readonly string[] | undefined;
   let defaultTranslationValues: RichTranslationValues | undefined;
   let debug = false;
+  let strictNamespace: boolean | undefined;
+  let customFunctions: Record<string, FluentFunction> | undefined;
 
   if (typeof options === 'string') {
     namespace = options;
@@ -195,21 +246,27 @@ export async function forLocale<
     explicitMessages = options.messages;
     defaultTranslationValues = options.defaultTranslationValues;
     debug = options.debug ?? false;
+    strictNamespace = options.strictNamespace;
+    customFunctions = options.functions;
   }
 
   const store = getRequestStore();
   if (!defaultTranslationValues && store.defaultTranslationValues) {
     defaultTranslationValues = store.defaultTranslationValues;
   }
+  const mergedFunctions = {
+    ...store.functions,
+    ...customFunctions,
+  };
 
   let bundle: FluentBundle;
   if (explicitMessages) {
-    bundle = createFluentBundle(locale, explicitMessages);
+    bundle = createFluentBundle(locale, explicitMessages, { functions: mergedFunctions });
   } else {
     let cached = store.bundles.get(locale);
     if (!cached) {
       const messages = await getMessages(locale);
-      cached = createFluentBundle(locale, messages);
+      cached = createFluentBundle(locale, messages, { functions: mergedFunctions });
       store.bundles.set(locale, cached);
     }
     bundle = cached;
@@ -220,7 +277,9 @@ export async function forLocale<
   // 1. Explicit fallback messages
   if (fallbackMessages) {
     const fbLoc = fallbackLocale ?? 'en';
-    fallbackBundleList.push(createFluentBundle(fbLoc, fallbackMessages));
+    fallbackBundleList.push(
+      createFluentBundle(fbLoc, fallbackMessages, { functions: mergedFunctions })
+    );
   }
 
   // 2. Fallback locales from request/config
@@ -239,7 +298,7 @@ export async function forLocale<
       let fbBundle = store.bundles.get(fbLocale);
       if (!fbBundle) {
         const fbMessages = await getMessages(fbLocale);
-        fbBundle = createFluentBundle(fbLocale, fbMessages);
+        fbBundle = createFluentBundle(fbLocale, fbMessages, { functions: mergedFunctions });
         store.bundles.set(fbLocale, fbBundle);
       }
       fallbackBundleList.push(fbBundle);
@@ -251,6 +310,7 @@ export async function forLocale<
     namespace,
     debug,
     defaultTranslationValues,
+    strictNamespace,
   }) as unknown as Translations<Key, ArgsMap>;
 }
 
@@ -258,7 +318,7 @@ export async function getTranslations<
   Key extends string = string,
   ArgsMap extends Record<string, any> = Record<string, any>
 >(
-  options?: string | ({ locale?: string } & ForLocaleOptions)
+  options?: string | ({ locale?: string } & GetTranslationsOptions)
 ): Promise<Translations<Key, ArgsMap>> {
   const explicitLocale = typeof options === 'object' && options ? options.locale : undefined;
   const locale = explicitLocale ?? (await getLocale());

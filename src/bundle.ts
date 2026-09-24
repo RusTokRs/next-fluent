@@ -1,12 +1,13 @@
-import type { FluentBundle, FluentFunction } from '@fluent/bundle';
-import type React from 'react';
+import type { FluentBundle } from '@fluent/bundle';
+import React from 'react';
 import type { FluentArgs, FluentVariable, RichTranslationValues, Translations } from './types';
 import { buildKeyCandidates, canonicalizeLocale } from './utils';
-import { parseRichText } from './rich';
+import { parseRichText, createReactElementToken } from './rich';
 import {
   getCachedFluentBundle,
   clearBundleCache,
   getBundleCacheStats,
+  LRUCache,
   type CreateFluentBundleOptions,
 } from './cache';
 
@@ -14,6 +15,7 @@ export {
   getCachedFluentBundle,
   clearBundleCache,
   getBundleCacheStats,
+  LRUCache,
   type CreateFluentBundleOptions,
 };
 
@@ -33,9 +35,6 @@ export function createFluentBundle(
   ftlSource: string | readonly string[],
   options: CreateFluentBundleOptions = {}
 ): FluentBundle {
-  // Low-level bundle construction follows the same locale contract as the
-  // high-level runtime: bound raw input, canonicalize aliases such as ru_RU,
-  // and reject malformed identities before they reach Fluent or Intl helpers.
   const canonicalLocale = canonicalizeLocale(locale);
   if (!canonicalLocale) {
     throw new Error(
@@ -52,6 +51,7 @@ export interface CreateTranslatorOptions {
   namespace?: string;
   debug?: boolean;
   defaultTranslationValues?: RichTranslationValues;
+  strictNamespace?: boolean;
 }
 
 const FORMAT_ERROR = Symbol('format-error');
@@ -69,6 +69,7 @@ export function createTranslator(
   let namespace: string | undefined;
   let debug = false;
   let defaultTranslationValues: RichTranslationValues | undefined;
+  let strictNamespace: boolean | undefined;
 
   if (typeof namespaceOrFallbackOrOpts === 'string') {
     namespace = namespaceOrFallbackOrOpts;
@@ -93,6 +94,7 @@ export function createTranslator(
       namespace = opts.namespace ?? maybeNamespace;
       debug = opts.debug ?? false;
       defaultTranslationValues = opts.defaultTranslationValues;
+      strictNamespace = opts.strictNamespace;
     }
   } else {
     namespace = maybeNamespace;
@@ -101,7 +103,9 @@ export function createTranslator(
   const defaultFluentArgs: FluentArgs = {};
   if (defaultTranslationValues) {
     for (const [k, v] of Object.entries(defaultTranslationValues)) {
-      if (
+      if (React.isValidElement(v)) {
+        defaultFluentArgs[k] = createReactElementToken(k);
+      } else if (
         typeof v === 'string' ||
         typeof v === 'number' ||
         v instanceof Date ||
@@ -111,7 +115,6 @@ export function createTranslator(
       }
     }
   }
-
 
   const formatCandidate = (
     targetBundle: FluentBundle,
@@ -125,8 +128,8 @@ export function createTranslator(
       if (errors.length > 0) {
         console.warn(`[next-fluent] Format errors for key "${candidate}":`, errors);
         // Never expose Fluent's partially formatted output. A message that exists
-        // but cannot be formatted is a terminal resolution failure, matching the
-        // Rust lenient path rather than silently falling through to another locale.
+        // but cannot be formatted is a terminal resolution failure rather than
+        // silently falling through to another locale.
         return FORMAT_ERROR;
       }
       return formatted;
@@ -139,7 +142,7 @@ export function createTranslator(
       defaultTranslationValues && Object.keys(defaultFluentArgs).length > 0
         ? { ...defaultFluentArgs, ...args }
         : args;
-    const candidates = buildKeyCandidates(namespace, key);
+    const candidates = buildKeyCandidates(namespace, key, { strictNamespace });
     const fallbackKey = namespace ? `${namespace}.${key}` : key;
     for (const b of allBundles) {
       for (const candidate of candidates) {
@@ -216,7 +219,7 @@ export function createTranslator(
   };
 
   tFn.raw = (key: string): string[] | string => {
-    const candidates = buildKeyCandidates(namespace, key);
+    const candidates = buildKeyCandidates(namespace, key, { strictNamespace });
     const fallbackKey = namespace ? `${namespace}.${key}` : key;
     for (const b of allBundles) {
       for (const candidate of candidates) {
@@ -243,7 +246,9 @@ export function createTranslator(
     const fluentArgs: FluentArgs = {};
     if (mergedValues) {
       for (const [k, v] of Object.entries(mergedValues)) {
-        if (
+        if (React.isValidElement(v)) {
+          fluentArgs[k] = createReactElementToken(k);
+        } else if (
           typeof v === 'string' ||
           typeof v === 'number' ||
           v instanceof Date ||
@@ -259,7 +264,7 @@ export function createTranslator(
   };
 
   tFn.has = (key: string): boolean => {
-    const candidates = buildKeyCandidates(namespace, key);
+    const candidates = buildKeyCandidates(namespace, key, { strictNamespace });
     for (const candidate of candidates) {
       for (const b of allBundles) {
         if (b.hasMessage(candidate)) return true;

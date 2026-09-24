@@ -1,8 +1,9 @@
 'use client';
 
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import type { FluentBundle } from '@fluent/bundle';
+import type { FluentBundle, FluentFunction } from '@fluent/bundle';
 import type {
+  DefaultKey,
   FormattedMessageProps,
   Formatter,
   RichTranslationValues,
@@ -21,6 +22,8 @@ interface FluentContextValue {
   fallbackBundle: FluentBundle | null;
   fallbackBundles?: readonly FluentBundle[];
   timeZone?: string;
+  now?: Date;
+  functions?: Record<string, FluentFunction>;
   defaultTranslationValues?: RichTranslationValues;
   debug?: boolean;
 }
@@ -39,6 +42,8 @@ export interface FluentProviderProps {
   fallbackMessages?: string | readonly string[] | FluentBundle;
   fallbackBundles?: FluentBundle | readonly FluentBundle[];
   timeZone?: string;
+  now?: Date;
+  functions?: Record<string, FluentFunction>;
   defaultTranslationValues?: RichTranslationValues;
   debug?: boolean;
   children: React.ReactNode;
@@ -51,6 +56,8 @@ export function FluentProvider({
   fallbackMessages,
   fallbackBundles,
   timeZone,
+  now,
+  functions,
   defaultTranslationValues,
   debug,
   children,
@@ -72,19 +79,19 @@ export function FluentProvider({
   const bundle = useMemo<FluentBundle | null>(() => {
     if (!messages) return null;
     if (typeof messages === 'string' || Array.isArray(messages)) {
-      return createFluentBundle(locale, messages);
+      return createFluentBundle(locale, messages, { functions });
     }
     return messages as FluentBundle;
-  }, [locale, messagesKey ?? messages]);
+  }, [locale, messagesKey ?? messages, functions]);
 
   const fallbackBundle = useMemo<FluentBundle | null>(() => {
     if (!fallbackMessages) return null;
     const fLocale = fallbackLocale || 'en';
     if (typeof fallbackMessages === 'string' || Array.isArray(fallbackMessages)) {
-      return createFluentBundle(fLocale, fallbackMessages);
+      return createFluentBundle(fLocale, fallbackMessages, { functions });
     }
     return fallbackMessages as FluentBundle;
-  }, [fallbackLocale, fallbackMessagesKey ?? fallbackMessages]);
+  }, [fallbackLocale, fallbackMessagesKey ?? fallbackMessages, functions]);
 
   const resolvedFallbackBundles = useMemo<readonly FluentBundle[] | undefined>(() => {
     if (fallbackBundles) {
@@ -104,6 +111,8 @@ export function FluentProvider({
       fallbackBundle,
       fallbackBundles: resolvedFallbackBundles,
       timeZone,
+      now,
+      functions,
       defaultTranslationValues,
       debug,
     }),
@@ -114,6 +123,8 @@ export function FluentProvider({
       fallbackBundle,
       resolvedFallbackBundles,
       timeZone,
+      now,
+      functions,
       defaultTranslationValues,
       debug,
     ]
@@ -146,7 +157,9 @@ export function useFormatter(): Formatter {
 }
 
 export function useNow(options?: { updateInterval?: number }): Date {
-  const [now, setNow] = useState<Date>(() => new Date());
+  const context = useContext(FluentContext);
+  const initialDate = context.now ?? new Date();
+  const [now, setNow] = useState<Date>(() => initialDate);
   const interval = options?.updateInterval;
 
   useEffect(() => {
@@ -159,7 +172,7 @@ export function useNow(options?: { updateInterval?: number }): Date {
 }
 
 export function useTranslations<
-  Key extends string = string,
+  Key extends string = DefaultKey,
   ArgsMap extends Record<string, any> = Record<string, any>
 >(namespace?: string): Translations<Key, ArgsMap> {
   const context = useContext(FluentContext);
@@ -185,7 +198,7 @@ export function useTranslations<
 }
 
 export function FormattedMessage<
-  Key extends string = string,
+  Key extends string = DefaultKey,
   ArgsMap extends Record<string, any> = Record<string, any>
 >({
   id,

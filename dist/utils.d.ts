@@ -12,4 +12,7 @@ export interface BaseI18nConfig {
 }
 export declare function validateI18nConfig(options: BaseI18nConfig): void;
 export declare function withKebabKey(key: string): string;
-export declare function buildKeyCandidates(namespace: string | undefined, key: string): string[];
+export interface BuildKeyCandidatesOptions {
+    strictNamespace?: boolean;
+}
+export declare function buildKeyCandidates(namespace: string | undefined, key: string, options?: BuildKeyCandidatesOptions): string[];

@@ -25,8 +25,8 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
     locales,
     defaultLocale: rawDefaultLocale,
     localePrefix = 'always',
-    cookieName = 'rustok-locale',
-    headerName = 'x-rustok-effective-locale',
+    cookieName = 'NEXT_LOCALE',
+    headerName = 'x-next-locale',
   } = options;
 
   // Resolve defaultLocale to its exact spelling in `locales` so that string
@@ -39,7 +39,7 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
     let NextResponse: any;
 
     try {
-      const nextServer = await import('next/server');
+      const nextServer: any = await import('next/server.js').catch(() => import('next/server'));
       NextResponse = nextServer.NextResponse;
     } catch {
       NextResponse = class MockNextResponse {
@@ -49,6 +49,19 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
           return {
             status: 200,
             headers,
+            request: { headers: reqHeaders },
+            cookies: {
+              set: (name: string, val: string) => headers.append('Set-Cookie', `${name}=${val}; Path=/`),
+            },
+          };
+        }
+        static rewrite(url: URL | string, opts?: any) {
+          const headers = new Headers();
+          const reqHeaders = opts?.request?.headers ?? new Headers();
+          return {
+            status: 200,
+            headers,
+            rewriteUrl: String(url),
             request: { headers: reqHeaders },
             cookies: {
               set: (name: string, val: string) => headers.append('Set-Cookie', `${name}=${val}; Path=/`),
@@ -76,9 +89,8 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
 
     const cookieLocale = matchSupportedLocale(
       request.cookies.get(cookieName)?.value ||
-        request.cookies.get('rustok-admin-locale')?.value ||
-        request.cookies.get('rustok-frontend-locale')?.value ||
-        request.cookies.get('NEXT_LOCALE')?.value,
+        request.cookies.get('NEXT_LOCALE')?.value ||
+        request.cookies.get('rustok-locale')?.value,
       locales
     );
 
@@ -89,7 +101,7 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
 
     const preferredLocale = cookieLocale || headerLocale || defaultLocale;
 
-    const createSuccessResponse = (effectiveLocale: string) => {
+    const createSuccessResponse = (effectiveLocale: string, rewritePath?: string) => {
       const requestHeaders = new Headers();
       if (request.headers) {
         if (typeof request.headers.forEach === 'function') {
@@ -101,15 +113,28 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
         }
       }
       requestHeaders.set(headerName, effectiveLocale);
+      // Retain legacy header alias for backwards compatibility
+      if (headerName !== 'x-rustok-effective-locale') {
+        requestHeaders.set('x-rustok-effective-locale', effectiveLocale);
+      }
 
-      const response = NextResponse.next({
-        request: {
-          headers: requestHeaders,
-        },
-      });
+      const response = rewritePath
+        ? NextResponse.rewrite(new URL(rewritePath, request.url), {
+            request: { headers: requestHeaders },
+          })
+        : NextResponse.next({
+            request: { headers: requestHeaders },
+          });
+
+      if (!response.request) {
+        response.request = { headers: requestHeaders };
+      }
 
       if (response.headers?.set) {
         response.headers.set(headerName, effectiveLocale);
+        if (headerName !== 'x-rustok-effective-locale') {
+          response.headers.set('x-rustok-effective-locale', effectiveLocale);
+        }
       }
       if (response.cookies?.set) {
         response.cookies.set(cookieName, effectiveLocale, {
@@ -125,6 +150,9 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
       const response = NextResponse.redirect(targetUrl);
       if (response.headers?.set) {
         response.headers.set(headerName, targetLocale);
+        if (headerName !== 'x-rustok-effective-locale') {
+          response.headers.set('x-rustok-effective-locale', targetLocale);
+        }
       }
       if (response.cookies?.set) {
         response.cookies.set(cookieName, targetLocale, {
@@ -136,16 +164,17 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
       return response;
     };
 
-    // Strategy 1: 'never' (no prefixes in URL)
+    // Strategy 1: 'never' (no prefixes in URL, internal rewrite to /[locale]/...)
     if (localePrefix === 'never') {
       if (matchedPrefix) {
         const remainingPath = `/${segments.slice(1).join('/')}${search}`;
         return createRedirect(new URL(remainingPath, request.url), matchedPrefix);
       }
-      return createSuccessResponse(preferredLocale);
+      const rewritePath = `/${preferredLocale}${pathname === '/' ? '' : pathname}${search}`;
+      return createSuccessResponse(preferredLocale, rewritePath);
     }
 
-    // Strategy 2: 'as-needed' (default locale without prefix, others with prefix)
+    // Strategy 2: 'as-needed' (default locale without prefix rewritten, others with prefix)
     if (localePrefix === 'as-needed') {
       if (matchedPrefix === defaultLocale) {
         // Strip default locale prefix
@@ -158,7 +187,8 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
       }
       // No prefix in URL:
       if (preferredLocale === defaultLocale) {
-        return createSuccessResponse(defaultLocale);
+        const rewritePath = `/${defaultLocale}${pathname === '/' ? '' : pathname}${search}`;
+        return createSuccessResponse(defaultLocale, rewritePath);
       }
       // Preferred locale is non-default: redirect to /{preferredLocale}/path
       const targetPath = `/${preferredLocale}${pathname === '/' ? '' : pathname}${search}`;

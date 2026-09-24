@@ -14,32 +14,64 @@ function canonicalizeLocale(locale) {
   }
 }
 
+// src/lru.ts
+var LRUCache = class {
+  constructor(maxSize) {
+    this.maxSize = maxSize;
+  }
+  maxSize;
+  map = /* @__PURE__ */ new Map();
+  get(key) {
+    const val = this.map.get(key);
+    if (val !== void 0) {
+      this.map.delete(key);
+      this.map.set(key, val);
+    }
+    return val;
+  }
+  set(key, value) {
+    if (this.map.has(key)) {
+      this.map.delete(key);
+    } else if (this.map.size >= this.maxSize) {
+      const oldestKey = this.map.keys().next().value;
+      if (oldestKey !== void 0) {
+        this.map.delete(oldestKey);
+      }
+    }
+    this.map.set(key, value);
+  }
+  has(key) {
+    return this.map.has(key);
+  }
+  delete(key) {
+    return this.map.delete(key);
+  }
+  clear() {
+    this.map.clear();
+  }
+  get size() {
+    return this.map.size;
+  }
+};
+
 // src/formatter.ts
 var MAX_CACHE_SIZE = 200;
-function createBoundedCache() {
-  const map = /* @__PURE__ */ new Map();
-  return {
-    get(key) {
-      return map.get(key);
-    },
-    set(key, value) {
-      if (!map.has(key) && map.size >= MAX_CACHE_SIZE) {
-        const firstKey = map.keys().next().value;
-        if (firstKey !== void 0) {
-          map.delete(firstKey);
-        }
-      }
-      map.set(key, value);
-    },
-    clear() {
-      map.clear();
-    }
-  };
+function stringifySorted(obj) {
+  if (obj === null || typeof obj !== "object") {
+    return JSON.stringify(obj);
+  }
+  if (Array.isArray(obj)) {
+    return `[${obj.map(stringifySorted).join(",")}]`;
+  }
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map(
+    (k) => `${JSON.stringify(k)}:${stringifySorted(obj[k])}`
+  ).join(",")}}`;
 }
-var dtfCache = createBoundedCache();
-var nfCache = createBoundedCache();
-var rtfCache = createBoundedCache();
-var lfCache = createBoundedCache();
+var dtfCache = new LRUCache(MAX_CACHE_SIZE);
+var nfCache = new LRUCache(MAX_CACHE_SIZE);
+var rtfCache = new LRUCache(MAX_CACHE_SIZE);
+var lfCache = new LRUCache(MAX_CACHE_SIZE);
 function clearFormatterCache() {
   dtfCache.clear();
   nfCache.clear();
@@ -63,7 +95,7 @@ function createFormatter(optionsOrLocale) {
         ...timeZone && !dtfOptions?.timeZone ? { timeZone } : {},
         ...dtfOptions
       };
-      const cacheKey = `${locale}::${JSON.stringify(mergedOptions)}`;
+      const cacheKey = `${locale}::${stringifySorted(mergedOptions)}`;
       let formatter = dtfCache.get(cacheKey);
       if (!formatter) {
         try {
@@ -80,7 +112,7 @@ function createFormatter(optionsOrLocale) {
       }
     },
     number(value, nfOptions) {
-      const cacheKey = `${locale}::${JSON.stringify(nfOptions ?? {})}`;
+      const cacheKey = `${locale}::${stringifySorted(nfOptions ?? {})}`;
       let formatter = nfCache.get(cacheKey);
       if (!formatter) {
         try {
@@ -97,7 +129,7 @@ function createFormatter(optionsOrLocale) {
       }
     },
     relativeTime(value, unit, rtfOptions) {
-      const cacheKey = `${locale}::${JSON.stringify(rtfOptions ?? {})}`;
+      const cacheKey = `${locale}::${stringifySorted(rtfOptions ?? {})}`;
       let formatter = rtfCache.get(cacheKey);
       if (!formatter) {
         try {
@@ -117,7 +149,7 @@ function createFormatter(optionsOrLocale) {
       if (!value || typeof value[Symbol.iterator] !== "function") {
         return String(value ?? "");
       }
-      const cacheKey = `${locale}::${JSON.stringify(lfOptions ?? {})}`;
+      const cacheKey = `${locale}::${stringifySorted(lfOptions ?? {})}`;
       let formatter = lfCache.get(cacheKey);
       if (!formatter) {
         try {

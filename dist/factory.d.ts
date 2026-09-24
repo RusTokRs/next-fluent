@@ -3,7 +3,6 @@ import { type NextMiddlewareRequestLike } from './middleware';
 export interface I18nRuntime {
     readonly config: I18nConfig;
     readonly middleware: (request: NextMiddlewareRequestLike) => Promise<any>;
-    readonly proxy: (request: NextMiddlewareRequestLike) => Promise<any>;
     readonly getLocale: () => Promise<string>;
     readonly getTranslations: (options?: string | GetTranslationsOptions) => Promise<Translations>;
     readonly forLocale: (locale: string, options?: string | {

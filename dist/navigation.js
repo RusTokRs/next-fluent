@@ -1,7 +1,15 @@
 "use client";
+"use client";
 
 // src/navigation.ts
 import React2, { forwardRef, useMemo as useMemo2 } from "react";
+import NextLink from "next/link.js";
+import {
+  usePathname as useNextPathname,
+  useRouter as useNextRouter,
+  redirect as nextRedirect,
+  permanentRedirect as nextPermanentRedirect
+} from "next/navigation.js";
 
 // src/utils.ts
 var MAX_LOCALE_TAG_LENGTH = 64;
@@ -112,41 +120,6 @@ function useLocale() {
 }
 
 // src/navigation.ts
-var NextLink = "a";
-var useNextPathname = () => "";
-var useNextRouter = () => ({
-  push: () => {
-  },
-  replace: () => {
-  },
-  prefetch: () => {
-  },
-  back: () => {
-  },
-  forward: () => {
-  },
-  refresh: () => {
-  }
-});
-var nextRedirect = (url) => {
-  throw new Error(`NEXT_REDIRECT: ${url}`);
-};
-var nextPermanentRedirect = (url) => {
-  throw new Error(`NEXT_REDIRECT: ${url}`);
-};
-try {
-  const linkMod = await import("next/link.js").catch(() => import("next/link"));
-  NextLink = linkMod.default ?? linkMod;
-} catch {
-}
-try {
-  const navMod = await import("next/navigation.js").catch(() => import("next/navigation"));
-  useNextPathname = navMod.usePathname ?? useNextPathname;
-  useNextRouter = navMod.useRouter ?? useNextRouter;
-  nextRedirect = navMod.redirect ?? nextRedirect;
-  nextPermanentRedirect = navMod.permanentRedirect ?? nextPermanentRedirect;
-} catch {
-}
 function isExternalUrl(url) {
   return /^(?:[a-zA-Z][a-zA-Z\d+\-.]*:|\/\/|\\\\)/.test(url);
 }
@@ -186,7 +159,7 @@ function formatUrlObject(urlObj) {
 }
 function resolveLocalizedPathname(options, config) {
   const { href, locale: explicitLocale } = options;
-  const { locales, defaultLocale, localePrefix = "always" } = config;
+  const { locales, defaultLocale, localePrefix = "always", pathnames } = config;
   let rawPathname = "";
   let search = "";
   let hash = "";
@@ -225,6 +198,15 @@ function resolveLocalizedPathname(options, config) {
     }
   }
   const resolvedLocale = explicitLocale ? matchSupportedLocale(explicitLocale, locales) ?? defaultLocale : defaultLocale;
+  let mappedPathname = cleanPathname;
+  if (pathnames && Object.hasOwn(pathnames, cleanPathname)) {
+    const target = pathnames[cleanPathname];
+    if (typeof target === "string") {
+      mappedPathname = target;
+    } else if (target && typeof target === "object") {
+      mappedPathname = target[resolvedLocale] ?? cleanPathname;
+    }
+  }
   let prefix = "";
   if (localePrefix === "never") {
     prefix = "";
@@ -235,7 +217,7 @@ function resolveLocalizedPathname(options, config) {
   } else {
     prefix = `/${resolvedLocale}`;
   }
-  const finalPath = prefix ? cleanPathname === "/" ? prefix : `${prefix}${cleanPathname}` : cleanPathname;
+  const finalPath = prefix ? mappedPathname === "/" ? prefix : `${prefix}${mappedPathname.startsWith("/") ? mappedPathname : `/${mappedPathname}`}` : mappedPathname;
   return `${finalPath}${search}${hash}`;
 }
 function createNavigation(config) {
@@ -244,8 +226,7 @@ function createNavigation(config) {
     defaultLocale: config.defaultLocale,
     localePrefix: config.localePrefix
   });
-  const { locales, defaultLocale } = config;
-  const ResolvedNextLink = NextLink?.default ?? NextLink;
+  const { locales, defaultLocale, pathnames } = config;
   const getPathname = (options) => {
     return resolveLocalizedPathname(options, config);
   };
@@ -258,7 +239,7 @@ function createNavigation(config) {
     }
     const targetLocale = propLocale ?? currentLocale ?? defaultLocale;
     const localizedHref = getPathname({ href, locale: targetLocale });
-    return React2.createElement(ResolvedNextLink, {
+    return React2.createElement(NextLink, {
       ...rest,
       href: localizedHref,
       ref
@@ -266,19 +247,54 @@ function createNavigation(config) {
   });
   Link.displayName = "I18nLink";
   function usePathname() {
-    const rawPathname = useNextPathname();
+    let rawPathname = "";
+    try {
+      rawPathname = useNextPathname() || "";
+    } catch {
+      return "";
+    }
     if (!rawPathname) return rawPathname;
     const segments = rawPathname.split("/").filter(Boolean);
     if (segments.length === 0) return "/";
+    let cleanPathname = rawPathname;
     const first = segments[0];
     if (matchSupportedLocale(first, locales)) {
       const rest = segments.slice(1).join("/");
-      return rest ? `/${rest}` : "/";
+      cleanPathname = rest ? `/${rest}` : "/";
     }
-    return rawPathname;
+    if (pathnames) {
+      for (const [canonical, mapping] of Object.entries(pathnames)) {
+        if (typeof mapping === "string") {
+          if (mapping === cleanPathname) return canonical;
+        } else if (mapping && typeof mapping === "object") {
+          for (const localized of Object.values(mapping)) {
+            if (localized === cleanPathname) return canonical;
+          }
+        }
+      }
+    }
+    return cleanPathname;
   }
   function useRouter() {
-    const router = useNextRouter();
+    let router;
+    try {
+      router = useNextRouter();
+    } catch {
+      router = {
+        push: () => {
+        },
+        replace: () => {
+        },
+        prefetch: () => {
+        },
+        back: () => {
+        },
+        forward: () => {
+        },
+        refresh: () => {
+        }
+      };
+    }
     let currentLocale;
     try {
       currentLocale = useLocale();
@@ -318,12 +334,22 @@ function createNavigation(config) {
     );
   }
   function redirect(url, options) {
-    const targetLocale = options?.locale ?? defaultLocale;
+    let currentLocale;
+    try {
+      currentLocale = useLocale();
+    } catch {
+    }
+    const targetLocale = options?.locale ?? currentLocale ?? defaultLocale;
     const target = getPathname({ href: url, locale: targetLocale });
     return nextRedirect(target, options?.type);
   }
   function permanentRedirect(url, options) {
-    const targetLocale = options?.locale ?? defaultLocale;
+    let currentLocale;
+    try {
+      currentLocale = useLocale();
+    } catch {
+    }
+    const targetLocale = options?.locale ?? currentLocale ?? defaultLocale;
     const target = getPathname({ href: url, locale: targetLocale });
     return nextPermanentRedirect(target, options?.type);
   }

@@ -145,7 +145,7 @@ function validateI18nConfig(options) {
 function withKebabKey(key) {
   return key.replaceAll(".", "-");
 }
-function buildKeyCandidates(namespace, key) {
+function buildKeyCandidates(namespace, key, options) {
   const candidates = [];
   const pushCandidate = (candidate) => {
     if (!candidates.includes(candidate)) {
@@ -160,6 +160,9 @@ function buildKeyCandidates(namespace, key) {
     const nsHyphen = withKebabKey(cleanNs);
     if (nsHyphen !== cleanNs) {
       pushCandidate(`${nsHyphen}-${key}`);
+    }
+    if (options?.strictNamespace) {
+      return candidates;
     }
   }
   pushCandidate(withKebabKey(key));

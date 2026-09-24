@@ -212,9 +212,14 @@ export function withKebabKey(key: string): string {
   return key.replaceAll('.', '-');
 }
 
+export interface BuildKeyCandidatesOptions {
+  strictNamespace?: boolean;
+}
+
 export function buildKeyCandidates(
   namespace: string | undefined,
-  key: string
+  key: string,
+  options?: BuildKeyCandidatesOptions
 ): string[] {
   const candidates: string[] = [];
   const pushCandidate = (candidate: string): void => {
@@ -234,6 +239,10 @@ export function buildKeyCandidates(
     const nsHyphen = withKebabKey(cleanNs);
     if (nsHyphen !== cleanNs) {
       pushCandidate(`${nsHyphen}-${key}`);
+    }
+
+    if (options?.strictNamespace) {
+      return candidates;
     }
   }
 

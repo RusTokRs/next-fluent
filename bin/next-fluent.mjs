@@ -10,7 +10,7 @@ const command = args[0];
 
 if (command !== 'typegen' && command !== 'pseudo') {
   console.log(`Usage:
-  next-fluent typegen --input <path-to-ftl> --output <path-to-dts>
+  next-fluent typegen --input <path-to-ftl-or-dir> --output <path-to-dts>
   next-fluent pseudo  --input <path-to-ftl> --output <path-to-ftl>`);
   process.exit(1);
 }
@@ -35,18 +35,42 @@ const resolvedInput = path.resolve(process.cwd(), inputPath);
 const resolvedOutput = path.resolve(process.cwd(), outputPath);
 
 if (!fs.existsSync(resolvedInput)) {
-  console.error(`Error: Input file not found: ${resolvedInput}`);
+  console.error(`Error: Input file or directory not found: ${resolvedInput}`);
   process.exit(1);
 }
 
-const ftlContent = fs.readFileSync(resolvedInput, 'utf8');
+function collectFtlFiles(targetPath) {
+  const stat = fs.statSync(targetPath);
+  if (!stat.isDirectory()) {
+    return [targetPath];
+  }
+  const files = [];
+  const entries = fs.readdirSync(targetPath, { withFileTypes: true });
+  for (const entry of entries) {
+    const full = path.join(targetPath, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...collectFtlFiles(full));
+    } else if (entry.isFile() && entry.name.endsWith('.ftl')) {
+      files.push(full);
+    }
+  }
+  return files;
+}
+
+const ftlFiles = collectFtlFiles(resolvedInput);
+if (ftlFiles.length === 0) {
+  console.error(`Error: No .ftl files found in: ${resolvedInput}`);
+  process.exit(1);
+}
 
 if (command === 'typegen') {
-  const dtsContent = generateTypeDeclarations(ftlContent);
+  const contents = ftlFiles.map((file) => fs.readFileSync(file, 'utf8'));
+  const dtsContent = generateTypeDeclarations(contents);
   fs.mkdirSync(path.dirname(resolvedOutput), { recursive: true });
   fs.writeFileSync(resolvedOutput, dtsContent, 'utf8');
-  console.log(`[next-fluent] Successfully generated types at: ${outputPath}`);
+  console.log(`[next-fluent] Successfully generated types for ${ftlFiles.length} catalog(s) at: ${outputPath}`);
 } else if (command === 'pseudo') {
+  const ftlContent = fs.readFileSync(ftlFiles[0], 'utf8');
   const pseudoContent = pseudoLocalizeFtl(ftlContent);
   fs.mkdirSync(path.dirname(resolvedOutput), { recursive: true });
   fs.writeFileSync(resolvedOutput, pseudoContent, 'utf8');

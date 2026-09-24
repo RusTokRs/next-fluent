@@ -147,14 +147,14 @@ function createI18nMiddleware(options) {
     locales,
     defaultLocale: rawDefaultLocale,
     localePrefix = "always",
-    cookieName = "rustok-locale",
-    headerName = "x-rustok-effective-locale"
+    cookieName = "NEXT_LOCALE",
+    headerName = "x-next-locale"
   } = options;
   const defaultLocale = matchSupportedLocale(rawDefaultLocale, locales) ?? rawDefaultLocale;
   return async function middleware(request) {
     let NextResponse;
     try {
-      const nextServer = await import("next/server");
+      const nextServer = await import("next/server.js").catch(() => import("next/server"));
       NextResponse = nextServer.NextResponse;
     } catch {
       NextResponse = class MockNextResponse {
@@ -164,6 +164,19 @@ function createI18nMiddleware(options) {
           return {
             status: 200,
             headers,
+            request: { headers: reqHeaders },
+            cookies: {
+              set: (name, val) => headers.append("Set-Cookie", `${name}=${val}; Path=/`)
+            }
+          };
+        }
+        static rewrite(url, opts) {
+          const headers = new Headers();
+          const reqHeaders = opts?.request?.headers ?? new Headers();
+          return {
+            status: 200,
+            headers,
+            rewriteUrl: String(url),
             request: { headers: reqHeaders },
             cookies: {
               set: (name, val) => headers.append("Set-Cookie", `${name}=${val}; Path=/`)
@@ -188,7 +201,7 @@ function createI18nMiddleware(options) {
     const firstSegment = segments[0];
     const matchedPrefix = matchSupportedLocale(firstSegment, locales);
     const cookieLocale = matchSupportedLocale(
-      request.cookies.get(cookieName)?.value || request.cookies.get("rustok-admin-locale")?.value || request.cookies.get("rustok-frontend-locale")?.value || request.cookies.get("NEXT_LOCALE")?.value,
+      request.cookies.get(cookieName)?.value || request.cookies.get("NEXT_LOCALE")?.value || request.cookies.get("rustok-locale")?.value,
       locales
     );
     const headerLocale = resolveAcceptLanguage(
@@ -196,7 +209,7 @@ function createI18nMiddleware(options) {
       locales
     );
     const preferredLocale = cookieLocale || headerLocale || defaultLocale;
-    const createSuccessResponse = (effectiveLocale) => {
+    const createSuccessResponse = (effectiveLocale, rewritePath) => {
       const requestHeaders = new Headers();
       if (request.headers) {
         if (typeof request.headers.forEach === "function") {
@@ -208,13 +221,22 @@ function createI18nMiddleware(options) {
         }
       }
       requestHeaders.set(headerName, effectiveLocale);
-      const response = NextResponse.next({
-        request: {
-          headers: requestHeaders
-        }
+      if (headerName !== "x-rustok-effective-locale") {
+        requestHeaders.set("x-rustok-effective-locale", effectiveLocale);
+      }
+      const response = rewritePath ? NextResponse.rewrite(new URL(rewritePath, request.url), {
+        request: { headers: requestHeaders }
+      }) : NextResponse.next({
+        request: { headers: requestHeaders }
       });
+      if (!response.request) {
+        response.request = { headers: requestHeaders };
+      }
       if (response.headers?.set) {
         response.headers.set(headerName, effectiveLocale);
+        if (headerName !== "x-rustok-effective-locale") {
+          response.headers.set("x-rustok-effective-locale", effectiveLocale);
+        }
       }
       if (response.cookies?.set) {
         response.cookies.set(cookieName, effectiveLocale, {
@@ -229,6 +251,9 @@ function createI18nMiddleware(options) {
       const response = NextResponse.redirect(targetUrl);
       if (response.headers?.set) {
         response.headers.set(headerName, targetLocale);
+        if (headerName !== "x-rustok-effective-locale") {
+          response.headers.set("x-rustok-effective-locale", targetLocale);
+        }
       }
       if (response.cookies?.set) {
         response.cookies.set(cookieName, targetLocale, {
@@ -244,7 +269,8 @@ function createI18nMiddleware(options) {
         const remainingPath = `/${segments.slice(1).join("/")}${search}`;
         return createRedirect(new URL(remainingPath, request.url), matchedPrefix);
       }
-      return createSuccessResponse(preferredLocale);
+      const rewritePath = `/${preferredLocale}${pathname === "/" ? "" : pathname}${search}`;
+      return createSuccessResponse(preferredLocale, rewritePath);
     }
     if (localePrefix === "as-needed") {
       if (matchedPrefix === defaultLocale) {
@@ -255,7 +281,8 @@ function createI18nMiddleware(options) {
         return createSuccessResponse(matchedPrefix);
       }
       if (preferredLocale === defaultLocale) {
-        return createSuccessResponse(defaultLocale);
+        const rewritePath = `/${defaultLocale}${pathname === "/" ? "" : pathname}${search}`;
+        return createSuccessResponse(defaultLocale, rewritePath);
       }
       const targetPath2 = `/${preferredLocale}${pathname === "/" ? "" : pathname}${search}`;
       return createRedirect(new URL(targetPath2, request.url), preferredLocale);

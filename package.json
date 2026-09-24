@@ -1,5 +1,5 @@
 {
-  "name": "@rustok/next-fluent",
+  "name": "next-fluent",
   "version": "0.1.0",
   "description": "Modern, lightweight Project Fluent (Mozilla) localization library for Next.js App Router (RSC + Client Components)",
   "type": "module",
@@ -22,6 +22,18 @@
       "types": "./dist/middleware.d.ts",
       "default": "./dist/middleware.js"
     },
+    "./navigation": {
+      "types": "./dist/navigation.d.ts",
+      "default": "./dist/navigation.js"
+    },
+    "./routing": {
+      "types": "./dist/routing.d.ts",
+      "default": "./dist/routing.js"
+    },
+    "./plugin": {
+      "types": "./dist/plugin.d.ts",
+      "default": "./dist/plugin.js"
+    },
     "./factory": {
       "types": "./dist/factory.d.ts",
       "default": "./dist/factory.js"
@@ -33,10 +45,6 @@
     "./utils": {
       "types": "./dist/utils.d.ts",
       "default": "./dist/utils.js"
-    },
-    "./navigation": {
-      "types": "./dist/navigation.d.ts",
-      "default": "./dist/navigation.js"
     },
     "./formatter": {
       "types": "./dist/formatter.d.ts",
@@ -62,7 +70,8 @@
     "verify": "npm run build && npm run typecheck && npm test"
   },
   "dependencies": {
-    "@fluent/bundle": "0.19.1"
+    "@fluent/bundle": "0.19.1",
+    "@fluent/syntax": "^0.19.0"
   },
   "peerDependencies": {
     "next": ">=15.0.0 <17.0.0",
@@ -71,18 +80,22 @@
   "devDependencies": {
     "@types/node": "^26.1.1",
     "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
     "esbuild": "^0.28.2",
+    "next": "^15.1.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
     "typescript": "7.0.2"
   },
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/RusTokRs/next-fluent.git"
+    "url": "git+https://github.com/next-fluent/next-fluent.git"
   },
   "bugs": {
-    "url": "https://github.com/RusTokRs/next-fluent/issues"
+    "url": "https://github.com/next-fluent/next-fluent/issues"
   },
-  "homepage": "https://github.com/RusTokRs/next-fluent#readme",
+  "homepage": "https://github.com/next-fluent/next-fluent#readme",
   "keywords": [
     "nextjs",
     "fluent",

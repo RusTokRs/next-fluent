@@ -14,7 +14,6 @@ import { validateI18nConfig } from './utils';
 export interface I18nRuntime {
   readonly config: I18nConfig;
   readonly middleware: (request: NextMiddlewareRequestLike) => Promise<any>;
-  readonly proxy: (request: NextMiddlewareRequestLike) => Promise<any>;
   readonly getLocale: () => Promise<string>;
   readonly getTranslations: (options?: string | GetTranslationsOptions) => Promise<Translations>;
   readonly forLocale: (
@@ -54,12 +53,12 @@ export function createI18n(config: I18nConfig): I18nRuntime {
     locales: config.locales,
     defaultLocale: config.defaultLocale,
     localePrefix: config.localePrefix,
+    pathnames: config.pathnames,
   });
 
   return {
     config,
     middleware: middlewareFn,
-    proxy: middlewareFn,
     navigation: navigationInstance,
     getLocale: () => getLocale(serverOptions),
     getTranslations: async (options?: string | GetTranslationsOptions) => {

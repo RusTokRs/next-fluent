@@ -1,51 +1,36 @@
 // src/typegen.ts
-function extractVariablesFromLine(line) {
-  const lineWithoutStrings = line.replace(/"[^"\\]*(?:\\.[^"\\]*)*"/g, "");
-  const matches = lineWithoutStrings.matchAll(/\$([a-zA-Z][a-zA-Z0-9_-]*)/g);
-  return Array.from(matches, (m) => m[1]);
-}
-function extractMessagesFromFtl(ftlContent) {
-  const messages = [];
-  const lines = ftlContent.split(/\r?\n/);
-  let currentMsg = null;
-  for (const line of lines) {
-    if (line.startsWith("#") || !line.trim()) {
-      continue;
+import { parse, Visitor } from "@fluent/syntax";
+var VariableExtractor = class extends Visitor {
+  variables = /* @__PURE__ */ new Set();
+  visitVariableReference(node) {
+    if (node.id?.name) {
+      this.variables.add(node.id.name);
     }
-    const msgMatch = line.match(/^([a-zA-Z][a-zA-Z0-9_-]*)\s*=/);
-    if (msgMatch) {
-      const id = msgMatch[1];
+    this.genericVisit(node);
+  }
+};
+function extractMessagesFromFtl(ftlContent) {
+  const resource = parse(ftlContent, { withSpans: false });
+  const messages = [];
+  for (const entry of resource.body) {
+    if (entry.type === "Message") {
+      const msg = entry;
+      const id = msg.id.name;
       const dotId = id.replace(/-/g, ".");
-      currentMsg = {
+      const extractor = new VariableExtractor();
+      extractor.visit(msg);
+      const attributes = [];
+      if (msg.attributes) {
+        for (const attr of msg.attributes) {
+          attributes.push(attr.id.name);
+        }
+      }
+      messages.push({
         id,
         dotId,
-        attributes: [],
-        variables: []
-      };
-      messages.push(currentMsg);
-      for (const v of extractVariablesFromLine(line)) {
-        if (!currentMsg.variables.includes(v)) {
-          currentMsg.variables.push(v);
-        }
-      }
-      continue;
-    }
-    const attrMatch = line.match(/^\s+\.([a-zA-Z][a-zA-Z0-9_-]*)\s*=/);
-    if (attrMatch && currentMsg) {
-      currentMsg.attributes.push(attrMatch[1]);
-      for (const v of extractVariablesFromLine(line)) {
-        if (!currentMsg.variables.includes(v)) {
-          currentMsg.variables.push(v);
-        }
-      }
-      continue;
-    }
-    if (currentMsg) {
-      for (const v of extractVariablesFromLine(line)) {
-        if (!currentMsg.variables.includes(v)) {
-          currentMsg.variables.push(v);
-        }
-      }
+        attributes,
+        variables: Array.from(extractor.variables).sort()
+      });
     }
   }
   return messages;
@@ -87,6 +72,19 @@ ${keyUnion || "  | string"};
 
 export interface AppMessageArgs {
 ${argsEntries.join("\n")}
+}
+
+export interface AppMessages {
+${allMessages.map((m) => {
+    const varsType = m.variables.length === 0 ? "Record<string, never>" : `{ ${m.variables.map((v) => `'${v}': string | number | Date`).join("; ")} }`;
+    return `  '${m.dotId}': ${varsType};
+  '${m.id}': ${varsType};`;
+  }).join("\n")}
+}
+
+declare global {
+  // eslint-disable-next-line @typescript-eslint/no-empty-object-type
+  interface FluentMessages extends AppMessages {}
 }
 `;
 }
