@@ -11,6 +11,7 @@ import type {
 } from './types';
 import { createFluentBundle, createTranslator } from './bundle';
 import { createFormatter } from './formatter';
+import { computeSourceHash } from './cache';
 
 export type { FormattedMessageProps };
 export { createFormatter };
@@ -63,18 +64,14 @@ export function FluentProvider({
   children,
 }: FluentProviderProps) {
   const messagesKey =
-    typeof messages === 'string'
-      ? messages
-      : Array.isArray(messages)
-        ? messages.join('\u0000')
-        : null;
+    typeof messages === 'string' || Array.isArray(messages)
+      ? computeSourceHash(messages)
+      : null;
 
   const fallbackMessagesKey =
-    typeof fallbackMessages === 'string'
-      ? fallbackMessages
-      : Array.isArray(fallbackMessages)
-        ? fallbackMessages.join('\u0000')
-        : null;
+    typeof fallbackMessages === 'string' || Array.isArray(fallbackMessages)
+      ? computeSourceHash(fallbackMessages)
+      : null;
 
   const bundle = useMemo<FluentBundle | null>(() => {
     if (!messages) return null;

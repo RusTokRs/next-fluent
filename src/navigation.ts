@@ -100,7 +100,7 @@ export function resolveLocalizedPathname(
   let hash = '';
 
   if (typeof href === 'string') {
-    if (isExternalUrl(href)) {
+    if (isExternalUrl(href) || href.startsWith('#')) {
       return href;
     }
     const hashIndex = href.indexOf('#');

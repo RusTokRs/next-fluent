@@ -262,11 +262,14 @@ export async function forLocale<
   if (explicitMessages) {
     bundle = createFluentBundle(locale, explicitMessages, { functions: mergedFunctions });
   } else {
-    let cached = store.bundles.get(locale);
+    const hasCustomFuncs = Boolean(customFunctions && Object.keys(customFunctions).length > 0);
+    let cached = hasCustomFuncs ? undefined : store.bundles.get(locale);
     if (!cached) {
       const messages = await getMessages(locale);
       cached = createFluentBundle(locale, messages, { functions: mergedFunctions });
-      store.bundles.set(locale, cached);
+      if (!hasCustomFuncs) {
+        store.bundles.set(locale, cached);
+      }
     }
     bundle = cached;
   }
@@ -294,11 +297,14 @@ export async function forLocale<
 
   if (fallbacksToLoad.size > 0) {
     for (const fbLocale of fallbacksToLoad) {
-      let fbBundle = store.bundles.get(fbLocale);
+      const hasCustomFuncs = Boolean(customFunctions && Object.keys(customFunctions).length > 0);
+      let fbBundle = hasCustomFuncs ? undefined : store.bundles.get(fbLocale);
       if (!fbBundle) {
         const fbMessages = await getMessages(fbLocale);
         fbBundle = createFluentBundle(fbLocale, fbMessages, { functions: mergedFunctions });
-        store.bundles.set(fbLocale, fbBundle);
+        if (!hasCustomFuncs) {
+          store.bundles.set(fbLocale, fbBundle);
+        }
       }
       fallbackBundleList.push(fbBundle);
     }

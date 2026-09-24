@@ -68,7 +68,7 @@ var REACT_ELEMENT_TOKEN_SUFFIX = "_\uE001";
 function createReactElementToken(key) {
   return `${REACT_ELEMENT_TOKEN_PREFIX}${key}${REACT_ELEMENT_TOKEN_SUFFIX}`;
 }
-var TOKEN_OR_TAG_REGEX = /(?:\u2068)?\uE000NF_EL_([a-zA-Z0-9_-]+)_\uE001(?:\u2069)?|<\/?([a-zA-Z][a-zA-Z0-9_-]*)\s*\/?>/g;
+var TOKEN_OR_TAG_PATTERN = "(?:\\u2068)?\\uE000NF_EL_([a-zA-Z0-9_-]+)_\\uE001(?:\\u2069)?|<\\/?([a-zA-Z][a-zA-Z0-9_-]*)\\s*\\/?>";
 function parseRichText(text, values) {
   if (!values) {
     return text;
@@ -88,15 +88,15 @@ function parseRichText(text, values) {
   const stack = [root];
   let lastIndex = 0;
   let match;
-  TOKEN_OR_TAG_REGEX.lastIndex = 0;
-  while ((match = TOKEN_OR_TAG_REGEX.exec(text)) !== null) {
+  const regex = new RegExp(TOKEN_OR_TAG_PATTERN, "g");
+  while ((match = regex.exec(text)) !== null) {
     const [fullMatch, elementTokenKey, tagName] = match;
     const matchIndex = match.index;
     if (matchIndex > lastIndex) {
       const textChunk = text.slice(lastIndex, matchIndex);
       stack[stack.length - 1].children.push(textChunk);
     }
-    lastIndex = TOKEN_OR_TAG_REGEX.lastIndex;
+    lastIndex = regex.lastIndex;
     if (elementTokenKey) {
       if (Object.hasOwn(values, elementTokenKey)) {
         const val = values[elementTokenKey];
@@ -715,8 +715,8 @@ function FluentProvider({
   debug,
   children
 }) {
-  const messagesKey = typeof messages === "string" ? messages : Array.isArray(messages) ? messages.join("\0") : null;
-  const fallbackMessagesKey = typeof fallbackMessages === "string" ? fallbackMessages : Array.isArray(fallbackMessages) ? fallbackMessages.join("\0") : null;
+  const messagesKey = typeof messages === "string" || Array.isArray(messages) ? computeSourceHash(messages) : null;
+  const fallbackMessagesKey = typeof fallbackMessages === "string" || Array.isArray(fallbackMessages) ? computeSourceHash(fallbackMessages) : null;
   const bundle = useMemo(() => {
     if (!messages) return null;
     if (typeof messages === "string" || Array.isArray(messages)) {

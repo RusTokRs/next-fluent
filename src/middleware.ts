@@ -156,7 +156,8 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
     // Strategy 1: 'never' (no prefixes in URL, internal rewrite to /[locale]/...)
     if (localePrefix === 'never') {
       if (matchedPrefix) {
-        const remainingPath = `/${segments.slice(1).join('/')}${search}`;
+        const rest = segments.slice(1).join('/');
+        const remainingPath = rest ? `/${rest}${search}` : `/${search}`;
         return createRedirect(new URL(remainingPath, request.url), matchedPrefix);
       }
       const rewritePath = `/${preferredLocale}${pathname === '/' ? '' : pathname}${search}`;
@@ -167,7 +168,8 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
     if (localePrefix === 'as-needed') {
       if (matchedPrefix === defaultLocale) {
         // Strip default locale prefix
-        const remainingPath = `/${segments.slice(1).join('/')}${search}`;
+        const rest = segments.slice(1).join('/');
+        const remainingPath = rest ? `/${rest}${search}` : `/${search}`;
         return createRedirect(new URL(remainingPath, request.url), defaultLocale);
       }
       if (matchedPrefix) {

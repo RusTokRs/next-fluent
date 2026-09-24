@@ -47,6 +47,7 @@ export function createI18n(config: I18nConfig): I18nRuntime {
     locales: config.locales,
     defaultLocale: config.defaultLocale,
     headerName: config.headerName,
+    cookieName: config.cookieName,
   };
 
   const navigationInstance = createNavigation({

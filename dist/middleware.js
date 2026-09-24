@@ -261,7 +261,8 @@ function createI18nMiddleware(options) {
     };
     if (localePrefix === "never") {
       if (matchedPrefix) {
-        const remainingPath = `/${segments.slice(1).join("/")}${search}`;
+        const rest = segments.slice(1).join("/");
+        const remainingPath = rest ? `/${rest}${search}` : `/${search}`;
         return createRedirect(new URL(remainingPath, request.url), matchedPrefix);
       }
       const rewritePath = `/${preferredLocale}${pathname === "/" ? "" : pathname}${search}`;
@@ -269,7 +270,8 @@ function createI18nMiddleware(options) {
     }
     if (localePrefix === "as-needed") {
       if (matchedPrefix === defaultLocale) {
-        const remainingPath = `/${segments.slice(1).join("/")}${search}`;
+        const rest = segments.slice(1).join("/");
+        const remainingPath = rest ? `/${rest}${search}` : `/${search}`;
         return createRedirect(new URL(remainingPath, request.url), defaultLocale);
       }
       if (matchedPrefix) {

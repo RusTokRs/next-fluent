@@ -288,7 +288,8 @@ function createI18nMiddleware(options) {
     };
     if (localePrefix === "never") {
       if (matchedPrefix) {
-        const remainingPath = `/${segments.slice(1).join("/")}${search}`;
+        const rest = segments.slice(1).join("/");
+        const remainingPath = rest ? `/${rest}${search}` : `/${search}`;
         return createRedirect(new URL(remainingPath, request.url), matchedPrefix);
       }
       const rewritePath = `/${preferredLocale}${pathname === "/" ? "" : pathname}${search}`;
@@ -296,7 +297,8 @@ function createI18nMiddleware(options) {
     }
     if (localePrefix === "as-needed") {
       if (matchedPrefix === defaultLocale) {
-        const remainingPath = `/${segments.slice(1).join("/")}${search}`;
+        const rest = segments.slice(1).join("/");
+        const remainingPath = rest ? `/${rest}${search}` : `/${search}`;
         return createRedirect(new URL(remainingPath, request.url), defaultLocale);
       }
       if (matchedPrefix) {
@@ -496,7 +498,7 @@ var REACT_ELEMENT_TOKEN_SUFFIX = "_\uE001";
 function createReactElementToken(key) {
   return `${REACT_ELEMENT_TOKEN_PREFIX}${key}${REACT_ELEMENT_TOKEN_SUFFIX}`;
 }
-var TOKEN_OR_TAG_REGEX = /(?:\u2068)?\uE000NF_EL_([a-zA-Z0-9_-]+)_\uE001(?:\u2069)?|<\/?([a-zA-Z][a-zA-Z0-9_-]*)\s*\/?>/g;
+var TOKEN_OR_TAG_PATTERN = "(?:\\u2068)?\\uE000NF_EL_([a-zA-Z0-9_-]+)_\\uE001(?:\\u2069)?|<\\/?([a-zA-Z][a-zA-Z0-9_-]*)\\s*\\/?>";
 function parseRichText(text, values) {
   if (!values) {
     return text;
@@ -516,15 +518,15 @@ function parseRichText(text, values) {
   const stack = [root];
   let lastIndex = 0;
   let match;
-  TOKEN_OR_TAG_REGEX.lastIndex = 0;
-  while ((match = TOKEN_OR_TAG_REGEX.exec(text)) !== null) {
+  const regex = new RegExp(TOKEN_OR_TAG_PATTERN, "g");
+  while ((match = regex.exec(text)) !== null) {
     const [fullMatch, elementTokenKey, tagName] = match;
     const matchIndex = match.index;
     if (matchIndex > lastIndex) {
       const textChunk = text.slice(lastIndex, matchIndex);
       stack[stack.length - 1].children.push(textChunk);
     }
-    lastIndex = TOKEN_OR_TAG_REGEX.lastIndex;
+    lastIndex = regex.lastIndex;
     if (elementTokenKey) {
       if (Object.hasOwn(values, elementTokenKey)) {
         const val = values[elementTokenKey];
@@ -1051,7 +1053,7 @@ function resolveLocalizedPathname(options, config) {
   let search = "";
   let hash = "";
   if (typeof href === "string") {
-    if (isExternalUrl(href)) {
+    if (isExternalUrl(href) || href.startsWith("#")) {
       return href;
     }
     const hashIndex = href.indexOf("#");
@@ -1381,11 +1383,14 @@ async function forLocale(locale, options) {
   if (explicitMessages) {
     bundle = createFluentBundle(locale, explicitMessages, { functions: mergedFunctions });
   } else {
-    let cached = store.bundles.get(locale);
+    const hasCustomFuncs = Boolean(customFunctions && Object.keys(customFunctions).length > 0);
+    let cached = hasCustomFuncs ? void 0 : store.bundles.get(locale);
     if (!cached) {
       const messages = await getMessages(locale);
       cached = createFluentBundle(locale, messages, { functions: mergedFunctions });
-      store.bundles.set(locale, cached);
+      if (!hasCustomFuncs) {
+        store.bundles.set(locale, cached);
+      }
     }
     bundle = cached;
   }
@@ -1407,11 +1412,14 @@ async function forLocale(locale, options) {
   }
   if (fallbacksToLoad.size > 0) {
     for (const fbLocale of fallbacksToLoad) {
-      let fbBundle = store.bundles.get(fbLocale);
+      const hasCustomFuncs = Boolean(customFunctions && Object.keys(customFunctions).length > 0);
+      let fbBundle = hasCustomFuncs ? void 0 : store.bundles.get(fbLocale);
       if (!fbBundle) {
         const fbMessages = await getMessages(fbLocale);
         fbBundle = createFluentBundle(fbLocale, fbMessages, { functions: mergedFunctions });
-        store.bundles.set(fbLocale, fbBundle);
+        if (!hasCustomFuncs) {
+          store.bundles.set(fbLocale, fbBundle);
+        }
       }
       fallbackBundleList.push(fbBundle);
     }
@@ -1443,7 +1451,8 @@ function createI18n(config) {
   const serverOptions = {
     locales: config.locales,
     defaultLocale: config.defaultLocale,
-    headerName: config.headerName
+    headerName: config.headerName,
+    cookieName: config.cookieName
   };
   const navigationInstance = createNavigation({
     locales: config.locales,

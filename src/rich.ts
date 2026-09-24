@@ -21,8 +21,8 @@ export function createReactElementToken(key: string): string {
   return `${REACT_ELEMENT_TOKEN_PREFIX}${key}${REACT_ELEMENT_TOKEN_SUFFIX}`;
 }
 
-const TOKEN_OR_TAG_REGEX =
-  /(?:\u2068)?\uE000NF_EL_([a-zA-Z0-9_-]+)_\uE001(?:\u2069)?|<\/?([a-zA-Z][a-zA-Z0-9_-]*)\s*\/?>/g;
+const TOKEN_OR_TAG_PATTERN =
+  '(?:\\u2068)?\\uE000NF_EL_([a-zA-Z0-9_-]+)_\\uE001(?:\\u2069)?|<\\/?([a-zA-Z][a-zA-Z0-9_-]*)\\s*\\/?>';
 
 /**
  * Parses a formatted string containing markup tags (e.g. `<link>text</link>`, `<br/>`, `<br>`)
@@ -55,9 +55,9 @@ export function parseRichText(
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
-  TOKEN_OR_TAG_REGEX.lastIndex = 0;
+  const regex = new RegExp(TOKEN_OR_TAG_PATTERN, 'g');
 
-  while ((match = TOKEN_OR_TAG_REGEX.exec(text)) !== null) {
+  while ((match = regex.exec(text)) !== null) {
     const [fullMatch, elementTokenKey, tagName] = match;
     const matchIndex = match.index;
 
@@ -66,7 +66,7 @@ export function parseRichText(
       const textChunk = text.slice(lastIndex, matchIndex);
       stack[stack.length - 1].children.push(textChunk);
     }
-    lastIndex = TOKEN_OR_TAG_REGEX.lastIndex;
+    lastIndex = regex.lastIndex;
 
     // Case 1: Interpolated React element variable token
     if (elementTokenKey) {
