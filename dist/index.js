@@ -14,8 +14,12 @@ function localeDiagnosticValue(locale) {
 function canonicalizeLocale(locale) {
   if (!locale || typeof locale !== "string") return void 0;
   if (locale.length > MAX_LOCALE_TAG_LENGTH) return void 0;
-  const raw = locale.trim();
+  let raw = locale.trim();
   if (!raw) return void 0;
+  if (raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"')) {
+    raw = raw.slice(1, -1).trim();
+    if (!raw) return void 0;
+  }
   const normalized = raw.replaceAll("_", "-");
   try {
     const canonical = Intl.getCanonicalLocales(normalized);
@@ -211,6 +215,13 @@ function createNextFluentPlugin(i18nRequestPath = "./src/i18n/request.ts") {
             ...nextConfig.experimental?.turbo?.resolveAlias,
             "next-fluent/config": resolvedPath
           }
+        }
+      },
+      turbopack: {
+        ...nextConfig.turbopack,
+        resolveAlias: {
+          ...nextConfig.turbopack?.resolveAlias,
+          "next-fluent/config": resolvedPath
         }
       }
     };
@@ -508,6 +519,7 @@ function createFormatter(optionsOrLocale) {
       if (!value || typeof value[Symbol.iterator] !== "function") {
         return String(value ?? "");
       }
+      const items = typeof value === "string" ? [value] : value;
       const cacheKey = `${locale}::${stringifySorted(lfOptions ?? {})}`;
       let formatter = lfCache.get(cacheKey);
       if (!formatter) {
@@ -515,13 +527,13 @@ function createFormatter(optionsOrLocale) {
           formatter = new Intl.ListFormat(locale, lfOptions);
           lfCache.set(cacheKey, formatter);
         } catch {
-          return Array.from(value).join(", ");
+          return Array.from(items).join(", ");
         }
       }
       try {
-        return formatter.format(value);
+        return formatter.format(items);
       } catch {
-        return Array.from(value).join(", ");
+        return Array.from(items).join(", ");
       }
     }
   };
@@ -673,6 +685,9 @@ function unwrapFluentValue(val) {
   return val;
 }
 var numberFormatCache = new LRUCache(200);
+function clearFunctionsCache() {
+  numberFormatCache.clear();
+}
 function getCachedNumberFormat(locale, options) {
   const cacheKey = `${locale}::${options.style}::${options.currency ?? ""}::${options.currencyDisplay ?? ""}::${options.minimumFractionDigits ?? ""}::${options.maximumFractionDigits ?? ""}`;
   let nf = numberFormatCache.get(cacheKey);
@@ -751,7 +766,7 @@ function computeSourceHash(source) {
       combinedHash ^= item.charCodeAt(i);
       combinedHash = Math.imul(combinedHash, 16777619);
     }
-    combinedHash ^= 0;
+    combinedHash ^= 31;
     combinedHash = Math.imul(combinedHash, 16777619);
   }
   return `${source.length}:${totalLen}:${(combinedHash >>> 0).toString(16).padStart(8, "0")}`;
@@ -812,6 +827,10 @@ function getBundleCacheStats() {
 }
 
 // src/bundle.ts
+function clearBundleCache2() {
+  clearBundleCache();
+  clearFunctionsCache();
+}
 function fluentBundleLocaleDiagnostic(locale) {
   if (typeof locale !== "string") {
     const kind = locale === null ? "null" : typeof locale;
@@ -886,6 +905,27 @@ function createTranslator(bundle, namespaceOrFallbackOrOpts, maybeNamespace) {
       }
       return formatted;
     }
+    const lastDot = candidate.lastIndexOf(".");
+    if (lastDot !== -1) {
+      const msgId = candidate.slice(0, lastDot);
+      const attrName = candidate.slice(lastDot + 1);
+      const parentMsg = targetBundle.getMessage(msgId) ?? targetBundle.getMessage(withKebabKey(msgId));
+      if (parentMsg?.attributes) {
+        const pattern = parentMsg.attributes[attrName] ?? parentMsg.attributes[withKebabKey(attrName)];
+        if (pattern) {
+          const errors = [];
+          const formatted = targetBundle.formatPattern(pattern, args, errors);
+          if (errors.length > 0) {
+            console.warn(
+              `[next-fluent] Format errors for attribute "${candidate}":`,
+              errors
+            );
+            return FORMAT_ERROR;
+          }
+          return formatted;
+        }
+      }
+    }
     return null;
   };
   const tFn = (key, args) => {
@@ -907,16 +947,34 @@ function createTranslator(bundle, namespaceOrFallbackOrOpts, maybeNamespace) {
   };
   const getRawValue = (targetBundle, candidate) => {
     const msg = targetBundle.getMessage(candidate);
-    if (!msg) return null;
-    if (msg.attributes && Object.keys(msg.attributes).length > 0) {
-      const sortedAttrKeys = Object.keys(msg.attributes).sort((a, b) => {
-        const numA = Number.parseInt(a.replace(/\D+/g, ""), 10);
-        const numB = Number.parseInt(b.replace(/\D+/g, ""), 10);
-        if (!Number.isNaN(numA) && !Number.isNaN(numB)) {
-          return numA - numB;
+    if (!msg) {
+      const lastDot = candidate.lastIndexOf(".");
+      if (lastDot !== -1) {
+        const msgId = candidate.slice(0, lastDot);
+        const attrName = candidate.slice(lastDot + 1);
+        const parentMsg = targetBundle.getMessage(msgId) ?? targetBundle.getMessage(withKebabKey(msgId));
+        if (parentMsg?.attributes) {
+          const pattern = parentMsg.attributes[attrName] ?? parentMsg.attributes[withKebabKey(attrName)];
+          if (pattern) {
+            const errors = [];
+            const formatted = targetBundle.formatPattern(pattern, void 0, errors);
+            if (errors.length > 0) {
+              console.warn(
+                `[next-fluent] Format errors for raw attribute "${candidate}":`,
+                errors
+              );
+              return FORMAT_ERROR;
+            }
+            return formatted;
+          }
         }
-        return a.localeCompare(b);
-      });
+      }
+      return null;
+    }
+    if (msg.attributes && Object.keys(msg.attributes).length > 0) {
+      const sortedAttrKeys = Object.keys(msg.attributes).sort(
+        (a, b) => a.localeCompare(b, void 0, { numeric: true, sensitivity: "base" })
+      );
       const values = [];
       for (const attrKey of sortedAttrKeys) {
         const pattern = msg.attributes[attrKey];
@@ -990,6 +1048,15 @@ function createTranslator(bundle, namespaceOrFallbackOrOpts, maybeNamespace) {
     for (const candidate of candidates) {
       for (const b of allBundles) {
         if (b.hasMessage(candidate)) return true;
+        const lastDot = candidate.lastIndexOf(".");
+        if (lastDot !== -1) {
+          const msgId = candidate.slice(0, lastDot);
+          const attrName = candidate.slice(lastDot + 1);
+          const parentMsg = b.getMessage(msgId) ?? b.getMessage(withKebabKey(msgId));
+          if (parentMsg?.attributes && (parentMsg.attributes[attrName] || parentMsg.attributes[withKebabKey(attrName)])) {
+            return true;
+          }
+        }
       }
     }
     return false;
@@ -1097,6 +1164,11 @@ function useNow(options) {
   const [now, setNow] = useState(() => initialDate);
   const interval = options?.updateInterval;
   useEffect(() => {
+    if (context.now) {
+      setNow(context.now);
+    }
+  }, [context.now]);
+  useEffect(() => {
     if (!interval || interval <= 0) return;
     const timer = setInterval(() => setNow(/* @__PURE__ */ new Date()), interval);
     return () => clearInterval(timer);
@@ -1154,33 +1226,53 @@ function isExternalUrl(url) {
 }
 function formatUrlObject(urlObj) {
   let pathname = urlObj.pathname ?? "/";
+  let embeddedSearch = "";
+  let embeddedHash = "";
+  const hashIdx = pathname.indexOf("#");
+  if (hashIdx !== -1) {
+    embeddedHash = pathname.slice(hashIdx);
+    pathname = pathname.slice(0, hashIdx);
+  }
+  const searchIdx = pathname.indexOf("?");
+  if (searchIdx !== -1) {
+    embeddedSearch = pathname.slice(searchIdx);
+    pathname = pathname.slice(0, searchIdx);
+  }
   if (!pathname.startsWith("/")) {
     pathname = `/${pathname}`;
   }
-  let search = urlObj.search ?? "";
-  if (search && !search.startsWith("?")) {
-    search = `?${search}`;
-  } else if (!search && urlObj.query) {
+  const params = new URLSearchParams();
+  if (embeddedSearch) {
+    const rawEmbedded = embeddedSearch.startsWith("?") ? embeddedSearch.slice(1) : embeddedSearch;
+    new URLSearchParams(rawEmbedded).forEach((val, key) => params.append(key, val));
+  }
+  if (urlObj.search) {
+    const rawSearch = urlObj.search.startsWith("?") ? urlObj.search.slice(1) : urlObj.search;
+    new URLSearchParams(rawSearch).forEach((val, key) => params.append(key, val));
+  }
+  if (urlObj.query) {
     if (typeof urlObj.query === "string") {
-      search = urlObj.query.startsWith("?") ? urlObj.query : `?${urlObj.query}`;
+      const rawQuery = urlObj.query.startsWith("?") ? urlObj.query.slice(1) : urlObj.query;
+      new URLSearchParams(rawQuery).forEach((val, key) => params.append(key, val));
     } else {
-      const params = new URLSearchParams();
       for (const [k, v] of Object.entries(urlObj.query)) {
         if (v !== void 0 && v !== null) {
           if (Array.isArray(v)) {
             for (const item of v) {
-              params.append(k, String(item));
+              if (item !== void 0 && item !== null) {
+                params.append(k, String(item));
+              }
             }
           } else {
             params.set(k, String(v));
           }
         }
       }
-      const qs = params.toString();
-      search = qs ? `?${qs}` : "";
     }
   }
-  let hash = urlObj.hash ?? "";
+  const qs = params.toString();
+  const search = qs ? `?${qs}` : "";
+  let hash = urlObj.hash ?? embeddedHash ?? "";
   if (hash && !hash.startsWith("#")) {
     hash = `#${hash}`;
   }
@@ -1226,15 +1318,20 @@ function resolveLocalizedPathname(options, config) {
       cleanPathname = rest ? `/${rest}` : "/";
     }
   }
+  const hasTrailingSlash = rawPathname.length > 1 && rawPathname.endsWith("/") && cleanPathname !== "/";
+  const lookupKey = cleanPathname.length > 1 && cleanPathname.endsWith("/") ? cleanPathname.slice(0, -1) : cleanPathname;
   const resolvedLocale = explicitLocale ? matchSupportedLocale(explicitLocale, locales) ?? defaultLocale : defaultLocale;
   let mappedPathname = cleanPathname;
-  if (pathnames && Object.hasOwn(pathnames, cleanPathname)) {
-    const target = pathnames[cleanPathname];
-    if (typeof target === "string") {
-      mappedPathname = target;
-    } else if (target && typeof target === "object") {
-      mappedPathname = target[resolvedLocale] ?? cleanPathname;
+  const pathnamesTarget = pathnames?.[lookupKey] ?? pathnames?.[cleanPathname];
+  if (pathnamesTarget) {
+    if (typeof pathnamesTarget === "string") {
+      mappedPathname = pathnamesTarget;
+    } else if (typeof pathnamesTarget === "object") {
+      mappedPathname = pathnamesTarget[resolvedLocale] ?? lookupKey;
     }
+  }
+  if (hasTrailingSlash && mappedPathname !== "/" && !mappedPathname.endsWith("/")) {
+    mappedPathname = `${mappedPathname}/`;
   }
   let prefix = "";
   if (localePrefix === "never") {
@@ -1291,13 +1388,14 @@ function createNavigation(config) {
       const rest = segments.slice(1).join("/");
       cleanPathname = rest ? `/${rest}` : "/";
     }
+    const lookupKey = cleanPathname.length > 1 && cleanPathname.endsWith("/") ? cleanPathname.slice(0, -1) : cleanPathname;
     if (pathnames) {
       for (const [canonical, mapping] of Object.entries(pathnames)) {
         if (typeof mapping === "string") {
-          if (mapping === cleanPathname) return canonical;
+          if (mapping === cleanPathname || mapping === lookupKey) return canonical;
         } else if (mapping && typeof mapping === "object") {
           for (const localized of Object.values(mapping)) {
-            if (localized === cleanPathname) return canonical;
+            if (localized === cleanPathname || localized === lookupKey) return canonical;
           }
         }
       }
@@ -1363,22 +1461,12 @@ function createNavigation(config) {
     );
   }
   function redirect(url, options) {
-    let currentLocale;
-    try {
-      currentLocale = useLocale();
-    } catch {
-    }
-    const targetLocale = options?.locale ?? currentLocale ?? defaultLocale;
+    const targetLocale = options?.locale ?? defaultLocale;
     const target = getPathname({ href: url, locale: targetLocale });
     return nextRedirect(target, options?.type);
   }
   function permanentRedirect(url, options) {
-    let currentLocale;
-    try {
-      currentLocale = useLocale();
-    } catch {
-    }
-    const targetLocale = options?.locale ?? currentLocale ?? defaultLocale;
+    const targetLocale = options?.locale ?? defaultLocale;
     const target = getPathname({ href: url, locale: targetLocale });
     return nextPermanentRedirect(target, options?.type);
   }
@@ -1395,7 +1483,7 @@ function createNavigation(config) {
 // src/server.ts
 import { cache } from "react";
 var globalConfigFn = null;
-var globalLocales = ["en", "ru"];
+var globalLocales = ["en"];
 var globalDefaultLocale = "en";
 function configureServerI18n(config) {
   if (config.locales && config.locales.length > 0) {
@@ -1752,7 +1840,7 @@ function pseudoLocalizeText(text, options = {}) {
 function pseudoLocalizeFtl(ftlContent, options = {}) {
   const lines = ftlContent.split(/\r?\n/);
   const resultLines = [];
-  const selectOpenRegex = /^\{\s*\$[a-zA-Z][a-zA-Z0-9_-]*\s*->/;
+  const selectOpenRegex = /^\{\s*[^}\r\n]+->\s*(#.*)?$/;
   for (const line of lines) {
     if (line.startsWith("#") || !line.trim()) {
       resultLines.push(line);
@@ -1867,15 +1955,35 @@ function generateTypeDeclarations(ftlContents) {
     }
   }
   allMessages.sort((a, b) => a.id.localeCompare(b.id));
-  const keyUnion = allMessages.flatMap((m) => [`  | '${m.id}'`, `  | '${m.dotId}'`]).join("\n");
-  const argsEntries = allMessages.map((m) => {
-    if (m.variables.length === 0) {
-      return `  '${m.dotId}'?: Record<string, never>;
-  '${m.id}'?: Record<string, never>;`;
+  const allKeyEntries = [];
+  const seenKeys = /* @__PURE__ */ new Set();
+  const addKeyEntry = (key, variables) => {
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      allKeyEntries.push({ key, variables });
     }
-    const varsType = m.variables.map((v) => `'${v}': string | number | Date`).join("; ");
-    return `  '${m.dotId}': { ${varsType} };
-  '${m.id}': { ${varsType} };`;
+  };
+  for (const m of allMessages) {
+    addKeyEntry(m.id, m.variables);
+    if (m.dotId !== m.id) {
+      addKeyEntry(m.dotId, m.variables);
+    }
+    if (m.attributes) {
+      for (const attr of m.attributes) {
+        addKeyEntry(`${m.id}.${attr}`, m.variables);
+        if (m.dotId !== m.id) {
+          addKeyEntry(`${m.dotId}.${attr}`, m.variables);
+        }
+      }
+    }
+  }
+  const keyUnion = allKeyEntries.map((e) => `  | '${e.key}'`).join("\n");
+  const argsEntries = allKeyEntries.map((e) => {
+    if (e.variables.length === 0) {
+      return `  '${e.key}'?: Record<string, never>;`;
+    }
+    const varsType = e.variables.map((v) => `'${v}': string | number | Date`).join("; ");
+    return `  '${e.key}': { ${varsType} };`;
   });
   return `// Auto-generated by next-fluent typegen. DO NOT EDIT DIRECTLY.
 /* eslint-disable */
@@ -1888,10 +1996,9 @@ ${argsEntries.join("\n")}
 }
 
 export interface AppMessages {
-${allMessages.map((m) => {
-    const varsType = m.variables.length === 0 ? "Record<string, never>" : `{ ${m.variables.map((v) => `'${v}': string | number | Date`).join("; ")} }`;
-    return `  '${m.dotId}': ${varsType};
-  '${m.id}': ${varsType};`;
+${allKeyEntries.map((e) => {
+    const varsType = e.variables.length === 0 ? "Record<string, never>" : `{ ${e.variables.map((v) => `'${v}': string | number | Date`).join("; ")} }`;
+    return `  '${e.key}': ${varsType};`;
   }).join("\n")}
 }
 
@@ -1907,8 +2014,9 @@ export {
   LRUCache,
   buildKeyCandidates,
   canonicalizeLocale,
-  clearBundleCache,
+  clearBundleCache2 as clearBundleCache,
   clearFormatterCache,
+  clearFunctionsCache,
   configureServerI18n,
   createDefaultFunctions,
   createFluentBundle,

@@ -12,7 +12,7 @@ import { createFormatter } from './formatter';
 import { matchSupportedLocale, resolveAcceptLanguage } from './utils';
 
 let globalConfigFn: RequestConfigFn | null = null;
-let globalLocales: readonly string[] = ['en', 'ru'];
+let globalLocales: readonly string[] = ['en'];
 let globalDefaultLocale: string = 'en';
 
 export interface ServerI18nOptions {

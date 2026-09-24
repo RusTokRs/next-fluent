@@ -28,35 +28,59 @@ export function formatUrlObject(urlObj: UrlObject): {
   hash: string;
 } {
   let pathname = urlObj.pathname ?? '/';
+  let embeddedSearch = '';
+  let embeddedHash = '';
+
+  const hashIdx = pathname.indexOf('#');
+  if (hashIdx !== -1) {
+    embeddedHash = pathname.slice(hashIdx);
+    pathname = pathname.slice(0, hashIdx);
+  }
+
+  const searchIdx = pathname.indexOf('?');
+  if (searchIdx !== -1) {
+    embeddedSearch = pathname.slice(searchIdx);
+    pathname = pathname.slice(0, searchIdx);
+  }
+
   if (!pathname.startsWith('/')) {
     pathname = `/${pathname}`;
   }
 
-  let search = urlObj.search ?? '';
-  if (search && !search.startsWith('?')) {
-    search = `?${search}`;
-  } else if (!search && urlObj.query) {
+  const params = new URLSearchParams();
+  if (embeddedSearch) {
+    const rawEmbedded = embeddedSearch.startsWith('?') ? embeddedSearch.slice(1) : embeddedSearch;
+    new URLSearchParams(rawEmbedded).forEach((val, key) => params.append(key, val));
+  }
+  if (urlObj.search) {
+    const rawSearch = urlObj.search.startsWith('?') ? urlObj.search.slice(1) : urlObj.search;
+    new URLSearchParams(rawSearch).forEach((val, key) => params.append(key, val));
+  }
+  if (urlObj.query) {
     if (typeof urlObj.query === 'string') {
-      search = urlObj.query.startsWith('?') ? urlObj.query : `?${urlObj.query}`;
+      const rawQuery = urlObj.query.startsWith('?') ? urlObj.query.slice(1) : urlObj.query;
+      new URLSearchParams(rawQuery).forEach((val, key) => params.append(key, val));
     } else {
-      const params = new URLSearchParams();
       for (const [k, v] of Object.entries(urlObj.query)) {
         if (v !== undefined && v !== null) {
           if (Array.isArray(v)) {
             for (const item of v) {
-              params.append(k, String(item));
+              if (item !== undefined && item !== null) {
+                params.append(k, String(item));
+              }
             }
           } else {
             params.set(k, String(v));
           }
         }
       }
-      const qs = params.toString();
-      search = qs ? `?${qs}` : '';
     }
   }
 
-  let hash = urlObj.hash ?? '';
+  const qs = params.toString();
+  const search = qs ? `?${qs}` : '';
+
+  let hash = urlObj.hash ?? embeddedHash ?? '';
   if (hash && !hash.startsWith('#')) {
     hash = `#${hash}`;
   }
@@ -117,19 +141,32 @@ export function resolveLocalizedPathname(
     }
   }
 
+  const hasTrailingSlash =
+    rawPathname.length > 1 && rawPathname.endsWith('/') && cleanPathname !== '/';
+  const lookupKey =
+    cleanPathname.length > 1 && cleanPathname.endsWith('/')
+      ? cleanPathname.slice(0, -1)
+      : cleanPathname;
+
   const resolvedLocale = explicitLocale
     ? (matchSupportedLocale(explicitLocale, locales) ?? defaultLocale)
     : defaultLocale;
 
   // Localized pathname mapping (e.g. /about -> /about-us for 'en' and /o-nas for 'ru')
   let mappedPathname = cleanPathname;
-  if (pathnames && Object.hasOwn(pathnames, cleanPathname)) {
-    const target = pathnames[cleanPathname];
-    if (typeof target === 'string') {
-      mappedPathname = target;
-    } else if (target && typeof target === 'object') {
-      mappedPathname = (target as Record<string, string>)[resolvedLocale] ?? cleanPathname;
+  const pathnamesTarget = pathnames?.[lookupKey] ?? pathnames?.[cleanPathname];
+  if (pathnamesTarget) {
+    if (typeof pathnamesTarget === 'string') {
+      mappedPathname = pathnamesTarget;
+    } else if (typeof pathnamesTarget === 'object') {
+      mappedPathname =
+        (pathnamesTarget as Record<string, string>)[resolvedLocale] ??
+        lookupKey;
     }
+  }
+
+  if (hasTrailingSlash && mappedPathname !== '/' && !mappedPathname.endsWith('/')) {
+    mappedPathname = `${mappedPathname}/`;
   }
 
   let prefix = '';
@@ -209,14 +246,19 @@ export function createNavigation<Locales extends readonly string[] = readonly st
       cleanPathname = rest ? `/${rest}` : '/';
     }
 
+    const lookupKey =
+      cleanPathname.length > 1 && cleanPathname.endsWith('/')
+        ? cleanPathname.slice(0, -1)
+        : cleanPathname;
+
     // Reverse map localized slug back to canonical route pathname
     if (pathnames) {
       for (const [canonical, mapping] of Object.entries(pathnames)) {
         if (typeof mapping === 'string') {
-          if (mapping === cleanPathname) return canonical;
+          if (mapping === cleanPathname || mapping === lookupKey) return canonical;
         } else if (mapping && typeof mapping === 'object') {
           for (const localized of Object.values(mapping as Record<string, string>)) {
-            if (localized === cleanPathname) return canonical;
+            if (localized === cleanPathname || localized === lookupKey) return canonical;
           }
         }
       }
@@ -285,13 +327,7 @@ export function createNavigation<Locales extends readonly string[] = readonly st
     url: string,
     options?: { locale?: Locales[number] | string; type?: 'push' | 'replace' }
   ): never {
-    let currentLocale: string | undefined;
-    try {
-      currentLocale = useLocale();
-    } catch {
-      // Outside provider
-    }
-    const targetLocale = options?.locale ?? currentLocale ?? defaultLocale;
+    const targetLocale = options?.locale ?? defaultLocale;
     const target = getPathname({ href: url, locale: targetLocale });
     return nextRedirect(target, options?.type as any) as never;
   }
@@ -300,13 +336,7 @@ export function createNavigation<Locales extends readonly string[] = readonly st
     url: string,
     options?: { locale?: Locales[number] | string; type?: 'push' | 'replace' }
   ): never {
-    let currentLocale: string | undefined;
-    try {
-      currentLocale = useLocale();
-    } catch {
-      // Outside provider
-    }
-    const targetLocale = options?.locale ?? currentLocale ?? defaultLocale;
+    const targetLocale = options?.locale ?? defaultLocale;
     const target = getPathname({ href: url, locale: targetLocale });
     return nextPermanentRedirect(target, options?.type as any) as never;
   }

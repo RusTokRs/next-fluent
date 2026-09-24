@@ -68,8 +68,8 @@ export function pseudoLocalizeFtl(ftlContent: string, options: PseudoOptions = {
   const resultLines: string[] = [];
 
   // Regex that matches the opening of a Fluent select expression.
-  // e.g. `{ $count ->` or `{$gender->` at the start of a value.
-  const selectOpenRegex = /^\{\s*\$[a-zA-Z][a-zA-Z0-9_-]*\s*->/;
+  // e.g. `{ $count ->`, `{ NUMBER($count) ->`, `{ PLATFORM() ->`, `{ $user.role ->`
+  const selectOpenRegex = /^\{\s*[^}\r\n]+->\s*(#.*)?$/;
 
   for (const line of lines) {
     // Preserve comments and empty lines

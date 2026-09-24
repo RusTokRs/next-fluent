@@ -1,7 +1,9 @@
 import type { FluentBundle } from '@fluent/bundle';
 import type { RichTranslationValues, Translations } from './types';
-import { getCachedFluentBundle, clearBundleCache, getBundleCacheStats, LRUCache, type CreateFluentBundleOptions } from './cache';
-export { getCachedFluentBundle, clearBundleCache, getBundleCacheStats, LRUCache, type CreateFluentBundleOptions, };
+import { getCachedFluentBundle, getBundleCacheStats, LRUCache, type CreateFluentBundleOptions } from './cache';
+import { clearFunctionsCache } from './functions';
+export declare function clearBundleCache(): void;
+export { getCachedFluentBundle, clearFunctionsCache, getBundleCacheStats, LRUCache, type CreateFluentBundleOptions, };
 export declare function createFluentBundle(locale: string, ftlSource: string | readonly string[], options?: CreateFluentBundleOptions): FluentBundle;
 export interface CreateTranslatorOptions {
     fallbackBundle?: FluentBundle | null;

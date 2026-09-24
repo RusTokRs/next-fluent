@@ -73,6 +73,7 @@ export {
 export {
   createDefaultFunctions,
   unwrapFluentValue,
+  clearFunctionsCache,
 } from './functions';
 
 export {

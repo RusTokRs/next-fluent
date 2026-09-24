@@ -103,7 +103,7 @@ export const config = {
 ### 5. Root Layout (`app/[locale]/layout.tsx`)
 
 ```tsx
-import { FluentProvider } from 'next-fluent';
+import { FluentProvider } from 'next-fluent/client';
 import { getLocale, getMessages, setRequestLocale } from 'next-fluent/server';
 
 export default async function RootLayout({
@@ -168,7 +168,7 @@ export default async function StorePage() {
 ```tsx
 'use client';
 
-import { useTranslations, useLocale } from 'next-fluent';
+import { useTranslations, useLocale } from 'next-fluent/client';
 import { Link } from '@/i18n/navigation';
 
 export function Navigation() {

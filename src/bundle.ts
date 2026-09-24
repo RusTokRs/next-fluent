@@ -1,19 +1,25 @@
 import type { FluentBundle } from '@fluent/bundle';
 import React from 'react';
 import type { FluentArgs, FluentVariable, RichTranslationValues, Translations } from './types';
-import { buildKeyCandidates, canonicalizeLocale } from './utils';
+import { buildKeyCandidates, canonicalizeLocale, withKebabKey } from './utils';
 import { parseRichText, createReactElementToken } from './rich';
 import {
   getCachedFluentBundle,
-  clearBundleCache,
+  clearBundleCache as clearInternalBundleCache,
   getBundleCacheStats,
   LRUCache,
   type CreateFluentBundleOptions,
 } from './cache';
+import { clearFunctionsCache } from './functions';
+
+export function clearBundleCache(): void {
+  clearInternalBundleCache();
+  clearFunctionsCache();
+}
 
 export {
   getCachedFluentBundle,
-  clearBundleCache,
+  clearFunctionsCache,
   getBundleCacheStats,
   LRUCache,
   type CreateFluentBundleOptions,
@@ -134,6 +140,36 @@ export function createTranslator(
       }
       return formatted;
     }
+
+    // Direct attribute access: e.g. 'dialog.confirm' or 'login-button.label'
+    const lastDot = candidate.lastIndexOf('.');
+    if (lastDot !== -1) {
+      const msgId = candidate.slice(0, lastDot);
+      const attrName = candidate.slice(lastDot + 1);
+      const parentMsg =
+        targetBundle.getMessage(msgId) ??
+        targetBundle.getMessage(withKebabKey(msgId));
+
+      if (parentMsg?.attributes) {
+        const pattern =
+          parentMsg.attributes[attrName] ??
+          parentMsg.attributes[withKebabKey(attrName)];
+
+        if (pattern) {
+          const errors: Error[] = [];
+          const formatted = targetBundle.formatPattern(pattern, args, errors);
+          if (errors.length > 0) {
+            console.warn(
+              `[next-fluent] Format errors for attribute "${candidate}":`,
+              errors
+            );
+            return FORMAT_ERROR;
+          }
+          return formatted;
+        }
+      }
+    }
+
     return null;
   };
 
@@ -165,17 +201,42 @@ export function createTranslator(
     candidate: string
   ): RawCandidateResult => {
     const msg = targetBundle.getMessage(candidate);
-    if (!msg) return null;
+
+    if (!msg) {
+      const lastDot = candidate.lastIndexOf('.');
+      if (lastDot !== -1) {
+        const msgId = candidate.slice(0, lastDot);
+        const attrName = candidate.slice(lastDot + 1);
+        const parentMsg =
+          targetBundle.getMessage(msgId) ??
+          targetBundle.getMessage(withKebabKey(msgId));
+
+        if (parentMsg?.attributes) {
+          const pattern =
+            parentMsg.attributes[attrName] ??
+            parentMsg.attributes[withKebabKey(attrName)];
+
+          if (pattern) {
+            const errors: Error[] = [];
+            const formatted = targetBundle.formatPattern(pattern, undefined, errors);
+            if (errors.length > 0) {
+              console.warn(
+                `[next-fluent] Format errors for raw attribute "${candidate}":`,
+                errors
+              );
+              return FORMAT_ERROR;
+            }
+            return formatted;
+          }
+        }
+      }
+      return null;
+    }
 
     if (msg.attributes && Object.keys(msg.attributes).length > 0) {
-      const sortedAttrKeys = Object.keys(msg.attributes).sort((a, b) => {
-        const numA = Number.parseInt(a.replace(/\D+/g, ''), 10);
-        const numB = Number.parseInt(b.replace(/\D+/g, ''), 10);
-        if (!Number.isNaN(numA) && !Number.isNaN(numB)) {
-          return numA - numB;
-        }
-        return a.localeCompare(b);
-      });
+      const sortedAttrKeys = Object.keys(msg.attributes).sort((a, b) =>
+        a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+      );
 
       const values: string[] = [];
       for (const attrKey of sortedAttrKeys) {
@@ -268,6 +329,19 @@ export function createTranslator(
     for (const candidate of candidates) {
       for (const b of allBundles) {
         if (b.hasMessage(candidate)) return true;
+        const lastDot = candidate.lastIndexOf('.');
+        if (lastDot !== -1) {
+          const msgId = candidate.slice(0, lastDot);
+          const attrName = candidate.slice(lastDot + 1);
+          const parentMsg =
+            b.getMessage(msgId) ?? b.getMessage(withKebabKey(msgId));
+          if (
+            parentMsg?.attributes &&
+            (parentMsg.attributes[attrName] || parentMsg.attributes[withKebabKey(attrName)])
+          ) {
+            return true;
+          }
+        }
       }
     }
     return false;

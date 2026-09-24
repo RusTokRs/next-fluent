@@ -7,7 +7,7 @@ export { createNavigation, resolveLocalizedPathname, formatUrlObject, } from './
 export { createI18nMiddleware, createMiddleware, type NextMiddlewareRequestLike, } from './middleware';
 export { FluentProvider, FormattedMessage, useLocale, useTranslations, useFormatter, useTimeZone, useNow, type FluentProviderProps, type FormattedMessageProps, } from './client';
 export { createFluentBundle, createTranslator, getCachedFluentBundle, clearBundleCache, getBundleCacheStats, LRUCache, type CreateFluentBundleOptions, type CreateTranslatorOptions, } from './bundle';
-export { createDefaultFunctions, unwrapFluentValue, } from './functions';
+export { createDefaultFunctions, unwrapFluentValue, clearFunctionsCache, } from './functions';
 export { parseRichText, } from './rich';
 export { pseudoLocalizeText, pseudoLocalizeFtl, type PseudoOptions, } from './pseudo';
 export { extractMessagesFromFtl, generateTypeDeclarations, type ExtractedMessage, } from './typegen';

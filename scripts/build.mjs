@@ -73,8 +73,8 @@ await build({
   sourcemap: false,
 });
 
-const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-execSync(`${npmCmd} exec tsc -- --declaration --emitDeclarationOnly --noEmit false --outDir dist --rootDir src`, {
+const tscBin = resolve(root, 'node_modules/typescript/bin/tsc');
+execSync(`"${process.execPath}" "${tscBin}" --declaration --emitDeclarationOnly --noEmit false --outDir dist --rootDir src`, {
   cwd: root,
   stdio: 'inherit',
 });

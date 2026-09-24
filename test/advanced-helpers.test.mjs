@@ -18,11 +18,11 @@ test('getStaticParams maps configured locales to static route param objects', ()
     { locale: 'de' },
   ]);
 
-  // Default global locales fallback
+  // Default global locales fallback (defaults to ['en'])
   const defaultParams = getStaticParams();
   assert.ok(Array.isArray(defaultParams));
   assert.ok(defaultParams.some((p) => p.locale === 'en'));
-  assert.ok(defaultParams.some((p) => p.locale === 'ru'));
+  assert.equal(defaultParams.length, 1);
 });
 
 test('getTimeZone and getNow return valid runtime values', () => {

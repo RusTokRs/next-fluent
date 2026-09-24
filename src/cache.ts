@@ -45,8 +45,9 @@ export function computeSourceHash(source: string | readonly string[]): string {
       combinedHash ^= item.charCodeAt(i);
       combinedHash = Math.imul(combinedHash, 0x01000193);
     }
-    // Delimiter step
-    combinedHash ^= 0;
+    // Delimiter step — use a real separator byte so that different array
+    // splits of the same concatenated content produce distinct hashes.
+    combinedHash ^= 0x1f; // ASCII Unit Separator
     combinedHash = Math.imul(combinedHash, 0x01000193);
   }
   return `${source.length}:${totalLen}:${(combinedHash >>> 0).toString(16).padStart(8, '0')}`;

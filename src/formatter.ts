@@ -124,6 +124,7 @@ export function createFormatter(optionsOrLocale: string | FormatterOptions): For
         return String(value ?? '');
       }
 
+      const items = typeof value === 'string' ? [value] : value;
       const cacheKey = `${locale}::${stringifySorted(lfOptions ?? {})}`;
       let formatter = lfCache.get(cacheKey);
       if (!formatter) {
@@ -131,14 +132,14 @@ export function createFormatter(optionsOrLocale: string | FormatterOptions): For
           formatter = new Intl.ListFormat(locale, lfOptions);
           lfCache.set(cacheKey, formatter);
         } catch {
-          return Array.from(value).join(', ');
+          return Array.from(items).join(', ');
         }
       }
 
       try {
-        return formatter.format(value);
+        return formatter.format(items);
       } catch {
-        return Array.from(value).join(', ');
+        return Array.from(items).join(', ');
       }
     },
   };

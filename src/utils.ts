@@ -17,8 +17,15 @@ export function canonicalizeLocale(locale?: string | null): string | undefined {
   if (locale.length > MAX_LOCALE_TAG_LENGTH) return undefined;
 
   // Bound request-controlled raw input before trim/replaceAll can allocate copies.
-  const raw = locale.trim();
+  let raw = locale.trim();
   if (!raw) return undefined;
+
+  // Strip surrounding quotes if present (e.g. from quoted HTTP cookies: "en")
+  if (raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"')) {
+    raw = raw.slice(1, -1).trim();
+    if (!raw) return undefined;
+  }
+
   const normalized = raw.replaceAll('_', '-');
 
   try {

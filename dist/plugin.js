@@ -23,6 +23,13 @@ function createNextFluentPlugin(i18nRequestPath = "./src/i18n/request.ts") {
             "next-fluent/config": resolvedPath
           }
         }
+      },
+      turbopack: {
+        ...nextConfig.turbopack,
+        resolveAlias: {
+          ...nextConfig.turbopack?.resolveAlias,
+          "next-fluent/config": resolvedPath
+        }
       }
     };
   };

@@ -14,8 +14,12 @@ function localeDiagnosticValue(locale) {
 function canonicalizeLocale(locale) {
   if (!locale || typeof locale !== "string") return void 0;
   if (locale.length > MAX_LOCALE_TAG_LENGTH) return void 0;
-  const raw = locale.trim();
+  let raw = locale.trim();
   if (!raw) return void 0;
+  if (raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"')) {
+    raw = raw.slice(1, -1).trim();
+    if (!raw) return void 0;
+  }
   const normalized = raw.replaceAll("_", "-");
   try {
     const canonical = Intl.getCanonicalLocales(normalized);

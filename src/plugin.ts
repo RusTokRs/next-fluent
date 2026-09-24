@@ -46,6 +46,13 @@ export function createNextFluentPlugin(i18nRequestPath: string = './src/i18n/req
           },
         },
       },
+      turbopack: {
+        ...nextConfig.turbopack,
+        resolveAlias: {
+          ...nextConfig.turbopack?.resolveAlias,
+          'next-fluent/config': resolvedPath,
+        },
+      },
     };
   };
 }

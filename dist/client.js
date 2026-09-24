@@ -12,8 +12,12 @@ var MAX_LOCALE_TAG_LENGTH = 64;
 function canonicalizeLocale(locale) {
   if (!locale || typeof locale !== "string") return void 0;
   if (locale.length > MAX_LOCALE_TAG_LENGTH) return void 0;
-  const raw = locale.trim();
+  let raw = locale.trim();
   if (!raw) return void 0;
+  if (raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"')) {
+    raw = raw.slice(1, -1).trim();
+    if (!raw) return void 0;
+  }
   const normalized = raw.replaceAll("_", "-");
   try {
     const canonical = Intl.getCanonicalLocales(normalized);
@@ -298,7 +302,7 @@ function computeSourceHash(source) {
       combinedHash ^= item.charCodeAt(i);
       combinedHash = Math.imul(combinedHash, 16777619);
     }
-    combinedHash ^= 0;
+    combinedHash ^= 31;
     combinedHash = Math.imul(combinedHash, 16777619);
   }
   return `${source.length}:${totalLen}:${(combinedHash >>> 0).toString(16).padStart(8, "0")}`;
@@ -423,6 +427,27 @@ function createTranslator(bundle, namespaceOrFallbackOrOpts, maybeNamespace) {
       }
       return formatted;
     }
+    const lastDot = candidate.lastIndexOf(".");
+    if (lastDot !== -1) {
+      const msgId = candidate.slice(0, lastDot);
+      const attrName = candidate.slice(lastDot + 1);
+      const parentMsg = targetBundle.getMessage(msgId) ?? targetBundle.getMessage(withKebabKey(msgId));
+      if (parentMsg?.attributes) {
+        const pattern = parentMsg.attributes[attrName] ?? parentMsg.attributes[withKebabKey(attrName)];
+        if (pattern) {
+          const errors = [];
+          const formatted = targetBundle.formatPattern(pattern, args, errors);
+          if (errors.length > 0) {
+            console.warn(
+              `[next-fluent] Format errors for attribute "${candidate}":`,
+              errors
+            );
+            return FORMAT_ERROR;
+          }
+          return formatted;
+        }
+      }
+    }
     return null;
   };
   const tFn = (key, args) => {
@@ -444,16 +469,34 @@ function createTranslator(bundle, namespaceOrFallbackOrOpts, maybeNamespace) {
   };
   const getRawValue = (targetBundle, candidate) => {
     const msg = targetBundle.getMessage(candidate);
-    if (!msg) return null;
-    if (msg.attributes && Object.keys(msg.attributes).length > 0) {
-      const sortedAttrKeys = Object.keys(msg.attributes).sort((a, b) => {
-        const numA = Number.parseInt(a.replace(/\D+/g, ""), 10);
-        const numB = Number.parseInt(b.replace(/\D+/g, ""), 10);
-        if (!Number.isNaN(numA) && !Number.isNaN(numB)) {
-          return numA - numB;
+    if (!msg) {
+      const lastDot = candidate.lastIndexOf(".");
+      if (lastDot !== -1) {
+        const msgId = candidate.slice(0, lastDot);
+        const attrName = candidate.slice(lastDot + 1);
+        const parentMsg = targetBundle.getMessage(msgId) ?? targetBundle.getMessage(withKebabKey(msgId));
+        if (parentMsg?.attributes) {
+          const pattern = parentMsg.attributes[attrName] ?? parentMsg.attributes[withKebabKey(attrName)];
+          if (pattern) {
+            const errors = [];
+            const formatted = targetBundle.formatPattern(pattern, void 0, errors);
+            if (errors.length > 0) {
+              console.warn(
+                `[next-fluent] Format errors for raw attribute "${candidate}":`,
+                errors
+              );
+              return FORMAT_ERROR;
+            }
+            return formatted;
+          }
         }
-        return a.localeCompare(b);
-      });
+      }
+      return null;
+    }
+    if (msg.attributes && Object.keys(msg.attributes).length > 0) {
+      const sortedAttrKeys = Object.keys(msg.attributes).sort(
+        (a, b) => a.localeCompare(b, void 0, { numeric: true, sensitivity: "base" })
+      );
       const values = [];
       for (const attrKey of sortedAttrKeys) {
         const pattern = msg.attributes[attrKey];
@@ -527,6 +570,15 @@ function createTranslator(bundle, namespaceOrFallbackOrOpts, maybeNamespace) {
     for (const candidate of candidates) {
       for (const b of allBundles) {
         if (b.hasMessage(candidate)) return true;
+        const lastDot = candidate.lastIndexOf(".");
+        if (lastDot !== -1) {
+          const msgId = candidate.slice(0, lastDot);
+          const attrName = candidate.slice(lastDot + 1);
+          const parentMsg = b.getMessage(msgId) ?? b.getMessage(withKebabKey(msgId));
+          if (parentMsg?.attributes && (parentMsg.attributes[attrName] || parentMsg.attributes[withKebabKey(attrName)])) {
+            return true;
+          }
+        }
       }
     }
     return false;
@@ -623,6 +675,7 @@ function createFormatter(optionsOrLocale) {
       if (!value || typeof value[Symbol.iterator] !== "function") {
         return String(value ?? "");
       }
+      const items = typeof value === "string" ? [value] : value;
       const cacheKey = `${locale}::${stringifySorted(lfOptions ?? {})}`;
       let formatter = lfCache.get(cacheKey);
       if (!formatter) {
@@ -630,13 +683,13 @@ function createFormatter(optionsOrLocale) {
           formatter = new Intl.ListFormat(locale, lfOptions);
           lfCache.set(cacheKey, formatter);
         } catch {
-          return Array.from(value).join(", ");
+          return Array.from(items).join(", ");
         }
       }
       try {
-        return formatter.format(value);
+        return formatter.format(items);
       } catch {
-        return Array.from(value).join(", ");
+        return Array.from(items).join(", ");
       }
     }
   };
@@ -741,6 +794,11 @@ function useNow(options) {
   const initialDate = context.now ?? /* @__PURE__ */ new Date();
   const [now, setNow] = useState(() => initialDate);
   const interval = options?.updateInterval;
+  useEffect(() => {
+    if (context.now) {
+      setNow(context.now);
+    }
+  }, [context.now]);
   useEffect(() => {
     if (!interval || interval <= 0) return;
     const timer = setInterval(() => setNow(/* @__PURE__ */ new Date()), interval);

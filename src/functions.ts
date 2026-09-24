@@ -17,6 +17,10 @@ export function unwrapFluentValue(val: unknown): unknown {
 
 const numberFormatCache = new LRUCache<Intl.NumberFormat>(200);
 
+export function clearFunctionsCache(): void {
+  numberFormatCache.clear();
+}
+
 function getCachedNumberFormat(locale: string, options: Intl.NumberFormatOptions): Intl.NumberFormat {
   const cacheKey = `${locale}::${options.style}::${options.currency ?? ''}::${options.currencyDisplay ?? ''}::${options.minimumFractionDigits ?? ''}::${options.maximumFractionDigits ?? ''}`;
   let nf = numberFormatCache.get(cacheKey);

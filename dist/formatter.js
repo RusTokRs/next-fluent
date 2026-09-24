@@ -3,8 +3,12 @@ var MAX_LOCALE_TAG_LENGTH = 64;
 function canonicalizeLocale(locale) {
   if (!locale || typeof locale !== "string") return void 0;
   if (locale.length > MAX_LOCALE_TAG_LENGTH) return void 0;
-  const raw = locale.trim();
+  let raw = locale.trim();
   if (!raw) return void 0;
+  if (raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"')) {
+    raw = raw.slice(1, -1).trim();
+    if (!raw) return void 0;
+  }
   const normalized = raw.replaceAll("_", "-");
   try {
     const canonical = Intl.getCanonicalLocales(normalized);
@@ -149,6 +153,7 @@ function createFormatter(optionsOrLocale) {
       if (!value || typeof value[Symbol.iterator] !== "function") {
         return String(value ?? "");
       }
+      const items = typeof value === "string" ? [value] : value;
       const cacheKey = `${locale}::${stringifySorted(lfOptions ?? {})}`;
       let formatter = lfCache.get(cacheKey);
       if (!formatter) {
@@ -156,13 +161,13 @@ function createFormatter(optionsOrLocale) {
           formatter = new Intl.ListFormat(locale, lfOptions);
           lfCache.set(cacheKey, formatter);
         } catch {
-          return Array.from(value).join(", ");
+          return Array.from(items).join(", ");
         }
       }
       try {
-        return formatter.format(value);
+        return formatter.format(items);
       } catch {
-        return Array.from(value).join(", ");
+        return Array.from(items).join(", ");
       }
     }
   };

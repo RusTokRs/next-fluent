@@ -163,6 +163,12 @@ export function useNow(options?: { updateInterval?: number }): Date {
   const interval = options?.updateInterval;
 
   useEffect(() => {
+    if (context.now) {
+      setNow(context.now);
+    }
+  }, [context.now]);
+
+  useEffect(() => {
     if (!interval || interval <= 0) return;
     const timer = setInterval(() => setNow(new Date()), interval);
     return () => clearInterval(timer);

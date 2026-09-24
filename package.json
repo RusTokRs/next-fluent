@@ -67,6 +67,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test ./test/*.test.mjs",
     "prepack": "npm run build",
+    "check-dist": "npm run build && git diff --ignore-space-at-eol --exit-code dist/",
+    "ci": "npm run build && npm run check-dist && npm run typecheck && npm test",
     "verify": "npm run build && npm run typecheck && npm test"
   },
   "dependencies": {
