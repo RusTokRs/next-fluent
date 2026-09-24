@@ -3,12 +3,17 @@
   "version": "0.1.0",
   "description": "Modern, lightweight Project Fluent (Mozilla) localization library for Next.js App Router (RSC + Client Components)",
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./dist/index-browser.js",
+  "types": "./dist/index-browser.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
+      "react-server": {
+        "types": "./dist/index-server.d.ts",
+        "default": "./dist/index-server.js"
+      },
+      "types": "./dist/index-browser.d.ts",
+      "browser": "./dist/index-browser.js",
+      "default": "./dist/index-browser.js"
     },
     "./client": {
       "types": "./dist/client.d.ts",
@@ -17,6 +22,10 @@
     "./server": {
       "types": "./dist/server.d.ts",
       "default": "./dist/server.js"
+    },
+    "./server-provider": {
+      "types": "./dist/server-provider.d.ts",
+      "default": "./dist/server-provider.js"
     },
     "./middleware": {
       "types": "./dist/middleware.d.ts",
@@ -65,11 +74,13 @@
   "scripts": {
     "build": "node ./scripts/build.mjs",
     "typecheck": "tsc --noEmit",
+    "test:types": "node ./bin/next-fluent.mjs typegen --input test/types/messages.ftl --output test/types/messages.d.ts && tsc -p test/types/tsconfig.json",
+    "test:next": "npm run build && node ./scripts/test-next-integration.mjs",
     "test": "node --test ./test/*.test.mjs",
     "prepack": "npm run build",
     "check-dist": "npm run build && git diff --ignore-space-at-eol --exit-code dist/",
     "ci": "npm run build && npm run check-dist && npm run typecheck && npm test",
-    "verify": "npm run build && npm run typecheck && npm test"
+    "verify": "npm run build && npm run typecheck && npm run test:types && npm test"
   },
   "dependencies": {
     "@fluent/bundle": "0.19.1",
@@ -87,7 +98,10 @@
     "next": "^15.1.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "typescript": "7.0.2"
+    "typescript": "^6.0.3"
+  },
+  "overrides": {
+    "postcss": "^8.5.23"
   },
   "license": "MIT",
   "repository": {

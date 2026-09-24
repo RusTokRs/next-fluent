@@ -9,6 +9,8 @@ export interface ExtractedMessage {
   dotId: string;
   attributes: string[];
   variables: string[];
+  valueVariables: string[];
+  attributeVariables: Record<string, string[]>;
 }
 
 class VariableExtractor extends Visitor {
@@ -34,11 +36,17 @@ export function extractMessagesFromFtl(ftlContent: string): ExtractedMessage[] {
 
       const extractor = new VariableExtractor();
       extractor.visit(msg);
+      const valueExtractor = new VariableExtractor();
+      if (msg.value) valueExtractor.visit(msg.value);
 
       const attributes: string[] = [];
+      const attributeVariables: Record<string, string[]> = {};
       if (msg.attributes) {
         for (const attr of msg.attributes) {
           attributes.push(attr.id.name);
+          const attrExtractor = new VariableExtractor();
+          attrExtractor.visit(attr.value);
+          attributeVariables[attr.id.name] = Array.from(attrExtractor.variables).sort();
         }
       }
 
@@ -47,6 +55,8 @@ export function extractMessagesFromFtl(ftlContent: string): ExtractedMessage[] {
         dotId,
         attributes,
         variables: Array.from(extractor.variables).sort(),
+        valueVariables: Array.from(valueExtractor.variables).sort(),
+        attributeVariables,
       });
     }
   }
@@ -90,15 +100,16 @@ export function generateTypeDeclarations(
   };
 
   for (const m of allMessages) {
-    addKeyEntry(m.id, m.variables);
+    addKeyEntry(m.id, m.valueVariables);
     if (m.dotId !== m.id) {
-      addKeyEntry(m.dotId, m.variables);
+      addKeyEntry(m.dotId, m.valueVariables);
     }
     if (m.attributes) {
       for (const attr of m.attributes) {
-        addKeyEntry(`${m.id}.${attr}`, m.variables);
+        const variables = m.attributeVariables[attr] ?? [];
+        addKeyEntry(`${m.id}.${attr}`, variables);
         if (m.dotId !== m.id) {
-          addKeyEntry(`${m.dotId}.${attr}`, m.variables);
+          addKeyEntry(`${m.dotId}.${attr}`, variables);
         }
       }
     }

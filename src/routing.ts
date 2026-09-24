@@ -1,5 +1,6 @@
 import type { LocalePrefixMode } from './types';
 import { validateI18nConfig } from './utils';
+import { validatePathnames, validateRouteEnvironment } from './route-engine';
 
 export interface DomainConfig {
   domain: string;
@@ -27,6 +28,13 @@ export interface RoutingConfig<Locales extends readonly string[] = readonly stri
  * Defines the central routing configuration for next-fluent.
  * Validates configuration and provides type-safe inference for locales and pathnames.
  */
+export function defineRouting<
+  const Locales extends readonly string[],
+  const Routes extends Pathnames<Locales>
+>(config: Omit<RoutingConfig<Locales>, 'pathnames'> & { pathnames: Routes }): Omit<RoutingConfig<Locales>, 'pathnames'> & { pathnames: Routes };
+export function defineRouting<const Locales extends readonly string[]>(
+  config: RoutingConfig<Locales>
+): RoutingConfig<Locales>;
 export function defineRouting<const Locales extends readonly string[]>(
   config: RoutingConfig<Locales>
 ): RoutingConfig<Locales> {
@@ -37,6 +45,8 @@ export function defineRouting<const Locales extends readonly string[]>(
     cookieName: config.cookieName,
     headerName: config.headerName,
   });
+  validatePathnames(config.locales, config.pathnames);
+  validateRouteEnvironment(config.locales, config.domains, config.basePath);
 
   return Object.freeze({
     ...config,

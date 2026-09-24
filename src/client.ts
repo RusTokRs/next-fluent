@@ -6,6 +6,8 @@ import type {
   DefaultKey,
   FormattedMessageProps,
   Formatter,
+  NamespaceArgs,
+  NamespaceKeys,
   RichTranslationValues,
   Translations,
 } from './types';
@@ -174,10 +176,11 @@ export function useNow(options?: { updateInterval?: number }): Date {
   return now;
 }
 
-export function useTranslations<
-  Key extends string = DefaultKey,
-  ArgsMap extends Record<string, any> = Record<string, any>
->(namespace?: string): Translations<Key, ArgsMap> {
+export function useTranslations<Namespace extends string>(
+  namespace: Namespace
+): Translations<NamespaceKeys<Namespace>, NamespaceArgs<Namespace>>;
+export function useTranslations(): Translations;
+export function useTranslations(namespace?: string): Translations {
   const context = useContext(FluentContext);
   return useMemo(
     () =>
@@ -188,7 +191,7 @@ export function useTranslations<
         namespace,
         debug: context.debug,
         defaultTranslationValues: context.defaultTranslationValues,
-      }) as unknown as Translations<Key, ArgsMap>,
+      }) as Translations,
     [
       context.bundle,
       context.fallbackBundle,
@@ -211,7 +214,7 @@ export function FormattedMessage<
   className,
   as: Component,
 }: FormattedMessageProps<Key, ArgsMap>): React.ReactNode {
-  const t = useTranslations<Key, ArgsMap>();
+  const t = useTranslations() as Translations<Key, ArgsMap>;
 
   if (!t.has(id)) {
     if (fallback !== undefined) return fallback;

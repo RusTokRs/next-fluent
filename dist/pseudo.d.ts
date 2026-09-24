@@ -1,6 +1,3 @@
-/**
- * Pseudo-localization engine for layout overflow and truncation testing.
- */
 export interface PseudoOptions {
     /** Prefix added to localized string. Default: `[` */
     prefix?: string;

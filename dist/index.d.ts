@@ -1,7 +1,8 @@
 export { defineRouting, type RoutingConfig, type DomainConfig, type Pathnames, } from './routing';
 export { createNextFluentPlugin, type NextConfigLike, } from './plugin';
 export { createI18n, type I18nRuntime, } from './factory';
-export { forLocale, getLocale, getTranslations, configureServerI18n, setRequestConfig, setRequestLocale, getFormatter, getTimeZone, getNow, getStaticParams, type ForLocaleOptions, type ServerI18nOptions, } from './server';
+export { forLocale, getLocale, getTranslations, configureServerI18n, setRequestConfig, setRequestLocale, getFormatter, getTimeZone, getNow, getRequestConfigSnapshot, getStaticParams, type ForLocaleOptions, type ServerI18nOptions, } from './server';
+export { FluentServerProvider, type FluentServerProviderProps } from './server-provider';
 export { createFormatter, clearFormatterCache, } from './formatter';
 export { createNavigation, resolveLocalizedPathname, formatUrlObject, } from './navigation';
 export { createI18nMiddleware, createMiddleware, type NextMiddlewareRequestLike, } from './middleware';

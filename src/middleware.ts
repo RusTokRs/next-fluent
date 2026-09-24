@@ -1,5 +1,6 @@
 import type { I18nMiddlewareOptions } from './types';
 import { matchSupportedLocale, resolveAcceptLanguage, validateI18nConfig } from './utils';
+import { rewriteLocalizedPath, validatePathnames, validateRouteEnvironment } from './route-engine';
 
 export interface NextMiddlewareRequestLike {
   url: string;
@@ -20,72 +21,66 @@ export interface NextMiddlewareRequestLike {
 
 export function createI18nMiddleware(options: I18nMiddlewareOptions) {
   validateI18nConfig(options);
+  validatePathnames(options.locales, options.pathnames);
+  validateRouteEnvironment(options.locales, options.domains, options.basePath);
 
   const {
-    locales,
+    locales: allLocales,
     defaultLocale: rawDefaultLocale,
     localePrefix = 'always',
     cookieName = 'NEXT_LOCALE',
     headerName = 'x-next-locale',
+    pathnames,
+    domains,
+    basePath = '',
   } = options;
 
   // Resolve defaultLocale to its exact spelling in `locales` so that string
   // comparisons (e.g. `matchedPrefix === defaultLocale` in as-needed mode)
   // work correctly even when defaultLocale was configured with a different
   // alias (e.g. `en_US` vs `en-US`). validateI18nConfig guarantees a match.
-  const defaultLocale = matchSupportedLocale(rawDefaultLocale, locales) ?? rawDefaultLocale;
+  const configuredDefaultLocale = matchSupportedLocale(rawDefaultLocale, allLocales) ?? rawDefaultLocale;
 
   return async function middleware(request: NextMiddlewareRequestLike) {
-    let NextResponse: any;
+    const { NextResponse } = await import('next/server.js').catch(() => import('next/server'));
 
-    try {
-      const nextServer: any = await import('next/server.js').catch(() => import('next/server'));
-      NextResponse = nextServer.NextResponse;
-    } catch {
-      NextResponse = class MockNextResponse {
-        static next(opts?: any) {
-          const headers = new Headers();
-          const reqHeaders = opts?.request?.headers ?? new Headers();
-          return {
-            status: 200,
-            headers,
-            request: { headers: reqHeaders },
-            cookies: {
-              set: (name: string, val: string) => headers.append('Set-Cookie', `${name}=${val}; Path=/`),
-            },
-          };
-        }
-        static rewrite(url: URL | string, opts?: any) {
-          const headers = new Headers();
-          const reqHeaders = opts?.request?.headers ?? new Headers();
-          return {
-            status: 200,
-            headers,
-            rewriteUrl: String(url),
-            request: { headers: reqHeaders },
-            cookies: {
-              set: (name: string, val: string) => headers.append('Set-Cookie', `${name}=${val}; Path=/`),
-            },
-          };
-        }
-        static redirect(url: URL | string) {
-          const headers = new Headers();
-          headers.set('location', String(url));
-          return {
-            status: 307,
-            headers,
-            cookies: {
-              set: (name: string, val: string) => headers.append('Set-Cookie', `${name}=${val}; Path=/`),
-            },
-          };
-        }
-      };
+    const { pathname: rawPathname, search } = request.nextUrl;
+    const requestOrigin = new URL(request.url);
+    const directHost = request.headers.get('host');
+    const forwardedHost = request.headers.get('x-forwarded-host');
+    const trustedForwardedHost = forwardedHost && (
+      forwardedHost.toLowerCase() === directHost?.toLowerCase() ||
+      domains?.some((item) => item.domain.toLowerCase() === forwardedHost.toLowerCase()) ||
+      /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(forwardedHost)
+    );
+    const rawHost = trustedForwardedHost ? forwardedHost : directHost;
+    if (rawHost && /^[^\s/?#@\\]+$/.test(rawHost)) {
+      try {
+        const parsedHost = new URL(`${requestOrigin.protocol}//${rawHost}`);
+        if (parsedHost.host === rawHost.toLowerCase()) requestOrigin.host = parsedHost.host;
+      } catch { /* Keep NextRequest's origin for an invalid Host header. */ }
     }
-
-    const { pathname, search } = request.nextUrl;
+    const requestHost = requestOrigin.host.toLowerCase();
+    const requestUrl = (path: string) => new URL(path, requestOrigin);
+    const domain = domains?.find((item) => item.domain.toLowerCase() === requestHost);
+    const locales = domain ? domain.locales ?? [domain.defaultLocale] : allLocales;
+    const defaultLocale = matchSupportedLocale(
+      domain?.defaultLocale ?? configuredDefaultLocale,
+      locales
+    ) ?? configuredDefaultLocale;
+    const hasBasePath = Boolean(basePath && (
+      rawPathname === basePath || rawPathname.startsWith(`${basePath}/`)
+    ));
+    const pathname = hasBasePath ? rawPathname.slice(basePath.length) || '/' : rawPathname;
+    const withBasePath = (path: string) => hasBasePath ? `${basePath}${path}` : path;
     const segments = pathname.split('/').filter(Boolean);
     const firstSegment = segments[0];
     const matchedPrefix = matchSupportedLocale(firstSegment, locales);
+    const pathnameWithoutPrefix = matchedPrefix && firstSegment
+      ? pathname.slice(firstSegment.length + 1) || '/'
+      : pathname;
+    const internalPath = (locale: string, externalPath: string) =>
+      rewriteLocalizedPath(externalPath, locale, pathnames);
 
     const cookieLocale = matchSupportedLocale(
       request.cookies.get(cookieName)?.value ||
@@ -112,18 +107,20 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
         }
       }
       requestHeaders.set(headerName, effectiveLocale);
+      if (rewritePath) {
+        requestHeaders.set('x-next-fluent-rewrite', requestUrl(withBasePath(rewritePath)).pathname);
+      }
 
       const response = rewritePath
-        ? NextResponse.rewrite(new URL(rewritePath, request.url), {
+        ? NextResponse.rewrite(requestUrl(withBasePath(rewritePath)), {
             request: { headers: requestHeaders },
           })
         : NextResponse.next({
             request: { headers: requestHeaders },
           });
 
-      if (!response.request) {
-        response.request = { headers: requestHeaders };
-      }
+      // Expose the forwarded headers to callers that compose this middleware.
+      (response as any).request ??= { headers: requestHeaders };
 
       if (response.headers?.set) {
         response.headers.set(headerName, effectiveLocale);
@@ -153,14 +150,33 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
       return response;
     };
 
+    const globalPrefix = matchSupportedLocale(firstSegment, allLocales);
+    if (domain && globalPrefix && !matchSupportedLocale(globalPrefix, locales)) {
+      const targetDomain = domains?.find((item) =>
+        (item.locales ?? [item.defaultLocale]).some((locale) => matchSupportedLocale(globalPrefix, [locale]))
+      );
+      if (targetDomain) {
+        const targetUrl = new URL(requestOrigin);
+        targetUrl.host = targetDomain.domain;
+        return createRedirect(targetUrl, globalPrefix);
+      }
+    }
+
+    // Next.js may invoke middleware again for a rewritten internal pathname.
+    // Keep that second pass from canonicalizing /[defaultLocale] back to /.
+    if (request.headers.get('x-next-fluent-rewrite') === rawPathname && matchedPrefix) {
+      return createSuccessResponse(matchedPrefix);
+    }
+
     // Strategy 1: 'never' (no prefixes in URL, internal rewrite to /[locale]/...)
     if (localePrefix === 'never') {
       if (matchedPrefix) {
         const rest = segments.slice(1).join('/');
         const remainingPath = rest ? `/${rest}${search}` : `/${search}`;
-        return createRedirect(new URL(remainingPath, request.url), matchedPrefix);
+        return createRedirect(requestUrl(withBasePath(remainingPath)), matchedPrefix);
       }
-      const rewritePath = `/${preferredLocale}${pathname === '/' ? '' : pathname}${search}`;
+      const route = internalPath(preferredLocale, pathname);
+      const rewritePath = `/${preferredLocale}${route === '/' ? '' : route}${search}`;
       return createSuccessResponse(preferredLocale, rewritePath);
     }
 
@@ -170,29 +186,38 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
         // Strip default locale prefix
         const rest = segments.slice(1).join('/');
         const remainingPath = rest ? `/${rest}${search}` : `/${search}`;
-        return createRedirect(new URL(remainingPath, request.url), defaultLocale);
+        return createRedirect(requestUrl(withBasePath(remainingPath)), defaultLocale);
       }
       if (matchedPrefix) {
         // Non-default locale with prefix
-        return createSuccessResponse(matchedPrefix);
+        const route = internalPath(matchedPrefix, pathnameWithoutPrefix);
+        const rewritePath = route === pathnameWithoutPrefix
+          ? undefined
+          : `/${matchedPrefix}${route === '/' ? '' : route}${search}`;
+        return createSuccessResponse(matchedPrefix, rewritePath);
       }
       // No prefix in URL:
       if (preferredLocale === defaultLocale) {
-        const rewritePath = `/${defaultLocale}${pathname === '/' ? '' : pathname}${search}`;
+        const route = internalPath(defaultLocale, pathname);
+        const rewritePath = `/${defaultLocale}${route === '/' ? '' : route}${search}`;
         return createSuccessResponse(defaultLocale, rewritePath);
       }
       // Preferred locale is non-default: redirect to /{preferredLocale}/path
       const targetPath = `/${preferredLocale}${pathname === '/' ? '' : pathname}${search}`;
-      return createRedirect(new URL(targetPath, request.url), preferredLocale);
+      return createRedirect(requestUrl(withBasePath(targetPath)), preferredLocale);
     }
 
     // Strategy 3: 'always' (default: every path requires prefix)
     if (matchedPrefix) {
-      return createSuccessResponse(matchedPrefix);
+      const route = internalPath(matchedPrefix, pathnameWithoutPrefix);
+      const rewritePath = route === pathnameWithoutPrefix
+        ? undefined
+        : `/${matchedPrefix}${route === '/' ? '' : route}${search}`;
+      return createSuccessResponse(matchedPrefix, rewritePath);
     }
 
     const targetPath = `/${preferredLocale}${pathname === '/' ? '' : pathname}${search}`;
-    return createRedirect(new URL(targetPath, request.url), preferredLocale);
+    return createRedirect(requestUrl(withBasePath(targetPath)), preferredLocale);
   };
 }
 

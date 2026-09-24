@@ -309,13 +309,16 @@ function computeSourceHash(source) {
 }
 var resourceCache = new LRUCache(MAX_RESOURCE_CACHE);
 var bundleCache = new LRUCache(MAX_BUNDLE_CACHE);
+function sameSource(a, b) {
+  if (typeof a === "string" || typeof b === "string") return a === b;
+  return a.length === b.length && a.every((item, index) => item === b[index]);
+}
 function getOrCreateResource(source) {
   const hash = `${source.length}:${fnv1a32(source)}`;
-  let res = resourceCache.get(hash);
-  if (!res) {
-    res = new FluentResource(source);
-    resourceCache.set(hash, res);
-  }
+  const cached = resourceCache.get(hash);
+  if (cached?.source === source) return cached.resource;
+  const res = new FluentResource(source);
+  resourceCache.set(hash, { source, resource: res });
   return res;
 }
 function getCachedFluentBundle(locale, ftlSource, options = {}) {
@@ -325,8 +328,8 @@ function getCachedFluentBundle(locale, ftlSource, options = {}) {
   const cacheKey = `${locale}:iso=${useIsolating}:${sourceHash}`;
   if (!hasCustomFunctions && !options.disableCache) {
     const cached = bundleCache.get(cacheKey);
-    if (cached) {
-      return cached;
+    if (cached && sameSource(cached.source, ftlSource)) {
+      return cached.bundle;
     }
   }
   const defaultFunctions = createDefaultFunctions(locale);
@@ -347,7 +350,10 @@ function getCachedFluentBundle(locale, ftlSource, options = {}) {
     }
   }
   if (!hasCustomFunctions && !options.disableCache) {
-    bundleCache.set(cacheKey, bundle);
+    bundleCache.set(cacheKey, {
+      source: typeof ftlSource === "string" ? ftlSource : [...ftlSource],
+      bundle
+    });
   }
   return bundle;
 }

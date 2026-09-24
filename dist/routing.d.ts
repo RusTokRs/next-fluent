@@ -19,4 +19,9 @@ export interface RoutingConfig<Locales extends readonly string[] = readonly stri
  * Defines the central routing configuration for next-fluent.
  * Validates configuration and provides type-safe inference for locales and pathnames.
  */
+export declare function defineRouting<const Locales extends readonly string[], const Routes extends Pathnames<Locales>>(config: Omit<RoutingConfig<Locales>, 'pathnames'> & {
+    pathnames: Routes;
+}): Omit<RoutingConfig<Locales>, 'pathnames'> & {
+    pathnames: Routes;
+};
 export declare function defineRouting<const Locales extends readonly string[]>(config: RoutingConfig<Locales>): RoutingConfig<Locales>;

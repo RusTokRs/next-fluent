@@ -1,6 +1,6 @@
 import React from 'react';
 import type { FluentBundle, FluentFunction } from '@fluent/bundle';
-import type { DefaultKey, FormattedMessageProps, Formatter, RichTranslationValues, Translations } from './types';
+import type { DefaultKey, FormattedMessageProps, Formatter, NamespaceArgs, NamespaceKeys, RichTranslationValues, Translations } from './types';
 import { createFormatter } from './formatter';
 export type { FormattedMessageProps };
 export { createFormatter };
@@ -36,5 +36,6 @@ export declare function useFormatter(): Formatter;
 export declare function useNow(options?: {
     updateInterval?: number;
 }): Date;
-export declare function useTranslations<Key extends string = DefaultKey, ArgsMap extends Record<string, any> = Record<string, any>>(namespace?: string): Translations<Key, ArgsMap>;
+export declare function useTranslations<Namespace extends string>(namespace: Namespace): Translations<NamespaceKeys<Namespace>, NamespaceArgs<Namespace>>;
+export declare function useTranslations(): Translations;
 export declare function FormattedMessage<Key extends string = DefaultKey, ArgsMap extends Record<string, any> = Record<string, any>>({ id, args, values, fallback, className, as: Component, }: FormattedMessageProps<Key, ArgsMap>): React.ReactNode;

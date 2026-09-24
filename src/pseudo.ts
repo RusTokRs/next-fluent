@@ -1,6 +1,7 @@
 /**
  * Pseudo-localization engine for layout overflow and truncation testing.
  */
+import { parse, serialize, Visitor, type TextElement } from '@fluent/syntax';
 
 const CHAR_MAP: Record<string, string> = {
   a: 'å', b: 'ƀ', c: 'ç', d: 'ð', e: 'é', f: 'ƒ', g: 'ĝ', h: 'ĥ', i: 'î',
@@ -64,85 +65,12 @@ export function pseudoLocalizeText(text: string, options: PseudoOptions = {}): s
  * Preserves message IDs, attributes, selectors, and comments.
  */
 export function pseudoLocalizeFtl(ftlContent: string, options: PseudoOptions = {}): string {
-  const lines = ftlContent.split(/\r?\n/);
-  const resultLines: string[] = [];
-
-  // Regex that matches the opening of a Fluent select expression.
-  // e.g. `{ $count ->`, `{ NUMBER($count) ->`, `{ PLATFORM() ->`, `{ $user.role ->`
-  const selectOpenRegex = /^\{\s*[^}\r\n]+->\s*(#.*)?$/;
-
-  for (const line of lines) {
-    // Preserve comments and empty lines
-    if (line.startsWith('#') || !line.trim()) {
-      resultLines.push(line);
-      continue;
+  const resource = parse(ftlContent, { withSpans: false });
+  class PseudoVisitor extends Visitor {
+    visitTextElement(node: TextElement): void {
+      if (node.value.trim()) node.value = pseudoLocalizeText(node.value, options);
     }
-
-    // Match top-level message: `my-msg-id = text...`
-    const msgMatch = line.match(/^([a-zA-Z][a-zA-Z0-9_-]*\s*=\s*)(.*)$/);
-    if (msgMatch) {
-      const [, prefix, value] = msgMatch;
-      const trimmedValue = value.trim();
-      if (trimmedValue && !selectOpenRegex.test(trimmedValue)) {
-        resultLines.push(`${prefix}${pseudoLocalizeText(value, options)}`);
-      } else {
-        // Empty value or selector opening — preserve as-is
-        resultLines.push(line);
-      }
-      continue;
-    }
-
-    // Match attribute: `  .my-attr = text...`
-    const attrMatch = line.match(/^(\s+\.[a-zA-Z][a-zA-Z0-9_-]*\s*=\s*)(.*)$/);
-    if (attrMatch) {
-      const [, prefix, value] = attrMatch;
-      const trimmedValue = value.trim();
-      if (trimmedValue && !selectOpenRegex.test(trimmedValue)) {
-        resultLines.push(`${prefix}${pseudoLocalizeText(value, options)}`);
-      } else {
-        resultLines.push(line);
-      }
-      continue;
-    }
-
-    // Match selector variant: `    [one] text...` or `   *[other] text...`
-    const variantMatch = line.match(/^(\s*\*?\[[a-zA-Z0-9_-]+\]\s*)(.*)$/);
-    if (variantMatch) {
-      const [, prefix, value] = variantMatch;
-      if (value.trim()) {
-        resultLines.push(`${prefix}${pseudoLocalizeText(value, options)}`);
-      } else {
-        resultLines.push(line);
-      }
-      continue;
-    }
-
-    // Match selector closing `}` on its own line — preserve
-    if (/^\s*\}\s*$/.test(line)) {
-      resultLines.push(line);
-      continue;
-    }
-
-    // Match selector opening on a continuation line (e.g. indented `{ $count ->`)
-    if (/^\s+/.test(line) && selectOpenRegex.test(line.trim())) {
-      resultLines.push(line);
-      continue;
-    }
-
-    // Continuation line: indented text that is part of the previous message
-    if (/^\s+/.test(line) && line.trim()) {
-      const indentMatch = line.match(/^(\s+)(.*)$/);
-      if (indentMatch) {
-        const [, indent, text] = indentMatch;
-        resultLines.push(`${indent}${pseudoLocalizeText(text, options)}`);
-        continue;
-      }
-    }
-
-    // Any other line — preserve
-    resultLines.push(line);
   }
-
-  return resultLines.join('\n');
+  new PseudoVisitor().visit(resource);
+  return serialize(resource, {});
 }
-

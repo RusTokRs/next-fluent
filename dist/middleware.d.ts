@@ -17,5 +17,5 @@ export interface NextMiddlewareRequestLike {
         entries?(): IterableIterator<[string, string]>;
     };
 }
-export declare function createI18nMiddleware(options: I18nMiddlewareOptions): (request: NextMiddlewareRequestLike) => Promise<any>;
+export declare function createI18nMiddleware(options: I18nMiddlewareOptions): (request: NextMiddlewareRequestLike) => Promise<import("next/server.js").NextResponse<unknown>>;
 export declare const createMiddleware: typeof createI18nMiddleware;

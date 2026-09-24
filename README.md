@@ -11,9 +11,9 @@ The high-performance Project Fluent alternative to `next-intl`.
 - **Rich Text & React Node Interpolation**: Pass React components directly into message variables (`{ user: <UserProfile /> }`) and format interactive tags (`<link>docs</link>`, `<br>`).
 - **Locale-Aware Routing & Navigation**: Centralized `defineRouting` with localized pathnames (`/about` -> `/about-us` / `/o-nas`), custom domain routing, and automatic URL rewriting without 404s.
 - **Next.js Webpack & Turbopack Plugin**: Seamless zero-boilerplate configuration binding via `next-fluent/plugin`.
-- **Zero Hydration Mismatch**: Synchronized server and client timestamp snapshots via `<FluentProvider now={...}>` and `useNow()`.
+- **Synchronized Request Snapshot**: `<FluentServerProvider>` passes messages, fallback messages, serializable default values, time zone, and `now` from one server request snapshot to Client Components.
 - **Full Type Safety**: Type generation powered by `@fluent/syntax` AST with TypeScript declaration merging (`declare global { interface FluentMessages extends AppMessages {} }`) and automatic namespace key autocompletion.
-- **High-Performance LRU Caching**: Bounded true LRU caching and allocation-free 32-bit FNV-1a hashing.
+- **Bounded LRU Caching**: Resource and bundle caches verify exact source equality even when 32-bit hashes collide.
 - **Clean Standards**: Uses standard `NEXT_LOCALE` cookie and `x-next-locale` headers.
 
 ---
@@ -72,20 +72,23 @@ Configure message catalogs and request-level settings:
 import { setRequestConfig } from 'next-fluent/server';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { routing } from './routing';
 
 export default setRequestConfig(async ({ locale }) => {
-  const resolvedLocale = locale ?? 'en';
+  const resolvedLocale = routing.locales.find((item) => item === locale) ?? routing.defaultLocale;
   const filePath = path.join(process.cwd(), 'messages', `${resolvedLocale}.ftl`);
   const messages = await fs.readFile(filePath, 'utf-8');
 
   return {
     locale: resolvedLocale,
     messages,
+    timeZone: 'UTC',
+    now: new Date(),
   };
 });
 ```
 
-### 4. Middleware (`middleware.ts`)
+### 4. Proxy or middleware (`proxy.ts` on Next.js 16; `middleware.ts` on Next.js 15)
 
 Enable automatic URL prefixing, internal rewrites for App Router `[locale]` folders, and `Accept-Language` detection:
 
@@ -103,8 +106,10 @@ export const config = {
 ### 5. Root Layout (`app/[locale]/layout.tsx`)
 
 ```tsx
-import { FluentProvider } from 'next-fluent/client';
-import { getLocale, getMessages, setRequestLocale } from 'next-fluent/server';
+import { notFound } from 'next/navigation';
+import { FluentServerProvider } from 'next-fluent/server-provider';
+import { setRequestLocale } from 'next-fluent/server';
+import { routing } from '@/i18n/routing';
 
 export default async function RootLayout({
   children,
@@ -114,21 +119,22 @@ export default async function RootLayout({
   params: Promise<{ locale: string }>;
 }) {
   const { locale } = await params;
-  setRequestLocale(locale);
-
-  const messages = await getMessages();
+  if (!routing.locales.some((item) => item === locale)) notFound();
+  setRequestLocale(locale, routing.locales);
 
   return (
     <html lang={locale}>
       <body>
-        <FluentProvider locale={locale} messages={messages}>
+        <FluentServerProvider locale={locale}>
           {children}
-        </FluentProvider>
+        </FluentServerProvider>
       </body>
     </html>
   );
 }
 ```
+
+Custom Fluent functions and callback-based rich values must be registered in a Client Component because React cannot serialize functions across the server/client boundary. For consistent date formatting, use `FluentServerProvider` or await `getRequestConfigSnapshot()` before calling the synchronous `getNow()` and `getTimeZone()` helpers.
 
 ### 6. Navigation Helpers (`src/i18n/navigation.ts`)
 

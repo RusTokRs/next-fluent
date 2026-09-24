@@ -16,6 +16,7 @@ import type {
   UrlObject,
 } from './types';
 import { matchSupportedLocale, validateI18nConfig } from './utils';
+import { localizePath, rewriteLocalizedPath, validatePathnames, validateRouteEnvironment } from './route-engine';
 import { useLocale } from './client';
 
 function isExternalUrl(url: string): boolean {
@@ -45,6 +46,9 @@ export function formatUrlObject(urlObj: UrlObject): {
 
   if (!pathname.startsWith('/')) {
     pathname = `/${pathname}`;
+  }
+  if (pathname.startsWith('//') || pathname.includes('\\') || /[\u0000-\u001f]/.test(pathname)) {
+    throw new Error('[next-fluent] URL object pathname must be an internal path.');
   }
 
   const params = new URLSearchParams();
@@ -93,11 +97,12 @@ export function resolveLocalizedPathname(
   config: NavigationConfig
 ): string {
   const { href, locale: explicitLocale } = options;
-  const { locales, defaultLocale, localePrefix = 'always', pathnames } = config;
+  const { locales, defaultLocale, localePrefix = 'always', pathnames, domains, basePath = '' } = config;
 
   let rawPathname = '';
   let search = '';
   let hash = '';
+  let objectQuery: Record<string, unknown> | undefined;
 
   if (typeof href === 'string') {
     if (isExternalUrl(href) || href.startsWith('#')) {
@@ -118,6 +123,7 @@ export function resolveLocalizedPathname(
     rawPathname = parts.pathname;
     search = parts.search;
     hash = parts.hash;
+    objectQuery = href.query && typeof href.query === 'object' ? href.query : undefined;
   } else {
     return '/';
   }
@@ -129,13 +135,18 @@ export function resolveLocalizedPathname(
   if (!rawPathname.startsWith('/')) {
     rawPathname = `/${rawPathname}`;
   }
+  if (basePath && (rawPathname === basePath || rawPathname.startsWith(`${basePath}/`))) {
+    rawPathname = rawPathname.slice(basePath.length) || '/';
+  }
 
   // Strip existing supported locale prefix if present
   const segments = rawPathname.split('/').filter(Boolean);
   let cleanPathname = rawPathname;
+  let sourceLocale: string | undefined;
   if (segments.length > 0) {
     const first = segments[0];
-    if (matchSupportedLocale(first, locales)) {
+    sourceLocale = matchSupportedLocale(first, locales);
+    if (sourceLocale) {
       const rest = segments.slice(1).join('/');
       cleanPathname = rest ? `/${rest}` : '/';
     }
@@ -148,21 +159,26 @@ export function resolveLocalizedPathname(
       ? cleanPathname.slice(0, -1)
       : cleanPathname;
 
+  const resolvedDefaultLocale = matchSupportedLocale(defaultLocale, locales) ?? defaultLocale;
   const resolvedLocale = explicitLocale
-    ? (matchSupportedLocale(explicitLocale, locales) ?? defaultLocale)
-    : defaultLocale;
+    ? (matchSupportedLocale(explicitLocale, locales) ?? resolvedDefaultLocale)
+    : resolvedDefaultLocale;
 
   // Localized pathname mapping (e.g. /about -> /about-us for 'en', /o-nas for 'ru', /ueber-uns for 'de', /a-propos for 'fr')
-  let mappedPathname = cleanPathname;
-  const pathnamesTarget = pathnames?.[lookupKey] ?? pathnames?.[cleanPathname];
-  if (pathnamesTarget) {
-    if (typeof pathnamesTarget === 'string') {
-      mappedPathname = pathnamesTarget;
-    } else if (typeof pathnamesTarget === 'object') {
-      mappedPathname =
-        (pathnamesTarget as Record<string, string>)[resolvedLocale] ??
-        lookupKey;
-    }
+  const localized = localizePath(
+    lookupKey,
+    sourceLocale ?? resolvedLocale,
+    resolvedLocale,
+    pathnames,
+    objectQuery,
+    locales
+  );
+  let mappedPathname = localized.pathname;
+  if (localized.consumed.length && search) {
+    const params = new URLSearchParams(search.slice(1));
+    for (const name of localized.consumed) params.delete(name);
+    const remaining = params.toString();
+    search = remaining ? `?${remaining}` : '';
   }
 
   if (hasTrailingSlash && mappedPathname !== '/' && !mappedPathname.endsWith('/')) {
@@ -173,7 +189,7 @@ export function resolveLocalizedPathname(
   if (localePrefix === 'never') {
     prefix = '';
   } else if (localePrefix === 'as-needed') {
-    if (resolvedLocale !== defaultLocale) {
+    if (resolvedLocale !== resolvedDefaultLocale) {
       prefix = `/${resolvedLocale}`;
     }
   } else {
@@ -187,9 +203,24 @@ export function resolveLocalizedPathname(
       : `${prefix}${mappedPathname.startsWith('/') ? mappedPathname : `/${mappedPathname}`}`
     : mappedPathname;
 
-  return `${finalPath}${search}${hash}`;
+  const withBasePath = `${basePath}${finalPath === '/' && basePath ? '' : finalPath}${search}${hash}`;
+  const targetDomain = domains?.find((entry) => {
+    const supported = entry.locales ?? [entry.defaultLocale];
+    return supported.some((locale) => matchSupportedLocale(resolvedLocale, [locale]));
+  });
+  if (targetDomain && targetDomain.domain.toLowerCase() !== options.domain?.toLowerCase()) {
+    return `https://${targetDomain.domain}${withBasePath}`;
+  }
+  return withBasePath;
 }
 
+export function createNavigation<
+  const Locales extends readonly string[],
+  const Routes extends Record<string, string | Record<string, string>>
+>(config: Omit<NavigationConfig<Locales>, 'pathnames'> & { pathnames: Routes }): Navigation<Locales, keyof Routes & string>;
+export function createNavigation<Locales extends readonly string[] = readonly string[]>(
+  config: NavigationConfig<Locales>
+): Navigation<Locales>;
 export function createNavigation<Locales extends readonly string[] = readonly string[]>(
   config: NavigationConfig<Locales>
 ): Navigation<Locales> {
@@ -198,8 +229,22 @@ export function createNavigation<Locales extends readonly string[] = readonly st
     defaultLocale: config.defaultLocale,
     localePrefix: config.localePrefix,
   });
+  validatePathnames(config.locales, config.pathnames);
+  validateRouteEnvironment(config.locales, config.domains, config.basePath);
 
-  const { locales, defaultLocale, pathnames } = config;
+  const { locales, defaultLocale, pathnames, basePath = '' } = config;
+  const switchLocaleHref = (target: string, explicitLocale?: string): string => {
+    if (!explicitLocale || config.localePrefix === 'always' || isExternalUrl(target) || target.startsWith('#')) {
+      return target;
+    }
+    const locale = matchSupportedLocale(explicitLocale, locales);
+    if (!locale) return target;
+    const url = new URL(target, 'https://next-fluent.invalid');
+    const route = basePath && (url.pathname === basePath || url.pathname.startsWith(`${basePath}/`))
+      ? url.pathname.slice(basePath.length) || '/'
+      : url.pathname;
+    return `${basePath}/${locale}${route === '/' ? '' : route}${url.search}${url.hash}`;
+  };
 
   const getPathname = (options: GetPathnameOptions): string => {
     return resolveLocalizedPathname(options, config);
@@ -216,17 +261,22 @@ export function createNavigation<Locales extends readonly string[] = readonly st
     }
 
     const targetLocale = propLocale ?? currentLocale ?? defaultLocale;
-    const localizedHref = getPathname({ href, locale: targetLocale });
+    const localizedHref = switchLocaleHref(
+      getPathname({ href, locale: targetLocale }),
+      propLocale
+    );
 
     return React.createElement(NextLink, {
       ...rest,
       href: localizedHref,
+      prefetch: propLocale && config.localePrefix !== 'always' ? false : rest.prefetch,
       ref,
     });
   });
   Link.displayName = 'I18nLink';
 
   function usePathname(): string {
+    const currentLocale = useLocale();
     let rawPathname = '';
     try {
       rawPathname = useNextPathname() || '';
@@ -235,6 +285,9 @@ export function createNavigation<Locales extends readonly string[] = readonly st
     }
 
     if (!rawPathname) return rawPathname;
+    if (basePath && (rawPathname === basePath || rawPathname.startsWith(`${basePath}/`))) {
+      rawPathname = rawPathname.slice(basePath.length) || '/';
+    }
 
     const segments = rawPathname.split('/').filter(Boolean);
     if (segments.length === 0) return '/';
@@ -251,20 +304,8 @@ export function createNavigation<Locales extends readonly string[] = readonly st
         ? cleanPathname.slice(0, -1)
         : cleanPathname;
 
-    // Reverse map localized slug back to canonical route pathname
-    if (pathnames) {
-      for (const [canonical, mapping] of Object.entries(pathnames)) {
-        if (typeof mapping === 'string') {
-          if (mapping === cleanPathname || mapping === lookupKey) return canonical;
-        } else if (mapping && typeof mapping === 'object') {
-          for (const localized of Object.values(mapping as Record<string, string>)) {
-            if (localized === cleanPathname || localized === lookupKey) return canonical;
-          }
-        }
-      }
-    }
-
-    return cleanPathname;
+    const internal = rewriteLocalizedPath(lookupKey, currentLocale, pathnames);
+    return cleanPathname.endsWith('/') && internal !== '/' ? `${internal}/` : internal;
   }
 
   function useRouter() {
@@ -294,17 +335,18 @@ export function createNavigation<Locales extends readonly string[] = readonly st
         ...router,
         push(href: Href, options?: { locale?: string; scroll?: boolean }) {
           const targetLocale = options?.locale ?? currentLocale ?? defaultLocale;
-          const target = getPathname({ href, locale: targetLocale });
+          const target = switchLocaleHref(getPathname({ href, locale: targetLocale }), options?.locale);
           const routerOptions = options?.scroll !== undefined ? { scroll: options.scroll } : undefined;
           return router.push(target, routerOptions);
         },
         replace(href: Href, options?: { locale?: string; scroll?: boolean }) {
           const targetLocale = options?.locale ?? currentLocale ?? defaultLocale;
-          const target = getPathname({ href, locale: targetLocale });
+          const target = switchLocaleHref(getPathname({ href, locale: targetLocale }), options?.locale);
           const routerOptions = options?.scroll !== undefined ? { scroll: options.scroll } : undefined;
           return router.replace(target, routerOptions);
         },
         prefetch(href: Href, options?: { locale?: string }) {
+          if (options?.locale && config.localePrefix !== 'always') return;
           const targetLocale = options?.locale ?? currentLocale ?? defaultLocale;
           const target = getPathname({ href, locale: targetLocale });
           return router.prefetch(target);

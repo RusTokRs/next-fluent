@@ -19,17 +19,25 @@ function extractMessagesFromFtl(ftlContent) {
       const dotId = id.replace(/-/g, ".");
       const extractor = new VariableExtractor();
       extractor.visit(msg);
+      const valueExtractor = new VariableExtractor();
+      if (msg.value) valueExtractor.visit(msg.value);
       const attributes = [];
+      const attributeVariables = {};
       if (msg.attributes) {
         for (const attr of msg.attributes) {
           attributes.push(attr.id.name);
+          const attrExtractor = new VariableExtractor();
+          attrExtractor.visit(attr.value);
+          attributeVariables[attr.id.name] = Array.from(attrExtractor.variables).sort();
         }
       }
       messages.push({
         id,
         dotId,
         attributes,
-        variables: Array.from(extractor.variables).sort()
+        variables: Array.from(extractor.variables).sort(),
+        valueVariables: Array.from(valueExtractor.variables).sort(),
+        attributeVariables
       });
     }
   }
@@ -63,15 +71,16 @@ function generateTypeDeclarations(ftlContents) {
     }
   };
   for (const m of allMessages) {
-    addKeyEntry(m.id, m.variables);
+    addKeyEntry(m.id, m.valueVariables);
     if (m.dotId !== m.id) {
-      addKeyEntry(m.dotId, m.variables);
+      addKeyEntry(m.dotId, m.valueVariables);
     }
     if (m.attributes) {
       for (const attr of m.attributes) {
-        addKeyEntry(`${m.id}.${attr}`, m.variables);
+        const variables = m.attributeVariables[attr] ?? [];
+        addKeyEntry(`${m.id}.${attr}`, variables);
         if (m.dotId !== m.id) {
-          addKeyEntry(`${m.dotId}.${attr}`, m.variables);
+          addKeyEntry(`${m.dotId}.${attr}`, variables);
         }
       }
     }

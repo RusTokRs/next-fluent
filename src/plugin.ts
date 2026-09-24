@@ -1,4 +1,19 @@
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+
+function needsLegacyTurboConfig(): boolean {
+  try {
+    const packagePath = require.resolve('next/package.json');
+    const version = JSON.parse(readFileSync(packagePath, 'utf8')).version as string;
+    const [major, minor] = version.split('.').map(Number);
+    return major < 15 || (major === 15 && minor < 3);
+  } catch {
+    return false;
+  }
+}
 
 export interface NextConfigLike {
   webpack?: (config: any, context: any) => any;
@@ -23,6 +38,9 @@ export interface NextConfigLike {
 export function createNextFluentPlugin(i18nRequestPath: string = './src/i18n/request.ts') {
   return function withNextFluent(nextConfig: NextConfigLike = {}): NextConfigLike {
     const resolvedPath = path.resolve(process.cwd(), i18nRequestPath);
+    const relativePath = path.relative(process.cwd(), resolvedPath).split(path.sep).join('/');
+    const turbopackPath = relativePath.startsWith('.') ? relativePath : `./${relativePath}`;
+    const legacyTurbo = needsLegacyTurboConfig();
 
     return {
       ...nextConfig,
@@ -36,21 +54,23 @@ export function createNextFluentPlugin(i18nRequestPath: string = './src/i18n/req
         }
         return config;
       },
-      experimental: {
-        ...nextConfig.experimental,
-        turbo: {
-          ...nextConfig.experimental?.turbo,
-          resolveAlias: {
-            ...nextConfig.experimental?.turbo?.resolveAlias,
-            'next-fluent/config': resolvedPath,
+      ...(legacyTurbo ? {
+        experimental: {
+          ...nextConfig.experimental,
+          turbo: {
+            ...nextConfig.experimental?.turbo,
+            resolveAlias: {
+              ...nextConfig.experimental?.turbo?.resolveAlias,
+              'next-fluent/config': turbopackPath,
+            },
           },
         },
-      },
+      } : {}),
       turbopack: {
         ...nextConfig.turbopack,
         resolveAlias: {
           ...nextConfig.turbopack?.resolveAlias,
-          'next-fluent/config': resolvedPath,
+          'next-fluent/config': turbopackPath,
         },
       },
     };

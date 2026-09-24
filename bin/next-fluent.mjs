@@ -97,11 +97,13 @@ if (command === 'typegen') {
   const inputStat = fs.statSync(resolvedInput);
   if (inputStat.isDirectory()) {
     const isOutputDir = !resolvedOutput.endsWith('.ftl');
+    if (!isOutputDir) {
+      console.error('Error: --output must be a directory when --input is a directory.');
+      process.exit(1);
+    }
     for (const file of ftlFiles) {
       const rel = path.relative(resolvedInput, file);
-      const dest = isOutputDir
-        ? path.join(resolvedOutput, rel)
-        : resolvedOutput;
+      const dest = path.join(resolvedOutput, rel);
       const ftlContent = fs.readFileSync(file, 'utf8');
       const pseudoContent = pseudoLocalizeFtl(ftlContent);
       fs.mkdirSync(path.dirname(dest), { recursive: true });

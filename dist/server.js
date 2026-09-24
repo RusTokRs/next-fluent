@@ -390,13 +390,16 @@ function computeSourceHash(source) {
 }
 var resourceCache = new LRUCache(MAX_RESOURCE_CACHE);
 var bundleCache = new LRUCache(MAX_BUNDLE_CACHE);
+function sameSource(a, b) {
+  if (typeof a === "string" || typeof b === "string") return a === b;
+  return a.length === b.length && a.every((item, index) => item === b[index]);
+}
 function getOrCreateResource(source) {
   const hash = `${source.length}:${fnv1a32(source)}`;
-  let res = resourceCache.get(hash);
-  if (!res) {
-    res = new FluentResource(source);
-    resourceCache.set(hash, res);
-  }
+  const cached = resourceCache.get(hash);
+  if (cached?.source === source) return cached.resource;
+  const res = new FluentResource(source);
+  resourceCache.set(hash, { source, resource: res });
   return res;
 }
 function getCachedFluentBundle(locale, ftlSource, options = {}) {
@@ -406,8 +409,8 @@ function getCachedFluentBundle(locale, ftlSource, options = {}) {
   const cacheKey = `${locale}:iso=${useIsolating}:${sourceHash}`;
   if (!hasCustomFunctions && !options.disableCache) {
     const cached = bundleCache.get(cacheKey);
-    if (cached) {
-      return cached;
+    if (cached && sameSource(cached.source, ftlSource)) {
+      return cached.bundle;
     }
   }
   const defaultFunctions = createDefaultFunctions(locale);
@@ -428,7 +431,10 @@ function getCachedFluentBundle(locale, ftlSource, options = {}) {
     }
   }
   if (!hasCustomFunctions && !options.disableCache) {
-    bundleCache.set(cacheKey, bundle);
+    bundleCache.set(cacheKey, {
+      source: typeof ftlSource === "string" ? ftlSource : [...ftlSource],
+      bundle
+    });
   }
   return bundle;
 }
@@ -780,9 +786,11 @@ function createFormatter(optionsOrLocale) {
 var globalConfigFn = null;
 var globalLocales = ["en"];
 var globalDefaultLocale = "en";
+var globalLocalesConfigured = false;
 function configureServerI18n(config) {
   if (config.locales && config.locales.length > 0) {
     globalLocales = config.locales;
+    globalLocalesConfigured = true;
   }
   if (config.defaultLocale) {
     globalDefaultLocale = config.defaultLocale;
@@ -796,17 +804,27 @@ function getRequestConfig() {
   return globalConfigFn;
 }
 var getRequestStore = cache(() => ({
-  bundles: /* @__PURE__ */ new Map()
+  bundles: /* @__PURE__ */ new Map(),
+  configs: /* @__PURE__ */ new Map()
 }));
-function setRequestLocale(locale) {
-  getRequestStore().locale = locale;
+function setRequestLocale(locale, locales) {
+  const canonical = canonicalizeLocale(locale);
+  if (!canonical) throw new Error("[next-fluent] Invalid request locale.");
+  const allowed = locales ?? (globalLocalesConfigured ? globalLocales : void 0);
+  const matched = allowed ? matchSupportedLocale(canonical, allowed) : canonical;
+  if (!matched) throw new Error(`[next-fluent] Unsupported request locale: ${canonical}`);
+  getRequestStore().locale = matched;
 }
 async function getLocale(options) {
   const store = getRequestStore();
   if (store.locale) {
+    const allowed = options?.locales ?? globalLocales;
+    const matched = matchSupportedLocale(store.locale, allowed);
+    if (matched) return matched;
+    if (options?.locales) throw new Error(`[next-fluent] Unsupported request locale: ${store.locale}`);
     return store.locale;
   }
-  const allowedLocales = options?.locales && options.locales.length > 0 ? options.locales : globalLocales.length > 0 ? globalLocales : void 0;
+  const allowedLocales = options?.locales && options.locales.length > 0 ? options.locales : globalLocalesConfigured && globalLocales.length > 0 ? globalLocales : void 0;
   const defLocale = options?.defaultLocale ?? globalDefaultLocale;
   const headerKey = options?.headerName ?? "x-next-locale";
   const cookieList = options?.cookieNames ?? [
@@ -825,8 +843,11 @@ async function getLocale(options) {
         return validHeaderLocale;
       }
     } else if (rawHeader) {
-      store.locale = rawHeader;
-      return rawHeader;
+      const canonical = canonicalizeLocale(rawHeader);
+      if (canonical) {
+        store.locale = canonical;
+        return canonical;
+      }
     }
     for (const cName of cookieList) {
       const cVal = cookieStore.get(cName)?.value;
@@ -837,8 +858,11 @@ async function getLocale(options) {
           return validCookieLocale;
         }
       } else if (cVal) {
-        store.locale = cVal;
-        return cVal;
+        const canonical = canonicalizeLocale(cVal);
+        if (canonical) {
+          store.locale = canonical;
+          return canonical;
+        }
       }
     }
     const acceptLang = headerStore.get("accept-language");
@@ -863,31 +887,58 @@ async function resolveConfigFn() {
       globalConfigFn = fn;
       return fn;
     }
-  } catch {
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const missingAlias = (/next-fluent\/config/.test(message) || message.includes("./config") && error?.code === "ERR_PACKAGE_PATH_NOT_EXPORTED") && /not found|not exported|not defined|Cannot resolve|Can't resolve/i.test(message);
+    if (!missingAlias) {
+      throw new Error("[next-fluent] Failed to load request configuration.", { cause: error });
+    }
   }
   return null;
 }
+async function loadConfig(locale, override) {
+  const configFn = override ?? await resolveConfigFn();
+  if (!configFn) return { locale, messages: "" };
+  const store = getRequestStore();
+  let pending = override ? void 0 : store.configs.get(locale);
+  if (!pending) {
+    pending = Promise.resolve().then(() => configFn({ locale }));
+    if (!override) store.configs.set(locale, pending);
+  }
+  let result;
+  try {
+    result = await pending;
+  } catch (error) {
+    if (!override) store.configs.delete(locale);
+    throw error;
+  }
+  if (!result || !Array.isArray(result.messages) && typeof result.messages !== "string") {
+    throw new Error("[next-fluent] Request config must return messages as FTL text or an array.");
+  }
+  if (result.locale && !canonicalizeLocale(result.locale)) {
+    throw new Error("[next-fluent] Request config returned an invalid locale.");
+  }
+  store.defaultTranslationValues ??= result.defaultTranslationValues;
+  store.timeZone ??= result.timeZone;
+  store.now ??= result.now;
+  store.functions ??= result.functions;
+  return result;
+}
 async function getMessages(localeArg) {
   const locale = localeArg ?? await getLocale();
-  const configFn = await resolveConfigFn();
-  if (configFn) {
-    const res = await configFn({ locale });
-    const store = getRequestStore();
-    if (res.defaultTranslationValues && !store.defaultTranslationValues) {
-      store.defaultTranslationValues = res.defaultTranslationValues;
-    }
-    if (res.timeZone && !store.timeZone) {
-      store.timeZone = res.timeZone;
-    }
-    if (res.now && !store.now) {
-      store.now = res.now;
-    }
-    if (res.functions && !store.functions) {
-      store.functions = res.functions;
-    }
-    return res.messages;
-  }
-  return "";
+  return (await loadConfig(locale)).messages;
+}
+async function getRequestConfigSnapshot(localeArg) {
+  const requestedLocale = localeArg ?? await getLocale();
+  const result = await loadConfig(requestedLocale);
+  const store = getRequestStore();
+  const locale = result.locale ?? requestedLocale;
+  const timeZone = result.timeZone ?? store.timeZone ?? getTimeZone();
+  const now = result.now ?? store.now ?? getNow();
+  store.locale = locale;
+  store.timeZone = timeZone;
+  store.now = now;
+  return { ...result, locale, timeZone, now };
 }
 function getTimeZone() {
   const store = getRequestStore();
@@ -900,10 +951,12 @@ function getTimeZone() {
 }
 function getNow() {
   const store = getRequestStore();
-  return store.now ?? /* @__PURE__ */ new Date();
+  store.now ??= /* @__PURE__ */ new Date();
+  return store.now;
 }
 async function getFormatter(options) {
   const locale = options?.locale ?? await getLocale();
+  if (!options?.timeZone) await loadConfig(locale);
   const store = getRequestStore();
   const timeZone = options?.timeZone ?? store.timeZone ?? getTimeZone();
   return createFormatter({ locale, timeZone });
@@ -922,6 +975,7 @@ async function forLocale(locale, options) {
   let debug = false;
   let strictNamespace;
   let customFunctions;
+  let requestConfig;
   if (typeof options === "string") {
     namespace = options;
   } else if (options) {
@@ -934,26 +988,29 @@ async function forLocale(locale, options) {
     debug = options.debug ?? false;
     strictNamespace = options.strictNamespace;
     customFunctions = options.functions;
+    requestConfig = options.requestConfig;
   }
   const store = getRequestStore();
-  if (!defaultTranslationValues && store.defaultTranslationValues) {
-    defaultTranslationValues = store.defaultTranslationValues;
-  }
+  const config = explicitMessages !== void 0 ? void 0 : await loadConfig(locale, requestConfig);
+  const effectiveLocale = config?.locale ?? locale;
+  fallbackLocale ??= config?.fallbackLocale;
+  fallbackMessages ??= config?.fallbackMessages;
+  defaultTranslationValues ??= config?.defaultTranslationValues ?? store.defaultTranslationValues;
   const mergedFunctions = {
+    ...config?.functions,
     ...store.functions,
     ...customFunctions
   };
   let bundle;
-  if (explicitMessages) {
-    bundle = createFluentBundle(locale, explicitMessages, { functions: mergedFunctions });
+  if (explicitMessages !== void 0) {
+    bundle = createFluentBundle(effectiveLocale, explicitMessages, { functions: mergedFunctions });
   } else {
-    const hasCustomFuncs = Boolean(customFunctions && Object.keys(customFunctions).length > 0);
-    let cached = hasCustomFuncs ? void 0 : store.bundles.get(locale);
+    const hasCustomFuncs = Boolean(requestConfig || Object.keys(mergedFunctions).length > 0);
+    let cached = hasCustomFuncs ? void 0 : store.bundles.get(effectiveLocale);
     if (!cached) {
-      const messages = await getMessages(locale);
-      cached = createFluentBundle(locale, messages, { functions: mergedFunctions });
+      cached = createFluentBundle(effectiveLocale, config?.messages ?? "", { functions: mergedFunctions });
       if (!hasCustomFuncs) {
-        store.bundles.set(locale, cached);
+        store.bundles.set(effectiveLocale, cached);
       }
     }
     bundle = cached;
@@ -966,21 +1023,24 @@ async function forLocale(locale, options) {
     );
   }
   const fallbacksToLoad = /* @__PURE__ */ new Set();
-  if (fallbackLocale && fallbackLocale !== locale && !fallbackMessages) {
+  if (fallbackLocale && fallbackLocale !== effectiveLocale && !fallbackMessages) {
     fallbacksToLoad.add(fallbackLocale);
   }
   if (fallbackLocales) {
     for (const fb of fallbackLocales) {
-      if (fb && fb !== locale) fallbacksToLoad.add(fb);
+      if (fb && fb !== effectiveLocale) fallbacksToLoad.add(fb);
     }
   }
   if (fallbacksToLoad.size > 0) {
     for (const fbLocale of fallbacksToLoad) {
-      const hasCustomFuncs = Boolean(customFunctions && Object.keys(customFunctions).length > 0);
+      const hasCustomFuncs = Boolean(requestConfig || Object.keys(mergedFunctions).length > 0);
       let fbBundle = hasCustomFuncs ? void 0 : store.bundles.get(fbLocale);
       if (!fbBundle) {
-        const fbMessages = await getMessages(fbLocale);
-        fbBundle = createFluentBundle(fbLocale, fbMessages, { functions: mergedFunctions });
+        const fbConfig = await loadConfig(fbLocale, requestConfig);
+        const resolvedFallbackLocale = fbConfig.locale ?? fbLocale;
+        fbBundle = createFluentBundle(resolvedFallbackLocale, fbConfig.messages, {
+          functions: { ...fbConfig.functions, ...mergedFunctions }
+        });
         if (!hasCustomFuncs) {
           store.bundles.set(fbLocale, fbBundle);
         }
@@ -1009,6 +1069,7 @@ export {
   getMessages,
   getNow,
   getRequestConfig,
+  getRequestConfigSnapshot,
   getRequestStore,
   getStaticParams,
   getTimeZone,

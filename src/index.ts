@@ -25,10 +25,13 @@ export {
   getFormatter,
   getTimeZone,
   getNow,
+  getRequestConfigSnapshot,
   getStaticParams,
   type ForLocaleOptions,
   type ServerI18nOptions,
 } from './server';
+
+export { FluentServerProvider, type FluentServerProviderProps } from './server-provider';
 
 export {
   createFormatter,

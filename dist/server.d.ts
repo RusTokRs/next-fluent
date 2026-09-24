@@ -1,5 +1,5 @@
 import type { FluentBundle, FluentFunction } from '@fluent/bundle';
-import type { Formatter, GetTranslationsOptions, RequestConfigFn, RichTranslationValues, Translations } from './types';
+import type { DefaultKey, Formatter, FluentMessages, GetTranslationsOptions, RequestConfigFn, RequestConfigResult, RichTranslationValues, Translations, NamespaceArgs, NamespaceKeys } from './types';
 export interface ServerI18nOptions {
     locales?: readonly string[];
     defaultLocale?: string;
@@ -20,11 +20,17 @@ interface RequestStore {
     defaultTranslationValues?: RichTranslationValues;
     functions?: Record<string, FluentFunction>;
     bundles: Map<string, FluentBundle>;
+    configs: Map<string, Promise<RequestConfigResult>>;
 }
 export declare const getRequestStore: () => RequestStore;
-export declare function setRequestLocale(locale: string): void;
+export declare function setRequestLocale(locale: string, locales?: readonly string[]): void;
 export declare function getLocale(options?: ServerI18nOptions): Promise<string>;
 export declare function getMessages(localeArg?: string): Promise<string | readonly string[]>;
+export declare function getRequestConfigSnapshot(localeArg?: string): Promise<RequestConfigResult & {
+    locale: string;
+    timeZone: string;
+    now: Date;
+}>;
 export declare function getTimeZone(): string;
 export declare function getNow(): Date;
 export declare function getFormatter(options?: {
@@ -44,9 +50,13 @@ export interface ForLocaleOptions {
     debug?: boolean;
     strictNamespace?: boolean;
     functions?: Record<string, FluentFunction>;
+    /** Instance-scoped request loader used by createI18n. */
+    requestConfig?: RequestConfigFn;
 }
-export declare function forLocale<Key extends string = string, ArgsMap extends Record<string, any> = Record<string, any>>(locale: string, options?: string | ForLocaleOptions): Promise<Translations<Key, ArgsMap>>;
-export declare function getTranslations<Key extends string = string, ArgsMap extends Record<string, any> = Record<string, any>>(options?: string | ({
+export declare function forLocale<Namespace extends string>(locale: string, namespace: Namespace): Promise<Translations<NamespaceKeys<Namespace>, NamespaceArgs<Namespace>>>;
+export declare function forLocale<Key extends string = DefaultKey, ArgsMap extends Record<string, any> = FluentMessages>(locale: string, options?: string | ForLocaleOptions): Promise<Translations<Key, ArgsMap>>;
+export declare function getTranslations<Namespace extends string>(namespace: Namespace): Promise<Translations<NamespaceKeys<Namespace>, NamespaceArgs<Namespace>>>;
+export declare function getTranslations<Key extends string = DefaultKey, ArgsMap extends Record<string, any> = FluentMessages>(options?: string | ({
     locale?: string;
 } & GetTranslationsOptions)): Promise<Translations<Key, ArgsMap>>;
 export {};

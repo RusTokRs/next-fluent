@@ -1,4 +1,4 @@
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
@@ -17,6 +17,7 @@ const commonExternals = [
   'node:fs/promises',
   'node:url',
   'node:child_process',
+  'node:module',
   'path',
   'fs',
   '@fluent/bundle',
@@ -45,6 +46,9 @@ await build({
     typegen: resolve(root, 'src/typegen.ts'),
     utils: resolve(root, 'src/utils.ts'),
     formatter: resolve(root, 'src/formatter.ts'),
+    bundle: resolve(root, 'src/bundle.ts'),
+    functions: resolve(root, 'src/functions.ts'),
+    pseudo: resolve(root, 'src/pseudo.ts'),
   },
   outdir: dist,
   bundle: true,
@@ -54,6 +58,21 @@ await build({
   external: commonExternals,
   sourcemap: false,
 });
+
+// Keep React's client boundary intact when importing from the package root.
+// These small facades re-export the separately built client entry instead of
+// inlining it into a server or browser bundle.
+const sharedExports = `export * from './client.js';
+export * from './navigation.js';
+export * from './routing.js';
+export * from './bundle.js';
+export * from './pseudo.js';
+export * from './typegen.js';
+export * from './utils.js';
+export {createDefaultFunctions, unwrapFluentValue} from './functions.js';
+`;
+await writeFile(resolve(dist, 'index-browser.js'), sharedExports);
+await writeFile(resolve(dist, 'index-server.js'), `export * from './server.js';\nexport * from './server-provider.js';\n${sharedExports}`);
 
 // 2. Build client entry points with guaranteed 'use client' directive banner
 await build({
@@ -71,6 +90,15 @@ await build({
   },
   external: commonExternals,
   sourcemap: false,
+});
+
+await build({
+  entryPoints: { 'server-provider': resolve(root, 'src/server-provider.ts') },
+  outdir: dist,
+  bundle: false,
+  format: 'esm',
+  platform: 'neutral',
+  target: ['es2022'],
 });
 
 const tscBin = resolve(root, 'node_modules/typescript/bin/tsc');

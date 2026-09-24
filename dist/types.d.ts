@@ -15,18 +15,28 @@ export type RichTranslationValues = Record<string, FluentVariable | TagRenderFn 
  * }
  * ```
  */
-export interface FluentMessages {
+declare global {
+    interface FluentMessages {
+    }
 }
+type AppFluentMessages = FluentMessages;
+export type { AppFluentMessages as FluentMessages };
 export type DefaultKey = keyof FluentMessages extends never ? string : keyof FluentMessages & string;
-export type MessageArgsFor<K extends string, ArgsMap> = K extends keyof ArgsMap ? ArgsMap[K] extends Record<string, never> | undefined ? [args?: FluentArgs] : [args: ArgsMap[K]] : [args?: FluentArgs];
-export interface TranslationFn<Key extends string = DefaultKey, ArgsMap extends Record<string, any> = Record<string, any>> {
+export type NamespaceKeys<Namespace extends string> = keyof FluentMessages extends never ? string : {
+    [K in keyof FluentMessages & string]: K extends `${Namespace}.${infer Rest}` ? Rest : K extends `${Namespace}-${infer Rest}` ? Rest : never;
+}[keyof FluentMessages & string];
+export type NamespaceArgs<Namespace extends string> = keyof FluentMessages extends never ? Record<string, any> : {
+    [K in keyof FluentMessages & string as K extends `${Namespace}.${infer Rest}` ? Rest : K extends `${Namespace}-${infer Rest}` ? Rest : never]: FluentMessages[K];
+};
+export type MessageArgsFor<K extends string, ArgsMap> = K extends keyof ArgsMap ? ArgsMap[K] extends Record<string, never> | undefined ? [args?: never] : [args: ArgsMap[K]] : [args?: FluentArgs];
+export interface TranslationFn<Key extends string = DefaultKey, ArgsMap extends Record<string, any> = AppFluentMessages> {
     <K extends Key>(key: K, ...args: MessageArgsFor<K, ArgsMap>): string;
     raw<K extends Key>(key: K): string[] | string;
     rich<K extends Key>(key: K, values?: RichTranslationValues): React.ReactNode;
     has<K extends Key>(key: K): boolean;
 }
-export type Translations<Key extends string = DefaultKey, ArgsMap extends Record<string, any> = Record<string, any>> = TranslationFn<Key, ArgsMap>;
-export interface FormattedMessageProps<Key extends string = DefaultKey, ArgsMap extends Record<string, any> = Record<string, any>> {
+export type Translations<Key extends string = DefaultKey, ArgsMap extends Record<string, any> = AppFluentMessages> = TranslationFn<Key, ArgsMap>;
+export interface FormattedMessageProps<Key extends string = DefaultKey, ArgsMap extends Record<string, any> = AppFluentMessages> {
     id: Key;
     args?: Key extends keyof ArgsMap ? ArgsMap[Key] : FluentArgs;
     values?: RichTranslationValues;
@@ -53,6 +63,12 @@ export interface NavigationConfig<Locales extends readonly string[] = readonly s
     defaultLocale: Locales[number] | string;
     localePrefix?: LocalePrefixMode;
     pathnames?: Pathnames<Locales>;
+    domains?: readonly {
+        domain: string;
+        defaultLocale: string;
+        locales?: readonly string[];
+    }[];
+    basePath?: string;
 }
 export interface UrlObject {
     auth?: string | null;
@@ -68,14 +84,24 @@ export interface UrlObject {
     query?: Record<string, any> | string | null;
 }
 export type Href = string | UrlObject;
-export interface GetPathnameOptions {
-    href: Href;
+type RouteParamName<Param extends string> = Param extends `...${infer Name}` ? Name : Param extends `[...${infer Name}` ? Name : Param;
+type RouteParams<Path extends string> = Path extends `${string}[${infer Param}]${infer Rest}` ? RouteParamName<Param> | RouteParams<Rest> : never;
+type RouteUrlObject<Routes extends string> = {
+    [Path in Routes]: Omit<UrlObject, 'pathname' | 'query'> & {
+        pathname: Path;
+        query: [RouteParams<Path>] extends [never] ? UrlObject['query'] : Record<RouteParams<Path>, string | number | readonly (string | number)[]> & Record<string, unknown>;
+    };
+}[Routes];
+export type NavigationHref<Routes extends string = string> = string extends Routes ? Href : Routes | `${Routes}?${string}` | `${Routes}#${string}` | `https://${string}` | `http://${string}` | `mailto:${string}` | `#${string}` | RouteUrlObject<Routes>;
+export interface GetPathnameOptions<Routes extends string = string> {
+    href: NavigationHref<Routes>;
     locale?: string;
+    domain?: string;
 }
-export interface Navigation<Locales extends readonly string[] = readonly string[]> {
+export interface Navigation<Locales extends readonly string[] = readonly string[], Routes extends string = string> {
     Link: React.ForwardRefExoticComponent<Omit<React.AnchorHTMLAttributes<HTMLAnchorElement>, 'href'> & {
-        href: Href;
-        locale?: Locales[number] | string;
+        href: NavigationHref<Routes>;
+        locale?: Locales[number];
         replace?: boolean;
         scroll?: boolean;
         prefetch?: boolean;
@@ -84,30 +110,32 @@ export interface Navigation<Locales extends readonly string[] = readonly string[
     } & React.RefAttributes<HTMLAnchorElement>>;
     usePathname: () => string;
     useRouter: () => {
-        push(href: Href, options?: {
-            locale?: Locales[number] | string;
+        push(href: NavigationHref<Routes>, options?: {
+            locale?: Locales[number];
             scroll?: boolean;
         }): void;
-        replace(href: Href, options?: {
-            locale?: Locales[number] | string;
+        replace(href: NavigationHref<Routes>, options?: {
+            locale?: Locales[number];
             scroll?: boolean;
         }): void;
-        prefetch(href: Href, options?: {
-            locale?: Locales[number] | string;
+        prefetch(href: NavigationHref<Routes>, options?: {
+            locale?: Locales[number];
         }): void;
         back(): void;
         forward(): void;
         refresh(): void;
     };
-    redirect(url: string, options?: {
-        locale?: Locales[number] | string;
+    redirect(url: Extract<NavigationHref<Routes>, string>, options?: {
+        locale?: Locales[number];
         type?: 'push' | 'replace';
     }): never;
-    permanentRedirect(url: string, options?: {
-        locale?: Locales[number] | string;
+    permanentRedirect(url: Extract<NavigationHref<Routes>, string>, options?: {
+        locale?: Locales[number];
         type?: 'push' | 'replace';
     }): never;
-    getPathname(options: GetPathnameOptions): string;
+    getPathname(options: Omit<GetPathnameOptions<Routes>, 'locale'> & {
+        locale?: Locales[number];
+    }): string;
 }
 export interface RequestConfigParams {
     locale?: string;
@@ -142,6 +170,12 @@ export interface I18nMiddlewareOptions {
     cookieName?: string;
     headerName?: string;
     pathnames?: Pathnames<any>;
+    domains?: readonly {
+        domain: string;
+        defaultLocale: string;
+        locales?: readonly string[];
+    }[];
+    basePath?: string;
 }
 export interface I18nConfig {
     locales: readonly string[];
@@ -150,5 +184,11 @@ export interface I18nConfig {
     cookieName?: string;
     headerName?: string;
     pathnames?: Pathnames<any>;
+    domains?: readonly {
+        domain: string;
+        defaultLocale: string;
+        locales?: readonly string[];
+    }[];
+    basePath?: string;
     loadMessages?: (locale: string) => Promise<string | readonly string[]> | string | readonly string[];
 }

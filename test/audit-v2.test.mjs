@@ -78,7 +78,7 @@ button-submit = Submit
   assert.ok(dts.includes("'button.submit.aria-label'"));
 });
 
-test('AUDIT-03: createNextFluentPlugin populates both turbopack and experimental.turbo', () => {
+test('AUDIT-03: createNextFluentPlugin uses project-relative Turbopack alias', () => {
   const plugin = createNextFluentPlugin('./src/i18n/request.ts');
   const result = plugin({
     webpack(config) {
@@ -87,11 +87,8 @@ test('AUDIT-03: createNextFluentPlugin populates both turbopack and experimental
   });
 
   assert.ok(result.turbopack?.resolveAlias?.['next-fluent/config']);
-  assert.ok(result.experimental?.turbo?.resolveAlias?.['next-fluent/config']);
-  assert.equal(
-    result.turbopack.resolveAlias['next-fluent/config'],
-    result.experimental.turbo.resolveAlias['next-fluent/config']
-  );
+  assert.equal(result.turbopack.resolveAlias['next-fluent/config'], './src/i18n/request.ts');
+  assert.equal(result.experimental?.turbo, undefined);
 });
 
 test('AUDIT-04: createTranslator formats message attributes via dot notation', () => {

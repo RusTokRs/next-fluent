@@ -53,16 +53,23 @@ export function computeSourceHash(source: string | readonly string[]): string {
   return `${source.length}:${totalLen}:${(combinedHash >>> 0).toString(16).padStart(8, '0')}`;
 }
 
-const resourceCache = new LRUCache<FluentResource>(MAX_RESOURCE_CACHE);
-const bundleCache = new LRUCache<FluentBundle>(MAX_BUNDLE_CACHE);
+const resourceCache = new LRUCache<{ source: string; resource: FluentResource }>(MAX_RESOURCE_CACHE);
+const bundleCache = new LRUCache<{
+  source: string | readonly string[];
+  bundle: FluentBundle;
+}>(MAX_BUNDLE_CACHE);
+
+function sameSource(a: string | readonly string[], b: string | readonly string[]): boolean {
+  if (typeof a === 'string' || typeof b === 'string') return a === b;
+  return a.length === b.length && a.every((item, index) => item === b[index]);
+}
 
 export function getOrCreateResource(source: string): FluentResource {
   const hash = `${source.length}:${fnv1a32(source)}`;
-  let res = resourceCache.get(hash);
-  if (!res) {
-    res = new FluentResource(source);
-    resourceCache.set(hash, res);
-  }
+  const cached = resourceCache.get(hash);
+  if (cached?.source === source) return cached.resource;
+  const res = new FluentResource(source);
+  resourceCache.set(hash, { source, resource: res });
   return res;
 }
 
@@ -79,8 +86,8 @@ export function getCachedFluentBundle(
 
   if (!hasCustomFunctions && !options.disableCache) {
     const cached = bundleCache.get(cacheKey);
-    if (cached) {
-      return cached;
+    if (cached && sameSource(cached.source, ftlSource)) {
+      return cached.bundle;
     }
   }
 
@@ -106,7 +113,10 @@ export function getCachedFluentBundle(
   }
 
   if (!hasCustomFunctions && !options.disableCache) {
-    bundleCache.set(cacheKey, bundle);
+    bundleCache.set(cacheKey, {
+      source: typeof ftlSource === 'string' ? ftlSource : [...ftlSource],
+      bundle,
+    });
   }
 
   return bundle;

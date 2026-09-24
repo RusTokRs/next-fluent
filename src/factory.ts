@@ -8,7 +8,7 @@ import type {
 import { createI18nMiddleware, type NextMiddlewareRequestLike } from './middleware';
 import { createFormatter } from './formatter';
 import { createNavigation } from './navigation';
-import { forLocale, getLocale, setRequestConfig } from './server';
+import { forLocale, getLocale } from './server';
 import { validateI18nConfig } from './utils';
 
 export interface I18nRuntime {
@@ -31,17 +31,16 @@ export function createI18n(config: I18nConfig): I18nRuntime {
 
   const middlewareFn = createI18nMiddleware(config);
 
-  if (config.loadMessages) {
-    const loader = config.loadMessages;
-    setRequestConfig(async ({ locale }) => {
+  const requestConfig = config.loadMessages
+    ? async ({ locale }: { locale?: string }) => {
       const target = locale ?? config.defaultLocale;
-      const msgs = await loader(target);
+      const msgs = await config.loadMessages!(target);
       return {
         locale: target,
         messages: msgs,
       };
-    });
-  }
+    }
+    : undefined;
 
   const serverOptions = {
     locales: config.locales,
@@ -55,6 +54,8 @@ export function createI18n(config: I18nConfig): I18nRuntime {
     defaultLocale: config.defaultLocale,
     localePrefix: config.localePrefix,
     pathnames: config.pathnames,
+    domains: config.domains,
+    basePath: config.basePath,
   });
 
   return {
@@ -65,13 +66,17 @@ export function createI18n(config: I18nConfig): I18nRuntime {
     getTranslations: async (options?: string | GetTranslationsOptions) => {
       const explicitLocale = typeof options === 'object' && options ? options.locale : undefined;
       const locale = explicitLocale ?? (await getLocale(serverOptions));
-      return forLocale(locale, options);
+       return forLocale(locale, typeof options === 'string'
+         ? { namespace: options, requestConfig }
+         : { ...options, requestConfig });
     },
     forLocale: (
       locale: string,
       options?: string | { namespace?: string; fallbackLocale?: string; fallbackLocales?: readonly string[]; debug?: boolean }
     ) => {
-      return forLocale(locale, options);
+      return forLocale(locale, typeof options === 'string'
+        ? { namespace: options, requestConfig }
+        : { ...options, requestConfig });
     },
     getMessages: async (locale?: string) => {
       const targetLocale = locale ?? (await getLocale(serverOptions));

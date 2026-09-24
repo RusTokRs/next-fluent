@@ -174,6 +174,174 @@ function buildKeyCandidates(namespace, key, options) {
   return candidates;
 }
 
+// src/route-engine.ts
+function segments(path2) {
+  return path2.split("/").filter(Boolean);
+}
+function parameter(segment) {
+  let match = /^\[\[\.\.\.([A-Za-z][A-Za-z\d_]*)\]\]$/.exec(segment);
+  if (match) return { name: match[1], kind: "optional" };
+  match = /^\[\.\.\.([A-Za-z][A-Za-z\d_]*)\]$/.exec(segment);
+  if (match) return { name: match[1], kind: "many" };
+  match = /^\[([A-Za-z][A-Za-z\d_]*)\]$/.exec(segment);
+  return match ? { name: match[1], kind: "one" } : null;
+}
+function decode(segment) {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+function matchTemplate(template, pathname) {
+  const pattern = segments(template);
+  const actual = segments(pathname);
+  const params = {};
+  let index = 0;
+  for (let i = 0; i < pattern.length; i++) {
+    const part = pattern[i];
+    const variable = parameter(part);
+    if (variable?.kind === "many" || variable?.kind === "optional") {
+      if (i !== pattern.length - 1) return null;
+      const rest = actual.slice(index).map(decode);
+      if (variable.kind === "many" && rest.length === 0) return null;
+      params[variable.name] = rest;
+      index = actual.length;
+      break;
+    }
+    if (index >= actual.length) return null;
+    if (variable) params[variable.name] = decode(actual[index]);
+    else if (decode(part) !== decode(actual[index])) return null;
+    index++;
+  }
+  return index === actual.length ? params : null;
+}
+function specificity(template) {
+  return segments(template).reduce((score, part) => score + (parameter(part) ? 0 : 10), 0);
+}
+function externalTemplate(internal, locale, pathnames) {
+  const mapped = pathnames?.[internal];
+  return typeof mapped === "string" ? mapped : mapped?.[locale] ?? internal;
+}
+function findInternalPath(pathname, locale, pathnames) {
+  if (!pathnames) return null;
+  const entries = Object.keys(pathnames).sort((a, b) => specificity(b) - specificity(a));
+  for (const internal of entries) {
+    const external = externalTemplate(internal, locale, pathnames);
+    const params = matchTemplate(external, pathname);
+    if (params) return { template: internal, params };
+  }
+  for (const internal of entries) {
+    const params = matchTemplate(internal, pathname);
+    if (params) return { template: internal, params };
+  }
+  return null;
+}
+function renderTemplate(template, params) {
+  const result = [];
+  for (const part of segments(template)) {
+    const variable = parameter(part);
+    if (!variable) {
+      result.push(part);
+      continue;
+    }
+    const value = params[variable.name];
+    if (value === void 0) {
+      if (variable.kind === "optional") continue;
+      throw new Error(`[next-fluent] Missing route parameter: ${variable.name}`);
+    }
+    if (variable.kind === "one") {
+      if (Array.isArray(value)) throw new Error(`[next-fluent] Expected one route parameter: ${variable.name}`);
+      result.push(encodeURIComponent(value));
+    } else {
+      const list = Array.isArray(value) ? value : [value];
+      if (variable.kind === "many" && list.length === 0) {
+        throw new Error(`[next-fluent] Missing route parameter: ${variable.name}`);
+      }
+      result.push(...list.map(encodeURIComponent));
+    }
+  }
+  return `/${result.join("/")}`;
+}
+function localizePath(pathname, sourceLocale, targetLocale, pathnames, query, locales) {
+  const match = findInternalPath(pathname, sourceLocale, pathnames) ?? findInternalPath(pathname, targetLocale, pathnames) ?? locales?.map((locale) => findInternalPath(pathname, locale, pathnames)).find(Boolean);
+  if (!match) return { pathname, consumed: [] };
+  const params = { ...match.params };
+  for (const [name, value] of Object.entries(query ?? {})) {
+    if (value !== void 0 && value !== null) {
+      params[name] = Array.isArray(value) ? value.map(String) : String(value);
+    }
+  }
+  const target = externalTemplate(match.template, targetLocale, pathnames);
+  return { pathname: renderTemplate(target, params), consumed: Object.keys(match.params).concat(
+    segments(target).flatMap((part) => {
+      const value = parameter(part);
+      return value ? [value.name] : [];
+    })
+  ) };
+}
+function rewriteLocalizedPath(pathname, locale, pathnames) {
+  const match = findInternalPath(pathname, locale, pathnames);
+  if (!match) return pathname;
+  const result = renderTemplate(match.template, match.params);
+  return pathname.length > 1 && pathname.endsWith("/") && !result.endsWith("/") ? `${result}/` : result;
+}
+function validatePathnames(locales, pathnames) {
+  if (!pathnames) return;
+  for (const locale of locales) {
+    const seen = /* @__PURE__ */ new Set();
+    for (const internal of Object.keys(pathnames)) {
+      const external = externalTemplate(internal, locale, pathnames);
+      if (!internal.startsWith("/") || !external.startsWith("/") || external.startsWith("//")) {
+        throw new Error("[next-fluent] Pathnames must be internal absolute paths.");
+      }
+      const key = external.toLowerCase();
+      if (seen.has(key)) throw new Error(`[next-fluent] Duplicate pathname for ${locale}: ${external}`);
+      seen.add(key);
+      const internalParams = segments(internal).flatMap((part) => {
+        const value = parameter(part);
+        return value ? [value.name] : [];
+      }).sort();
+      const externalParams = segments(external).flatMap((part) => {
+        const value = parameter(part);
+        return value ? [value.name] : [];
+      }).sort();
+      if (internalParams.join() !== externalParams.join()) {
+        throw new Error(`[next-fluent] Route parameters differ for ${internal} (${locale}).`);
+      }
+    }
+  }
+}
+function validateRouteEnvironment(locales, domains, basePath) {
+  if (basePath !== void 0 && (basePath !== "" && (!basePath.startsWith("/") || basePath.startsWith("//") || basePath.endsWith("/") || /[?#\\]/.test(basePath)))) {
+    throw new Error("[next-fluent] basePath must be an absolute path without a trailing slash.");
+  }
+  const seen = /* @__PURE__ */ new Set();
+  for (const entry of domains ?? []) {
+    let url;
+    try {
+      url = new URL(`https://${entry.domain}`);
+    } catch {
+      throw new Error(`[next-fluent] Invalid domain: ${entry.domain}`);
+    }
+    if (url.host !== entry.domain || url.pathname !== "/" || !url.hostname) {
+      throw new Error(`[next-fluent] Invalid domain: ${entry.domain}`);
+    }
+    const name = entry.domain.toLowerCase();
+    if (seen.has(name)) throw new Error(`[next-fluent] Duplicate domain: ${entry.domain}`);
+    seen.add(name);
+    const domainLocales = entry.locales ?? [entry.defaultLocale];
+    if (!matchSupportedLocale(entry.defaultLocale, domainLocales)) {
+      throw new Error(`[next-fluent] Domain defaultLocale must be in its locales: ${entry.domain}`);
+    }
+    for (const locale of domainLocales) {
+      if (!matchSupportedLocale(locale, locales)) {
+        throw new Error(`[next-fluent] Unsupported domain locale: ${locale}`);
+      }
+    }
+  }
+}
+
 // src/routing.ts
 function defineRouting(config) {
   validateI18nConfig({
@@ -183,6 +351,8 @@ function defineRouting(config) {
     cookieName: config.cookieName,
     headerName: config.headerName
   });
+  validatePathnames(config.locales, config.pathnames);
+  validateRouteEnvironment(config.locales, config.domains, config.basePath);
   return Object.freeze({
     ...config,
     localePrefix: config.localePrefix ?? "always",
@@ -193,9 +363,25 @@ function defineRouting(config) {
 
 // src/plugin.ts
 import path from "node:path";
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+var require2 = createRequire(import.meta.url);
+function needsLegacyTurboConfig() {
+  try {
+    const packagePath = require2.resolve("next/package.json");
+    const version = JSON.parse(readFileSync(packagePath, "utf8")).version;
+    const [major, minor] = version.split(".").map(Number);
+    return major < 15 || major === 15 && minor < 3;
+  } catch {
+    return false;
+  }
+}
 function createNextFluentPlugin(i18nRequestPath = "./src/i18n/request.ts") {
   return function withNextFluent(nextConfig = {}) {
     const resolvedPath = path.resolve(process.cwd(), i18nRequestPath);
+    const relativePath = path.relative(process.cwd(), resolvedPath).split(path.sep).join("/");
+    const turbopackPath = relativePath.startsWith(".") ? relativePath : `./${relativePath}`;
+    const legacyTurbo = needsLegacyTurboConfig();
     return {
       ...nextConfig,
       webpack(config, context) {
@@ -207,21 +393,23 @@ function createNextFluentPlugin(i18nRequestPath = "./src/i18n/request.ts") {
         }
         return config;
       },
-      experimental: {
-        ...nextConfig.experimental,
-        turbo: {
-          ...nextConfig.experimental?.turbo,
-          resolveAlias: {
-            ...nextConfig.experimental?.turbo?.resolveAlias,
-            "next-fluent/config": resolvedPath
+      ...legacyTurbo ? {
+        experimental: {
+          ...nextConfig.experimental,
+          turbo: {
+            ...nextConfig.experimental?.turbo,
+            resolveAlias: {
+              ...nextConfig.experimental?.turbo?.resolveAlias,
+              "next-fluent/config": turbopackPath
+            }
           }
         }
-      },
+      } : {},
       turbopack: {
         ...nextConfig.turbopack,
         resolveAlias: {
           ...nextConfig.turbopack?.resolveAlias,
-          "next-fluent/config": resolvedPath
+          "next-fluent/config": turbopackPath
         }
       }
     };
@@ -231,63 +419,50 @@ function createNextFluentPlugin(i18nRequestPath = "./src/i18n/request.ts") {
 // src/middleware.ts
 function createI18nMiddleware(options) {
   validateI18nConfig(options);
+  validatePathnames(options.locales, options.pathnames);
+  validateRouteEnvironment(options.locales, options.domains, options.basePath);
   const {
-    locales,
+    locales: allLocales,
     defaultLocale: rawDefaultLocale,
     localePrefix = "always",
     cookieName = "NEXT_LOCALE",
-    headerName = "x-next-locale"
+    headerName = "x-next-locale",
+    pathnames,
+    domains,
+    basePath = ""
   } = options;
-  const defaultLocale = matchSupportedLocale(rawDefaultLocale, locales) ?? rawDefaultLocale;
+  const configuredDefaultLocale = matchSupportedLocale(rawDefaultLocale, allLocales) ?? rawDefaultLocale;
   return async function middleware(request) {
-    let NextResponse;
-    try {
-      const nextServer = await import("next/server.js").catch(() => import("next/server"));
-      NextResponse = nextServer.NextResponse;
-    } catch {
-      NextResponse = class MockNextResponse {
-        static next(opts) {
-          const headers = new Headers();
-          const reqHeaders = opts?.request?.headers ?? new Headers();
-          return {
-            status: 200,
-            headers,
-            request: { headers: reqHeaders },
-            cookies: {
-              set: (name, val) => headers.append("Set-Cookie", `${name}=${val}; Path=/`)
-            }
-          };
-        }
-        static rewrite(url, opts) {
-          const headers = new Headers();
-          const reqHeaders = opts?.request?.headers ?? new Headers();
-          return {
-            status: 200,
-            headers,
-            rewriteUrl: String(url),
-            request: { headers: reqHeaders },
-            cookies: {
-              set: (name, val) => headers.append("Set-Cookie", `${name}=${val}; Path=/`)
-            }
-          };
-        }
-        static redirect(url) {
-          const headers = new Headers();
-          headers.set("location", String(url));
-          return {
-            status: 307,
-            headers,
-            cookies: {
-              set: (name, val) => headers.append("Set-Cookie", `${name}=${val}; Path=/`)
-            }
-          };
-        }
-      };
+    const { NextResponse } = await import("next/server.js").catch(() => import("next/server"));
+    const { pathname: rawPathname, search } = request.nextUrl;
+    const requestOrigin = new URL(request.url);
+    const directHost = request.headers.get("host");
+    const forwardedHost = request.headers.get("x-forwarded-host");
+    const trustedForwardedHost = forwardedHost && (forwardedHost.toLowerCase() === directHost?.toLowerCase() || domains?.some((item) => item.domain.toLowerCase() === forwardedHost.toLowerCase()) || /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(forwardedHost));
+    const rawHost = trustedForwardedHost ? forwardedHost : directHost;
+    if (rawHost && /^[^\s/?#@\\]+$/.test(rawHost)) {
+      try {
+        const parsedHost = new URL(`${requestOrigin.protocol}//${rawHost}`);
+        if (parsedHost.host === rawHost.toLowerCase()) requestOrigin.host = parsedHost.host;
+      } catch {
+      }
     }
-    const { pathname, search } = request.nextUrl;
-    const segments = pathname.split("/").filter(Boolean);
-    const firstSegment = segments[0];
+    const requestHost = requestOrigin.host.toLowerCase();
+    const requestUrl = (path2) => new URL(path2, requestOrigin);
+    const domain = domains?.find((item) => item.domain.toLowerCase() === requestHost);
+    const locales = domain ? domain.locales ?? [domain.defaultLocale] : allLocales;
+    const defaultLocale = matchSupportedLocale(
+      domain?.defaultLocale ?? configuredDefaultLocale,
+      locales
+    ) ?? configuredDefaultLocale;
+    const hasBasePath = Boolean(basePath && (rawPathname === basePath || rawPathname.startsWith(`${basePath}/`)));
+    const pathname = hasBasePath ? rawPathname.slice(basePath.length) || "/" : rawPathname;
+    const withBasePath = (path2) => hasBasePath ? `${basePath}${path2}` : path2;
+    const segments2 = pathname.split("/").filter(Boolean);
+    const firstSegment = segments2[0];
     const matchedPrefix = matchSupportedLocale(firstSegment, locales);
+    const pathnameWithoutPrefix = matchedPrefix && firstSegment ? pathname.slice(firstSegment.length + 1) || "/" : pathname;
+    const internalPath = (locale, externalPath) => rewriteLocalizedPath(externalPath, locale, pathnames);
     const cookieLocale = matchSupportedLocale(
       request.cookies.get(cookieName)?.value || (cookieName !== "NEXT_LOCALE" ? request.cookies.get("NEXT_LOCALE")?.value : void 0),
       locales
@@ -309,14 +484,15 @@ function createI18nMiddleware(options) {
         }
       }
       requestHeaders.set(headerName, effectiveLocale);
-      const response = rewritePath ? NextResponse.rewrite(new URL(rewritePath, request.url), {
+      if (rewritePath) {
+        requestHeaders.set("x-next-fluent-rewrite", requestUrl(withBasePath(rewritePath)).pathname);
+      }
+      const response = rewritePath ? NextResponse.rewrite(requestUrl(withBasePath(rewritePath)), {
         request: { headers: requestHeaders }
       }) : NextResponse.next({
         request: { headers: requestHeaders }
       });
-      if (!response.request) {
-        response.request = { headers: requestHeaders };
-      }
+      response.request ??= { headers: requestHeaders };
       if (response.headers?.set) {
         response.headers.set(headerName, effectiveLocale);
       }
@@ -343,36 +519,56 @@ function createI18nMiddleware(options) {
       }
       return response;
     };
+    const globalPrefix = matchSupportedLocale(firstSegment, allLocales);
+    if (domain && globalPrefix && !matchSupportedLocale(globalPrefix, locales)) {
+      const targetDomain = domains?.find(
+        (item) => (item.locales ?? [item.defaultLocale]).some((locale) => matchSupportedLocale(globalPrefix, [locale]))
+      );
+      if (targetDomain) {
+        const targetUrl = new URL(requestOrigin);
+        targetUrl.host = targetDomain.domain;
+        return createRedirect(targetUrl, globalPrefix);
+      }
+    }
+    if (request.headers.get("x-next-fluent-rewrite") === rawPathname && matchedPrefix) {
+      return createSuccessResponse(matchedPrefix);
+    }
     if (localePrefix === "never") {
       if (matchedPrefix) {
-        const rest = segments.slice(1).join("/");
+        const rest = segments2.slice(1).join("/");
         const remainingPath = rest ? `/${rest}${search}` : `/${search}`;
-        return createRedirect(new URL(remainingPath, request.url), matchedPrefix);
+        return createRedirect(requestUrl(withBasePath(remainingPath)), matchedPrefix);
       }
-      const rewritePath = `/${preferredLocale}${pathname === "/" ? "" : pathname}${search}`;
+      const route = internalPath(preferredLocale, pathname);
+      const rewritePath = `/${preferredLocale}${route === "/" ? "" : route}${search}`;
       return createSuccessResponse(preferredLocale, rewritePath);
     }
     if (localePrefix === "as-needed") {
       if (matchedPrefix === defaultLocale) {
-        const rest = segments.slice(1).join("/");
+        const rest = segments2.slice(1).join("/");
         const remainingPath = rest ? `/${rest}${search}` : `/${search}`;
-        return createRedirect(new URL(remainingPath, request.url), defaultLocale);
+        return createRedirect(requestUrl(withBasePath(remainingPath)), defaultLocale);
       }
       if (matchedPrefix) {
-        return createSuccessResponse(matchedPrefix);
+        const route = internalPath(matchedPrefix, pathnameWithoutPrefix);
+        const rewritePath = route === pathnameWithoutPrefix ? void 0 : `/${matchedPrefix}${route === "/" ? "" : route}${search}`;
+        return createSuccessResponse(matchedPrefix, rewritePath);
       }
       if (preferredLocale === defaultLocale) {
-        const rewritePath = `/${defaultLocale}${pathname === "/" ? "" : pathname}${search}`;
+        const route = internalPath(defaultLocale, pathname);
+        const rewritePath = `/${defaultLocale}${route === "/" ? "" : route}${search}`;
         return createSuccessResponse(defaultLocale, rewritePath);
       }
       const targetPath2 = `/${preferredLocale}${pathname === "/" ? "" : pathname}${search}`;
-      return createRedirect(new URL(targetPath2, request.url), preferredLocale);
+      return createRedirect(requestUrl(withBasePath(targetPath2)), preferredLocale);
     }
     if (matchedPrefix) {
-      return createSuccessResponse(matchedPrefix);
+      const route = internalPath(matchedPrefix, pathnameWithoutPrefix);
+      const rewritePath = route === pathnameWithoutPrefix ? void 0 : `/${matchedPrefix}${route === "/" ? "" : route}${search}`;
+      return createSuccessResponse(matchedPrefix, rewritePath);
     }
     const targetPath = `/${preferredLocale}${pathname === "/" ? "" : pathname}${search}`;
-    return createRedirect(new URL(targetPath, request.url), preferredLocale);
+    return createRedirect(requestUrl(withBasePath(targetPath)), preferredLocale);
   };
 }
 var createMiddleware = createI18nMiddleware;
@@ -766,13 +962,16 @@ function computeSourceHash(source) {
 }
 var resourceCache = new LRUCache(MAX_RESOURCE_CACHE);
 var bundleCache = new LRUCache(MAX_BUNDLE_CACHE);
+function sameSource(a, b) {
+  if (typeof a === "string" || typeof b === "string") return a === b;
+  return a.length === b.length && a.every((item, index) => item === b[index]);
+}
 function getOrCreateResource(source) {
   const hash = `${source.length}:${fnv1a32(source)}`;
-  let res = resourceCache.get(hash);
-  if (!res) {
-    res = new FluentResource(source);
-    resourceCache.set(hash, res);
-  }
+  const cached = resourceCache.get(hash);
+  if (cached?.source === source) return cached.resource;
+  const res = new FluentResource(source);
+  resourceCache.set(hash, { source, resource: res });
   return res;
 }
 function getCachedFluentBundle(locale, ftlSource, options = {}) {
@@ -782,8 +981,8 @@ function getCachedFluentBundle(locale, ftlSource, options = {}) {
   const cacheKey = `${locale}:iso=${useIsolating}:${sourceHash}`;
   if (!hasCustomFunctions && !options.disableCache) {
     const cached = bundleCache.get(cacheKey);
-    if (cached) {
-      return cached;
+    if (cached && sameSource(cached.source, ftlSource)) {
+      return cached.bundle;
     }
   }
   const defaultFunctions = createDefaultFunctions(locale);
@@ -804,7 +1003,10 @@ function getCachedFluentBundle(locale, ftlSource, options = {}) {
     }
   }
   if (!hasCustomFunctions && !options.disableCache) {
-    bundleCache.set(cacheKey, bundle);
+    bundleCache.set(cacheKey, {
+      source: typeof ftlSource === "string" ? ftlSource : [...ftlSource],
+      bundle
+    });
   }
   return bundle;
 }
@@ -1234,6 +1436,9 @@ function formatUrlObject(urlObj) {
   if (!pathname.startsWith("/")) {
     pathname = `/${pathname}`;
   }
+  if (pathname.startsWith("//") || pathname.includes("\\") || /[\u0000-\u001f]/.test(pathname)) {
+    throw new Error("[next-fluent] URL object pathname must be an internal path.");
+  }
   const params = new URLSearchParams();
   if (embeddedSearch) {
     const rawEmbedded = embeddedSearch.startsWith("?") ? embeddedSearch.slice(1) : embeddedSearch;
@@ -1273,10 +1478,11 @@ function formatUrlObject(urlObj) {
 }
 function resolveLocalizedPathname(options, config) {
   const { href, locale: explicitLocale } = options;
-  const { locales, defaultLocale, localePrefix = "always", pathnames } = config;
+  const { locales, defaultLocale, localePrefix = "always", pathnames, domains, basePath = "" } = config;
   let rawPathname = "";
   let search = "";
   let hash = "";
+  let objectQuery;
   if (typeof href === "string") {
     if (isExternalUrl(href) || href.startsWith("#")) {
       return href;
@@ -1295,6 +1501,7 @@ function resolveLocalizedPathname(options, config) {
     rawPathname = parts.pathname;
     search = parts.search;
     hash = parts.hash;
+    objectQuery = href.query && typeof href.query === "object" ? href.query : void 0;
   } else {
     return "/";
   }
@@ -1302,26 +1509,38 @@ function resolveLocalizedPathname(options, config) {
   if (!rawPathname.startsWith("/")) {
     rawPathname = `/${rawPathname}`;
   }
-  const segments = rawPathname.split("/").filter(Boolean);
+  if (basePath && (rawPathname === basePath || rawPathname.startsWith(`${basePath}/`))) {
+    rawPathname = rawPathname.slice(basePath.length) || "/";
+  }
+  const segments2 = rawPathname.split("/").filter(Boolean);
   let cleanPathname = rawPathname;
-  if (segments.length > 0) {
-    const first = segments[0];
-    if (matchSupportedLocale(first, locales)) {
-      const rest = segments.slice(1).join("/");
+  let sourceLocale;
+  if (segments2.length > 0) {
+    const first = segments2[0];
+    sourceLocale = matchSupportedLocale(first, locales);
+    if (sourceLocale) {
+      const rest = segments2.slice(1).join("/");
       cleanPathname = rest ? `/${rest}` : "/";
     }
   }
   const hasTrailingSlash = rawPathname.length > 1 && rawPathname.endsWith("/") && cleanPathname !== "/";
   const lookupKey = cleanPathname.length > 1 && cleanPathname.endsWith("/") ? cleanPathname.slice(0, -1) : cleanPathname;
-  const resolvedLocale = explicitLocale ? matchSupportedLocale(explicitLocale, locales) ?? defaultLocale : defaultLocale;
-  let mappedPathname = cleanPathname;
-  const pathnamesTarget = pathnames?.[lookupKey] ?? pathnames?.[cleanPathname];
-  if (pathnamesTarget) {
-    if (typeof pathnamesTarget === "string") {
-      mappedPathname = pathnamesTarget;
-    } else if (typeof pathnamesTarget === "object") {
-      mappedPathname = pathnamesTarget[resolvedLocale] ?? lookupKey;
-    }
+  const resolvedDefaultLocale = matchSupportedLocale(defaultLocale, locales) ?? defaultLocale;
+  const resolvedLocale = explicitLocale ? matchSupportedLocale(explicitLocale, locales) ?? resolvedDefaultLocale : resolvedDefaultLocale;
+  const localized = localizePath(
+    lookupKey,
+    sourceLocale ?? resolvedLocale,
+    resolvedLocale,
+    pathnames,
+    objectQuery,
+    locales
+  );
+  let mappedPathname = localized.pathname;
+  if (localized.consumed.length && search) {
+    const params = new URLSearchParams(search.slice(1));
+    for (const name of localized.consumed) params.delete(name);
+    const remaining = params.toString();
+    search = remaining ? `?${remaining}` : "";
   }
   if (hasTrailingSlash && mappedPathname !== "/" && !mappedPathname.endsWith("/")) {
     mappedPathname = `${mappedPathname}/`;
@@ -1330,14 +1549,22 @@ function resolveLocalizedPathname(options, config) {
   if (localePrefix === "never") {
     prefix = "";
   } else if (localePrefix === "as-needed") {
-    if (resolvedLocale !== defaultLocale) {
+    if (resolvedLocale !== resolvedDefaultLocale) {
       prefix = `/${resolvedLocale}`;
     }
   } else {
     prefix = `/${resolvedLocale}`;
   }
   const finalPath = prefix ? mappedPathname === "/" ? prefix : `${prefix}${mappedPathname.startsWith("/") ? mappedPathname : `/${mappedPathname}`}` : mappedPathname;
-  return `${finalPath}${search}${hash}`;
+  const withBasePath = `${basePath}${finalPath === "/" && basePath ? "" : finalPath}${search}${hash}`;
+  const targetDomain = domains?.find((entry) => {
+    const supported = entry.locales ?? [entry.defaultLocale];
+    return supported.some((locale) => matchSupportedLocale(resolvedLocale, [locale]));
+  });
+  if (targetDomain && targetDomain.domain.toLowerCase() !== options.domain?.toLowerCase()) {
+    return `https://${targetDomain.domain}${withBasePath}`;
+  }
+  return withBasePath;
 }
 function createNavigation(config) {
   validateI18nConfig({
@@ -1345,7 +1572,19 @@ function createNavigation(config) {
     defaultLocale: config.defaultLocale,
     localePrefix: config.localePrefix
   });
-  const { locales, defaultLocale, pathnames } = config;
+  validatePathnames(config.locales, config.pathnames);
+  validateRouteEnvironment(config.locales, config.domains, config.basePath);
+  const { locales, defaultLocale, pathnames, basePath = "" } = config;
+  const switchLocaleHref = (target, explicitLocale) => {
+    if (!explicitLocale || config.localePrefix === "always" || isExternalUrl(target) || target.startsWith("#")) {
+      return target;
+    }
+    const locale = matchSupportedLocale(explicitLocale, locales);
+    if (!locale) return target;
+    const url = new URL(target, "https://next-fluent.invalid");
+    const route = basePath && (url.pathname === basePath || url.pathname.startsWith(`${basePath}/`)) ? url.pathname.slice(basePath.length) || "/" : url.pathname;
+    return `${basePath}/${locale}${route === "/" ? "" : route}${url.search}${url.hash}`;
+  };
   const getPathname = (options) => {
     return resolveLocalizedPathname(options, config);
   };
@@ -1357,15 +1596,20 @@ function createNavigation(config) {
     } catch {
     }
     const targetLocale = propLocale ?? currentLocale ?? defaultLocale;
-    const localizedHref = getPathname({ href, locale: targetLocale });
+    const localizedHref = switchLocaleHref(
+      getPathname({ href, locale: targetLocale }),
+      propLocale
+    );
     return React4.createElement(NextLink, {
       ...rest,
       href: localizedHref,
+      prefetch: propLocale && config.localePrefix !== "always" ? false : rest.prefetch,
       ref
     });
   });
   Link.displayName = "I18nLink";
   function usePathname() {
+    const currentLocale = useLocale();
     let rawPathname = "";
     try {
       rawPathname = useNextPathname() || "";
@@ -1373,27 +1617,20 @@ function createNavigation(config) {
       return "";
     }
     if (!rawPathname) return rawPathname;
-    const segments = rawPathname.split("/").filter(Boolean);
-    if (segments.length === 0) return "/";
+    if (basePath && (rawPathname === basePath || rawPathname.startsWith(`${basePath}/`))) {
+      rawPathname = rawPathname.slice(basePath.length) || "/";
+    }
+    const segments2 = rawPathname.split("/").filter(Boolean);
+    if (segments2.length === 0) return "/";
     let cleanPathname = rawPathname;
-    const first = segments[0];
+    const first = segments2[0];
     if (matchSupportedLocale(first, locales)) {
-      const rest = segments.slice(1).join("/");
+      const rest = segments2.slice(1).join("/");
       cleanPathname = rest ? `/${rest}` : "/";
     }
     const lookupKey = cleanPathname.length > 1 && cleanPathname.endsWith("/") ? cleanPathname.slice(0, -1) : cleanPathname;
-    if (pathnames) {
-      for (const [canonical, mapping] of Object.entries(pathnames)) {
-        if (typeof mapping === "string") {
-          if (mapping === cleanPathname || mapping === lookupKey) return canonical;
-        } else if (mapping && typeof mapping === "object") {
-          for (const localized of Object.values(mapping)) {
-            if (localized === cleanPathname || localized === lookupKey) return canonical;
-          }
-        }
-      }
-    }
-    return cleanPathname;
+    const internal = rewriteLocalizedPath(lookupKey, currentLocale, pathnames);
+    return cleanPathname.endsWith("/") && internal !== "/" ? `${internal}/` : internal;
   }
   function useRouter() {
     let router;
@@ -1425,17 +1662,18 @@ function createNavigation(config) {
         ...router,
         push(href, options) {
           const targetLocale = options?.locale ?? currentLocale ?? defaultLocale;
-          const target = getPathname({ href, locale: targetLocale });
+          const target = switchLocaleHref(getPathname({ href, locale: targetLocale }), options?.locale);
           const routerOptions = options?.scroll !== void 0 ? { scroll: options.scroll } : void 0;
           return router.push(target, routerOptions);
         },
         replace(href, options) {
           const targetLocale = options?.locale ?? currentLocale ?? defaultLocale;
-          const target = getPathname({ href, locale: targetLocale });
+          const target = switchLocaleHref(getPathname({ href, locale: targetLocale }), options?.locale);
           const routerOptions = options?.scroll !== void 0 ? { scroll: options.scroll } : void 0;
           return router.replace(target, routerOptions);
         },
         prefetch(href, options) {
+          if (options?.locale && config.localePrefix !== "always") return;
           const targetLocale = options?.locale ?? currentLocale ?? defaultLocale;
           const target = getPathname({ href, locale: targetLocale });
           return router.prefetch(target);
@@ -1478,9 +1716,11 @@ import { cache } from "react";
 var globalConfigFn = null;
 var globalLocales = ["en"];
 var globalDefaultLocale = "en";
+var globalLocalesConfigured = false;
 function configureServerI18n(config) {
   if (config.locales && config.locales.length > 0) {
     globalLocales = config.locales;
+    globalLocalesConfigured = true;
   }
   if (config.defaultLocale) {
     globalDefaultLocale = config.defaultLocale;
@@ -1491,17 +1731,27 @@ function setRequestConfig(fn) {
   return fn;
 }
 var getRequestStore = cache(() => ({
-  bundles: /* @__PURE__ */ new Map()
+  bundles: /* @__PURE__ */ new Map(),
+  configs: /* @__PURE__ */ new Map()
 }));
-function setRequestLocale(locale) {
-  getRequestStore().locale = locale;
+function setRequestLocale(locale, locales) {
+  const canonical = canonicalizeLocale(locale);
+  if (!canonical) throw new Error("[next-fluent] Invalid request locale.");
+  const allowed = locales ?? (globalLocalesConfigured ? globalLocales : void 0);
+  const matched = allowed ? matchSupportedLocale(canonical, allowed) : canonical;
+  if (!matched) throw new Error(`[next-fluent] Unsupported request locale: ${canonical}`);
+  getRequestStore().locale = matched;
 }
 async function getLocale(options) {
   const store = getRequestStore();
   if (store.locale) {
+    const allowed = options?.locales ?? globalLocales;
+    const matched = matchSupportedLocale(store.locale, allowed);
+    if (matched) return matched;
+    if (options?.locales) throw new Error(`[next-fluent] Unsupported request locale: ${store.locale}`);
     return store.locale;
   }
-  const allowedLocales = options?.locales && options.locales.length > 0 ? options.locales : globalLocales.length > 0 ? globalLocales : void 0;
+  const allowedLocales = options?.locales && options.locales.length > 0 ? options.locales : globalLocalesConfigured && globalLocales.length > 0 ? globalLocales : void 0;
   const defLocale = options?.defaultLocale ?? globalDefaultLocale;
   const headerKey = options?.headerName ?? "x-next-locale";
   const cookieList = options?.cookieNames ?? [
@@ -1520,8 +1770,11 @@ async function getLocale(options) {
         return validHeaderLocale;
       }
     } else if (rawHeader) {
-      store.locale = rawHeader;
-      return rawHeader;
+      const canonical = canonicalizeLocale(rawHeader);
+      if (canonical) {
+        store.locale = canonical;
+        return canonical;
+      }
     }
     for (const cName of cookieList) {
       const cVal = cookieStore.get(cName)?.value;
@@ -1532,8 +1785,11 @@ async function getLocale(options) {
           return validCookieLocale;
         }
       } else if (cVal) {
-        store.locale = cVal;
-        return cVal;
+        const canonical = canonicalizeLocale(cVal);
+        if (canonical) {
+          store.locale = canonical;
+          return canonical;
+        }
       }
     }
     const acceptLang = headerStore.get("accept-language");
@@ -1558,31 +1814,54 @@ async function resolveConfigFn() {
       globalConfigFn = fn;
       return fn;
     }
-  } catch {
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const missingAlias = (/next-fluent\/config/.test(message) || message.includes("./config") && error?.code === "ERR_PACKAGE_PATH_NOT_EXPORTED") && /not found|not exported|not defined|Cannot resolve|Can't resolve/i.test(message);
+    if (!missingAlias) {
+      throw new Error("[next-fluent] Failed to load request configuration.", { cause: error });
+    }
   }
   return null;
 }
-async function getMessages(localeArg) {
-  const locale = localeArg ?? await getLocale();
-  const configFn = await resolveConfigFn();
-  if (configFn) {
-    const res = await configFn({ locale });
-    const store = getRequestStore();
-    if (res.defaultTranslationValues && !store.defaultTranslationValues) {
-      store.defaultTranslationValues = res.defaultTranslationValues;
-    }
-    if (res.timeZone && !store.timeZone) {
-      store.timeZone = res.timeZone;
-    }
-    if (res.now && !store.now) {
-      store.now = res.now;
-    }
-    if (res.functions && !store.functions) {
-      store.functions = res.functions;
-    }
-    return res.messages;
+async function loadConfig(locale, override) {
+  const configFn = override ?? await resolveConfigFn();
+  if (!configFn) return { locale, messages: "" };
+  const store = getRequestStore();
+  let pending = override ? void 0 : store.configs.get(locale);
+  if (!pending) {
+    pending = Promise.resolve().then(() => configFn({ locale }));
+    if (!override) store.configs.set(locale, pending);
   }
-  return "";
+  let result;
+  try {
+    result = await pending;
+  } catch (error) {
+    if (!override) store.configs.delete(locale);
+    throw error;
+  }
+  if (!result || !Array.isArray(result.messages) && typeof result.messages !== "string") {
+    throw new Error("[next-fluent] Request config must return messages as FTL text or an array.");
+  }
+  if (result.locale && !canonicalizeLocale(result.locale)) {
+    throw new Error("[next-fluent] Request config returned an invalid locale.");
+  }
+  store.defaultTranslationValues ??= result.defaultTranslationValues;
+  store.timeZone ??= result.timeZone;
+  store.now ??= result.now;
+  store.functions ??= result.functions;
+  return result;
+}
+async function getRequestConfigSnapshot(localeArg) {
+  const requestedLocale = localeArg ?? await getLocale();
+  const result = await loadConfig(requestedLocale);
+  const store = getRequestStore();
+  const locale = result.locale ?? requestedLocale;
+  const timeZone = result.timeZone ?? store.timeZone ?? getTimeZone();
+  const now = result.now ?? store.now ?? getNow();
+  store.locale = locale;
+  store.timeZone = timeZone;
+  store.now = now;
+  return { ...result, locale, timeZone, now };
 }
 function getTimeZone() {
   const store = getRequestStore();
@@ -1595,10 +1874,12 @@ function getTimeZone() {
 }
 function getNow() {
   const store = getRequestStore();
-  return store.now ?? /* @__PURE__ */ new Date();
+  store.now ??= /* @__PURE__ */ new Date();
+  return store.now;
 }
 async function getFormatter(options) {
   const locale = options?.locale ?? await getLocale();
+  if (!options?.timeZone) await loadConfig(locale);
   const store = getRequestStore();
   const timeZone = options?.timeZone ?? store.timeZone ?? getTimeZone();
   return createFormatter({ locale, timeZone });
@@ -1617,6 +1898,7 @@ async function forLocale(locale, options) {
   let debug = false;
   let strictNamespace;
   let customFunctions;
+  let requestConfig;
   if (typeof options === "string") {
     namespace = options;
   } else if (options) {
@@ -1629,26 +1911,29 @@ async function forLocale(locale, options) {
     debug = options.debug ?? false;
     strictNamespace = options.strictNamespace;
     customFunctions = options.functions;
+    requestConfig = options.requestConfig;
   }
   const store = getRequestStore();
-  if (!defaultTranslationValues && store.defaultTranslationValues) {
-    defaultTranslationValues = store.defaultTranslationValues;
-  }
+  const config = explicitMessages !== void 0 ? void 0 : await loadConfig(locale, requestConfig);
+  const effectiveLocale = config?.locale ?? locale;
+  fallbackLocale ??= config?.fallbackLocale;
+  fallbackMessages ??= config?.fallbackMessages;
+  defaultTranslationValues ??= config?.defaultTranslationValues ?? store.defaultTranslationValues;
   const mergedFunctions = {
+    ...config?.functions,
     ...store.functions,
     ...customFunctions
   };
   let bundle;
-  if (explicitMessages) {
-    bundle = createFluentBundle(locale, explicitMessages, { functions: mergedFunctions });
+  if (explicitMessages !== void 0) {
+    bundle = createFluentBundle(effectiveLocale, explicitMessages, { functions: mergedFunctions });
   } else {
-    const hasCustomFuncs = Boolean(customFunctions && Object.keys(customFunctions).length > 0);
-    let cached = hasCustomFuncs ? void 0 : store.bundles.get(locale);
+    const hasCustomFuncs = Boolean(requestConfig || Object.keys(mergedFunctions).length > 0);
+    let cached = hasCustomFuncs ? void 0 : store.bundles.get(effectiveLocale);
     if (!cached) {
-      const messages = await getMessages(locale);
-      cached = createFluentBundle(locale, messages, { functions: mergedFunctions });
+      cached = createFluentBundle(effectiveLocale, config?.messages ?? "", { functions: mergedFunctions });
       if (!hasCustomFuncs) {
-        store.bundles.set(locale, cached);
+        store.bundles.set(effectiveLocale, cached);
       }
     }
     bundle = cached;
@@ -1661,21 +1946,24 @@ async function forLocale(locale, options) {
     );
   }
   const fallbacksToLoad = /* @__PURE__ */ new Set();
-  if (fallbackLocale && fallbackLocale !== locale && !fallbackMessages) {
+  if (fallbackLocale && fallbackLocale !== effectiveLocale && !fallbackMessages) {
     fallbacksToLoad.add(fallbackLocale);
   }
   if (fallbackLocales) {
     for (const fb of fallbackLocales) {
-      if (fb && fb !== locale) fallbacksToLoad.add(fb);
+      if (fb && fb !== effectiveLocale) fallbacksToLoad.add(fb);
     }
   }
   if (fallbacksToLoad.size > 0) {
     for (const fbLocale of fallbacksToLoad) {
-      const hasCustomFuncs = Boolean(customFunctions && Object.keys(customFunctions).length > 0);
+      const hasCustomFuncs = Boolean(requestConfig || Object.keys(mergedFunctions).length > 0);
       let fbBundle = hasCustomFuncs ? void 0 : store.bundles.get(fbLocale);
       if (!fbBundle) {
-        const fbMessages = await getMessages(fbLocale);
-        fbBundle = createFluentBundle(fbLocale, fbMessages, { functions: mergedFunctions });
+        const fbConfig = await loadConfig(fbLocale, requestConfig);
+        const resolvedFallbackLocale = fbConfig.locale ?? fbLocale;
+        fbBundle = createFluentBundle(resolvedFallbackLocale, fbConfig.messages, {
+          functions: { ...fbConfig.functions, ...mergedFunctions }
+        });
         if (!hasCustomFuncs) {
           store.bundles.set(fbLocale, fbBundle);
         }
@@ -1701,17 +1989,14 @@ async function getTranslations(options) {
 function createI18n(config) {
   validateI18nConfig(config);
   const middlewareFn = createI18nMiddleware(config);
-  if (config.loadMessages) {
-    const loader = config.loadMessages;
-    setRequestConfig(async ({ locale }) => {
-      const target = locale ?? config.defaultLocale;
-      const msgs = await loader(target);
-      return {
-        locale: target,
-        messages: msgs
-      };
-    });
-  }
+  const requestConfig = config.loadMessages ? async ({ locale }) => {
+    const target = locale ?? config.defaultLocale;
+    const msgs = await config.loadMessages(target);
+    return {
+      locale: target,
+      messages: msgs
+    };
+  } : void 0;
   const serverOptions = {
     locales: config.locales,
     defaultLocale: config.defaultLocale,
@@ -1722,7 +2007,9 @@ function createI18n(config) {
     locales: config.locales,
     defaultLocale: config.defaultLocale,
     localePrefix: config.localePrefix,
-    pathnames: config.pathnames
+    pathnames: config.pathnames,
+    domains: config.domains,
+    basePath: config.basePath
   });
   return {
     config,
@@ -1732,10 +2019,10 @@ function createI18n(config) {
     getTranslations: async (options) => {
       const explicitLocale = typeof options === "object" && options ? options.locale : void 0;
       const locale = explicitLocale ?? await getLocale(serverOptions);
-      return forLocale(locale, options);
+      return forLocale(locale, typeof options === "string" ? { namespace: options, requestConfig } : { ...options, requestConfig });
     },
     forLocale: (locale, options) => {
-      return forLocale(locale, options);
+      return forLocale(locale, typeof options === "string" ? { namespace: options, requestConfig } : { ...options, requestConfig });
     },
     getMessages: async (locale) => {
       const targetLocale = locale ?? await getLocale(serverOptions);
@@ -1754,7 +2041,27 @@ function createI18n(config) {
   };
 }
 
+// src/server-provider.ts
+import React5 from "react";
+async function FluentServerProvider({ children, locale }) {
+  const config = await getRequestConfigSnapshot(locale);
+  const defaultTranslationValues = config.defaultTranslationValues ? Object.fromEntries(Object.entries(config.defaultTranslationValues).filter(
+    ([, value]) => typeof value !== "function"
+  )) : void 0;
+  return React5.createElement(FluentProvider, {
+    locale: config.locale,
+    messages: config.messages,
+    fallbackLocale: config.fallbackLocale,
+    fallbackMessages: config.fallbackMessages,
+    defaultTranslationValues,
+    timeZone: config.timeZone,
+    now: config.now,
+    children
+  });
+}
+
 // src/pseudo.ts
+import { parse, serialize, Visitor } from "@fluent/syntax";
 var CHAR_MAP = {
   a: "\xE5",
   b: "\u0180",
@@ -1836,70 +2143,19 @@ function pseudoLocalizeText(text, options = {}) {
   return `${prefix}${transformedParts.join("")}${suffix}`;
 }
 function pseudoLocalizeFtl(ftlContent, options = {}) {
-  const lines = ftlContent.split(/\r?\n/);
-  const resultLines = [];
-  const selectOpenRegex = /^\{\s*[^}\r\n]+->\s*(#.*)?$/;
-  for (const line of lines) {
-    if (line.startsWith("#") || !line.trim()) {
-      resultLines.push(line);
-      continue;
+  const resource = parse(ftlContent, { withSpans: false });
+  class PseudoVisitor extends Visitor {
+    visitTextElement(node) {
+      if (node.value.trim()) node.value = pseudoLocalizeText(node.value, options);
     }
-    const msgMatch = line.match(/^([a-zA-Z][a-zA-Z0-9_-]*\s*=\s*)(.*)$/);
-    if (msgMatch) {
-      const [, prefix, value] = msgMatch;
-      const trimmedValue = value.trim();
-      if (trimmedValue && !selectOpenRegex.test(trimmedValue)) {
-        resultLines.push(`${prefix}${pseudoLocalizeText(value, options)}`);
-      } else {
-        resultLines.push(line);
-      }
-      continue;
-    }
-    const attrMatch = line.match(/^(\s+\.[a-zA-Z][a-zA-Z0-9_-]*\s*=\s*)(.*)$/);
-    if (attrMatch) {
-      const [, prefix, value] = attrMatch;
-      const trimmedValue = value.trim();
-      if (trimmedValue && !selectOpenRegex.test(trimmedValue)) {
-        resultLines.push(`${prefix}${pseudoLocalizeText(value, options)}`);
-      } else {
-        resultLines.push(line);
-      }
-      continue;
-    }
-    const variantMatch = line.match(/^(\s*\*?\[[a-zA-Z0-9_-]+\]\s*)(.*)$/);
-    if (variantMatch) {
-      const [, prefix, value] = variantMatch;
-      if (value.trim()) {
-        resultLines.push(`${prefix}${pseudoLocalizeText(value, options)}`);
-      } else {
-        resultLines.push(line);
-      }
-      continue;
-    }
-    if (/^\s*\}\s*$/.test(line)) {
-      resultLines.push(line);
-      continue;
-    }
-    if (/^\s+/.test(line) && selectOpenRegex.test(line.trim())) {
-      resultLines.push(line);
-      continue;
-    }
-    if (/^\s+/.test(line) && line.trim()) {
-      const indentMatch = line.match(/^(\s+)(.*)$/);
-      if (indentMatch) {
-        const [, indent, text] = indentMatch;
-        resultLines.push(`${indent}${pseudoLocalizeText(text, options)}`);
-        continue;
-      }
-    }
-    resultLines.push(line);
   }
-  return resultLines.join("\n");
+  new PseudoVisitor().visit(resource);
+  return serialize(resource, {});
 }
 
 // src/typegen.ts
-import { parse, Visitor } from "@fluent/syntax";
-var VariableExtractor = class extends Visitor {
+import { parse as parse2, Visitor as Visitor2 } from "@fluent/syntax";
+var VariableExtractor = class extends Visitor2 {
   variables = /* @__PURE__ */ new Set();
   visitVariableReference(node) {
     if (node.id?.name) {
@@ -1909,7 +2165,7 @@ var VariableExtractor = class extends Visitor {
   }
 };
 function extractMessagesFromFtl(ftlContent) {
-  const resource = parse(ftlContent, { withSpans: false });
+  const resource = parse2(ftlContent, { withSpans: false });
   const messages = [];
   for (const entry of resource.body) {
     if (entry.type === "Message") {
@@ -1918,17 +2174,25 @@ function extractMessagesFromFtl(ftlContent) {
       const dotId = id.replace(/-/g, ".");
       const extractor = new VariableExtractor();
       extractor.visit(msg);
+      const valueExtractor = new VariableExtractor();
+      if (msg.value) valueExtractor.visit(msg.value);
       const attributes = [];
+      const attributeVariables = {};
       if (msg.attributes) {
         for (const attr of msg.attributes) {
           attributes.push(attr.id.name);
+          const attrExtractor = new VariableExtractor();
+          attrExtractor.visit(attr.value);
+          attributeVariables[attr.id.name] = Array.from(attrExtractor.variables).sort();
         }
       }
       messages.push({
         id,
         dotId,
         attributes,
-        variables: Array.from(extractor.variables).sort()
+        variables: Array.from(extractor.variables).sort(),
+        valueVariables: Array.from(valueExtractor.variables).sort(),
+        attributeVariables
       });
     }
   }
@@ -1962,15 +2226,16 @@ function generateTypeDeclarations(ftlContents) {
     }
   };
   for (const m of allMessages) {
-    addKeyEntry(m.id, m.variables);
+    addKeyEntry(m.id, m.valueVariables);
     if (m.dotId !== m.id) {
-      addKeyEntry(m.dotId, m.variables);
+      addKeyEntry(m.dotId, m.valueVariables);
     }
     if (m.attributes) {
       for (const attr of m.attributes) {
-        addKeyEntry(`${m.id}.${attr}`, m.variables);
+        const variables = m.attributeVariables[attr] ?? [];
+        addKeyEntry(`${m.id}.${attr}`, variables);
         if (m.dotId !== m.id) {
-          addKeyEntry(`${m.dotId}.${attr}`, m.variables);
+          addKeyEntry(`${m.dotId}.${attr}`, variables);
         }
       }
     }
@@ -2008,6 +2273,7 @@ declare global {
 }
 export {
   FluentProvider,
+  FluentServerProvider,
   FormattedMessage,
   LRUCache,
   buildKeyCandidates,
@@ -2035,6 +2301,7 @@ export {
   getFormatter,
   getLocale,
   getNow,
+  getRequestConfigSnapshot,
   getStaticParams,
   getTimeZone,
   getTranslations,
