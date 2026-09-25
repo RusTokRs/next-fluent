@@ -63,7 +63,7 @@
   },
   "sideEffects": false,
   "engines": {
-    "node": ">=18.18.0"
+    "node": ">=22.0.0"
   },
   "bin": {
     "next-fluent": "bin/next-fluent.mjs"
@@ -80,10 +80,13 @@
     "typecheck": "tsc --noEmit",
     "test:types": "node ./bin/next-fluent.mjs typegen --input test/types/messages.ftl --output test/types/messages.d.ts && tsc -p test/types/tsconfig.json",
     "test:next": "npm run build && node ./scripts/test-next-integration.mjs",
-    "test": "node --test ./test/*.test.mjs",
+    "test": "node --test \"test/*.test.mjs\"",
+    "test:watch": "node --test --watch \"test/*.test.mjs\"",
+    "test:next:browser": "npm run build && node ./scripts/test-next-integration.mjs --browser",
     "prepack": "npm run build",
     "check-dist": "npm run build && git diff --ignore-space-at-eol --exit-code dist/",
     "ci": "npm run build && npm run check-dist && npm run typecheck && npm test",
+    "check": "npm run ci && npm run test:types && npm run test:next",
     "verify": "npm run build && npm run typecheck && npm run test:types && npm test"
   },
   "dependencies": {

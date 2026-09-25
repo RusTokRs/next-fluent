@@ -31,7 +31,7 @@
 - **Корректность кеша** (`cache.ts`): после 32-битного хеша сверяется точный исходник (коллизии `0jebqzk`/`1i10qdw` покрыты тестом), LRU ограничен.
 - **Харднинг локалей** (`utils.ts`): ограничение длины, каноникализация через Intl, структурные lookup-кандидаты без «частичных вариантов», строгий парсер q-value.
 - **Typegen** с разделением переменных value/атрибут и компилируемым consumer-фикстуром с `@ts-expect-error`-негативами.
-- **CI**: матрица Node 18/20/22 × Next 15/16 × Linux/Windows, `check-dist`, consumer types, production Next + браузерный сценарий гидратации.
+- **CI**: матрица Node 22/24 × Next 15/16 × Linux/Windows, `check-dist`, consumer types, production Next + браузерный сценарий гидратации.
 - Middleware: защита от двойного прохода после rewrite (`x-next-fluent-rewrite`), поддержка доменов и basePath, allow-list для cookie/header.
 
 ---
@@ -353,7 +353,7 @@ GET /about → 307 Location: http://evil.com:3000/en/about
 | N14 | 🟡 Partial | **Важно:** относительный `Location` невозможен — Next.js при постобработке редиректов middleware вызывает `new NextURL(location)` и требует абсолютный URL (проверено на реальном `next build`/`next start`: path-only Location → 500 `ERR_INVALID_URL` в `.next/server/middleware.js`). Сделано: опция `trustedHosts` (чужой `Host` → `421` до выдачи редиректов — защита от Host-header cache poisoning), `x-forwarded-host` принимается только при совпадении с доверенным хостом. Рекомендуется также валидация `Host` на уровне прокси. Тест: N14 |
 | N15 | ✅ Fixed | `javascript:`, `data:`, UNC `//host` → `assertSafeHref` бросает (событие `invalidhref`); протокол-относительные `//evil.com` — «сквозные» (исторически для якорей/запросов) |
 | N16 | ✅ Fixed | `package.json`: репозиторий/bugs/homepage → `RusTokRs/next-fluent`, экспорт `./package.json` |
-| N17 | ✅ Fixed | `engines.node: >= 18.18.0` |
+| N17 | ✅ Fixed | `engines.node: >= 22.0.0` (поднят с `>= 18.18.0` в проходе §15 — Node 18/20 сняты с матрицы CI) |
 | N20 | 🟡 Docs | Контракт `t`/`t.rich`/`raw`, `trustedHosts`, `useNow` (стартует с `new Date(0)` до гидратации) описаны в README |
 | N21 | 🟡 Partial | `check-dist` стабилен: сборки детерминированы (внутренние модули не дублируются и не инлайнят контент файлов) |
 | N22 | ⏳ Deferred | Обёртки `useSearchParams` — вне текущего объёма (нет требований к API) |
@@ -365,3 +365,18 @@ GET /about → 307 Location: http://evil.com:3000/en/about
 **Регрессионные тесты**: `test/review-regressions.test.mjs` (11 тестов: N01–N05, N13, N14, typegen) + обновлённые `audit-fixes`, `audit-refinements`, `formatting-safety`, `pseudo`, `deep-audit`, `multilingual`, `engineering-regressions`, `next-fluent` — всего **136**.
 
 **Next-интеграция**: `scripts/test-next-integration.mjs` собирает `test/fixtures/next-app` через `next build`, поднимает сервер и проверяет роутинг/редиректы/RSC (`getPathname` из общего navigation-модуля, `next-fluent/server` для реакт-серверных компонентов, переключение локали). В `package.json` — `test:next` / `test:next:browser` / `check` / `verify`.
+
+---
+
+# §15. Проход 2: базлайн Node 22/24 и кросс-платформенный test-glob (25.09.2026)
+
+§14 отмечал N25 как закрытый, однако в `package.json` отсутствовали `test:watch` / `test:next:browser` / `check`, `engines.node` оставался `>= 18.18.0`, а CI продолжала гонять матрицу Node 18/20/22. Этот проход поднимает поддерживаемый базлайн и убирает платформенную хрупкость тестового прогона.
+
+| ID | Проблема | Исправление |
+| --- | --- | --- |
+| N33 | `npm test` = `node --test ./test/*.test.mjs`: glob разворачивает **шелл**. В `cmd`/PowerShell на Windows шаблон не раскрывается — `node --test` получает литерал и не находит файлы, тесты не запускаются вовсе. | Glob в кавычках: `node --test "test/*.test.mjs"` — разворачивает сам Node (позиционные аргументы `--test` трактуются как glob'ы на Node 22+), шелл не участвует. Одинаково работает в `sh`, `cmd` и PowerShell. |
+| N34 | Статус N25 в §14 был завышен: скриптов `test:watch`, `test:next:browser`, `check` в `package.json` не существовало. | Скрипты действительно добавлены: `test:watch` (watch-режим того же glob), `test:next:browser` (интеграция + браузерный сценарий), `check` (`ci` + `test:types` + `test:next`). |
+| N35 | Браузерный сценарий включался только префиксом `NEXT_FLUENT_BROWSER=1`, который не работает в `cmd`/PowerShell. | `scripts/test-next-integration.mjs` принимает флаг `--browser` (env-переменная сохранена для CI); `test:next:browser` использует флаг. |
+| N36 | `engines.node: >= 18.18.0` и матрица Node 18/20/22: Next 15/16 + React 19 на 18.x находятся на грани поддержки, а 18/20 расходуют CI без покрытия актуальных линеек. | `engines.node: >= 22.0.0`; матрица CI — Node 22.x/24.x × Next 15/16 × Linux/Windows (8 job'ов; браузерный сценарий — в ubuntu-якоре Node 22 / Next 16, как и прежде). |
+
+**Верификация**: `npm run ci` (build + `check-dist` + typecheck + 136 тестов), `npm run verify` (build + typecheck + `test:types` + тесты) и `npm run check` (дополнительно `test:next`: production `next build` фикстуры + рантайм-проверки роутинга/RSC) — зелёные. Браузерный сценарий (`test:next:browser`) исполняется в CI на ubuntu-якоре.

@@ -15,10 +15,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
         profile:
-          - {node: 18.x, next: '15'}
-          - {node: 20.x, next: '15'}
-          - {node: 20.x, next: '16'}
+          - {node: 22.x, next: '15'}
           - {node: 22.x, next: '16'}
+          - {node: 24.x, next: '15'}
+          - {node: 24.x, next: '16'}
 
     steps:
       - name: Checkout repository
