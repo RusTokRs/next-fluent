@@ -7,6 +7,7 @@ import { parse, Visitor, type Message, type VariableReference } from '@fluent/sy
 export interface ExtractedMessage {
   id: string;
   dotId: string;
+  hasValue: boolean;
   attributes: string[];
   variables: string[];
   valueVariables: string[];
@@ -53,6 +54,7 @@ export function extractMessagesFromFtl(ftlContent: string): ExtractedMessage[] {
       messages.push({
         id,
         dotId,
+        hasValue: Boolean(msg.value),
         attributes,
         variables: Array.from(extractor.variables).sort(),
         valueVariables: Array.from(valueExtractor.variables).sort(),
@@ -100,9 +102,13 @@ export function generateTypeDeclarations(
   };
 
   for (const m of allMessages) {
-    addKeyEntry(m.id, m.valueVariables);
-    if (m.dotId !== m.id) {
-      addKeyEntry(m.dotId, m.valueVariables);
+    // Only messages with a value are addressable by their bare id at runtime;
+    // attribute-only messages expose `id.attr` keys exclusively.
+    if (m.hasValue) {
+      addKeyEntry(m.id, m.valueVariables);
+      if (m.dotId !== m.id) {
+        addKeyEntry(m.dotId, m.valueVariables);
+      }
     }
     if (m.attributes) {
       for (const attr of m.attributes) {

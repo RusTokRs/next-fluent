@@ -58,9 +58,13 @@
     "./formatter": {
       "types": "./dist/formatter.d.ts",
       "default": "./dist/formatter.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "sideEffects": false,
+  "engines": {
+    "node": ">=18.18.0"
+  },
   "bin": {
     "next-fluent": "bin/next-fluent.mjs"
   },
@@ -106,12 +110,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/next-fluent/next-fluent.git"
+    "url": "git+https://github.com/RusTokRs/next-fluent.git"
   },
   "bugs": {
-    "url": "https://github.com/next-fluent/next-fluent/issues"
+    "url": "https://github.com/RusTokRs/next-fluent/issues"
   },
-  "homepage": "https://github.com/next-fluent/next-fluent#readme",
+  "homepage": "https://github.com/RusTokRs/next-fluent#readme",
   "keywords": [
     "nextjs",
     "fluent",

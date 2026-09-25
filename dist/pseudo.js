@@ -1,6 +1,10 @@
-// src/pseudo.ts
-import { parse, serialize, Visitor } from "@fluent/syntax";
-var CHAR_MAP = {
+import {
+  parse,
+  serialize,
+  Visitor,
+  TextElement
+} from "@fluent/syntax";
+const CHAR_MAP = {
   a: "\xE5",
   b: "\u0180",
   c: "\xE7",
@@ -80,11 +84,36 @@ function pseudoLocalizeText(text, options = {}) {
   });
   return `${prefix}${transformedParts.join("")}${suffix}`;
 }
+function wrapPatternEdges(pattern, options) {
+  const prefix = options.prefix ?? "[";
+  const suffix = options.suffix ?? "]";
+  const hasText = pattern.elements.some(
+    (el) => el.type === "TextElement" && el.value.trim()
+  );
+  if (!hasText) return;
+  const first = pattern.elements[0];
+  if (first && first.type === "TextElement") {
+    first.value = prefix + first.value;
+  } else {
+    pattern.elements.unshift(new TextElement(prefix));
+  }
+  const last = pattern.elements[pattern.elements.length - 1];
+  if (last && last.type === "TextElement") {
+    last.value = last.value + suffix;
+  } else {
+    pattern.elements.push(new TextElement(suffix));
+  }
+}
 function pseudoLocalizeFtl(ftlContent, options = {}) {
   const resource = parse(ftlContent, { withSpans: false });
+  const textOptions = { ...options, prefix: "", suffix: "" };
   class PseudoVisitor extends Visitor {
     visitTextElement(node) {
-      if (node.value.trim()) node.value = pseudoLocalizeText(node.value, options);
+      if (node.value.trim()) node.value = pseudoLocalizeText(node.value, textOptions);
+    }
+    visitPattern(node) {
+      this.genericVisit(node);
+      wrapPatternEdges(node, options);
     }
   }
   new PseudoVisitor().visit(resource);

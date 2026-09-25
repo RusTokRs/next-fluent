@@ -56,14 +56,11 @@ interface RequestStore {
   timeZone?: string;
   now?: Date;
   defaultTranslationValues?: RichTranslationValues;
-  functions?: Record<string, FluentFunction>;
   bundles: Map<string, FluentBundle>;
-  configs: Map<string, Promise<RequestConfigResult>>;
 }
 
 export const getRequestStore = cache((): RequestStore => ({
   bundles: new Map(),
-  configs: new Map(),
 }));
 
 export function setRequestLocale(locale: string, locales?: readonly string[]): void {
@@ -141,7 +138,7 @@ export async function getLocale(options?: ServerI18nOptions): Promise<string> {
     // 3. Accept-Language with allow-list negotiation
     const acceptLang = headerStore.get('accept-language');
     if (acceptLang && allowedLocales) {
-      const resolved = resolveAcceptLanguage(acceptLang, allowedLocales);
+      const resolved = resolveAcceptLanguage(acceptLang, allowedLocales, defLocale);
       if (resolved) {
         store.locale = resolved;
         return resolved;
@@ -181,32 +178,35 @@ async function resolveConfigFn(): Promise<RequestConfigFn | null> {
   return null;
 }
 
+/**
+ * Request-scoped dedupe of config loader invocations. `cache()` memoizes within
+ * a React request/render scope, so repeated `getTranslations()` calls in one
+ * request run `loadMessages` once per (loader, locale) — including the
+ * instance-scoped loaders used by `createI18n`.
+ */
+const runConfigFn = cache(
+  (fn: RequestConfigFn, locale: string): Promise<RequestConfigResult> =>
+    Promise.resolve().then(() => fn({ locale }))
+);
+
 async function loadConfig(locale: string, override?: RequestConfigFn): Promise<RequestConfigResult> {
   const configFn = override ?? await resolveConfigFn();
   if (!configFn) return { locale, messages: '' };
-  const store = getRequestStore();
-  let pending = override ? undefined : store.configs.get(locale);
-  if (!pending) {
-    pending = Promise.resolve().then(() => configFn({ locale }));
-    if (!override) store.configs.set(locale, pending);
-  }
-  let result: RequestConfigResult;
-  try {
-    result = await pending;
-  } catch (error) {
-    if (!override) store.configs.delete(locale);
-    throw error;
-  }
+  const result = await runConfigFn(configFn, locale);
   if (!result || !Array.isArray(result.messages) && typeof result.messages !== 'string') {
     throw new Error('[next-fluent] Request config must return messages as FTL text or an array.');
   }
   if (result.locale && !canonicalizeLocale(result.locale)) {
     throw new Error('[next-fluent] Request config returned an invalid locale.');
   }
-  store.defaultTranslationValues ??= result.defaultTranslationValues;
-  store.timeZone ??= result.timeZone;
-  store.now ??= result.now;
-  store.functions ??= result.functions;
+  // Instance-scoped loaders (override) must not leak side-channel values into
+  // the shared request store — those defaults belong to the global config only.
+  if (!override) {
+    const store = getRequestStore();
+    store.defaultTranslationValues ??= result.defaultTranslationValues;
+    store.timeZone ??= result.timeZone;
+    store.now ??= result.now;
+  }
   return result;
 }
 
@@ -223,7 +223,7 @@ export async function getRequestConfigSnapshot(localeArg?: string): Promise<Requ
   const requestedLocale = localeArg ?? (await getLocale());
   const result = await loadConfig(requestedLocale);
   const store = getRequestStore();
-  const locale = result.locale ?? requestedLocale;
+  const locale = (result.locale && canonicalizeLocale(result.locale)) || requestedLocale;
   const timeZone = result.timeZone ?? store.timeZone ?? getTimeZone();
   const now = result.now ?? store.now ?? getNow();
   store.locale = locale;
@@ -329,7 +329,6 @@ export async function forLocale(
   defaultTranslationValues ??= config?.defaultTranslationValues ?? store.defaultTranslationValues;
   const mergedFunctions = {
     ...config?.functions,
-    ...store.functions,
     ...customFunctions,
   };
 

@@ -19,22 +19,23 @@ test('resolveLocalizedPathname rejects open redirects and protocols', () => {
     localePrefix: 'always',
   };
 
-  // Malicious protocol-relative and backslash UNC paths
+  // Protocol-relative URLs are ordinary external links and pass through.
   assert.equal(
     resolveLocalizedPathname({ href: '//evil.com/phish', locale: 'en' }, config),
     '//evil.com/phish'
   );
-  assert.equal(
-    resolveLocalizedPathname({ href: '\\\\evil.com\\share', locale: 'en' }, config),
-    '\\\\evil.com\\share'
+  // Backslash UNC paths and script/data schemes are rejected outright.
+  assert.throws(
+    () => resolveLocalizedPathname({ href: '\\\\evil.com\\share', locale: 'en' }, config),
+    /Unsafe href/
   );
-  assert.equal(
-    resolveLocalizedPathname({ href: 'javascript:alert(1)', locale: 'en' }, config),
-    'javascript:alert(1)'
+  assert.throws(
+    () => resolveLocalizedPathname({ href: 'javascript:alert(1)', locale: 'en' }, config),
+    /Unsafe href/
   );
-  assert.equal(
-    resolveLocalizedPathname({ href: 'data:text/html,<b>xss</b>', locale: 'en' }, config),
-    'data:text/html,<b>xss</b>'
+  assert.throws(
+    () => resolveLocalizedPathname({ href: 'data:text/html,<b>xss</b>', locale: 'en' }, config),
+    /Unsafe href/
   );
 });
 

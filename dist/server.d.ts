@@ -18,9 +18,7 @@ interface RequestStore {
     timeZone?: string;
     now?: Date;
     defaultTranslationValues?: RichTranslationValues;
-    functions?: Record<string, FluentFunction>;
     bundles: Map<string, FluentBundle>;
-    configs: Map<string, Promise<RequestConfigResult>>;
 }
 export declare const getRequestStore: () => RequestStore;
 export declare function setRequestLocale(locale: string, locales?: readonly string[]): void;

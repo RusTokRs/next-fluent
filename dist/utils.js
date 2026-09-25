@@ -1,6 +1,5 @@
-// src/utils.ts
-var MAX_LOCALE_TAG_LENGTH = 64;
-var HTTP_QVALUE = /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/;
+const MAX_LOCALE_TAG_LENGTH = 64;
+const HTTP_QVALUE = /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/;
 function localeDiagnosticValue(locale) {
   if (typeof locale !== "string") {
     const kind = locale === null ? "null" : typeof locale;
@@ -93,7 +92,7 @@ function parseAcceptLanguageEntry(entry) {
   if (quality <= 0) return void 0;
   return { tag, quality };
 }
-function resolveAcceptLanguage(header, locales) {
+function resolveAcceptLanguage(header, locales, preferred) {
   if (!header) return void 0;
   let bestLocale;
   let bestQuality = Number.NEGATIVE_INFINITY;
@@ -103,7 +102,7 @@ function resolveAcceptLanguage(header, locales) {
     const entryEnd = separator === -1 ? header.length : separator;
     const candidate = parseAcceptLanguageEntry(header.slice(entryStart, entryEnd));
     if (candidate && candidate.quality > bestQuality) {
-      const matched = candidate.tag === "*" ? locales[0] : matchSupportedLocale(candidate.tag, locales);
+      const matched = candidate.tag === "*" ? (preferred ? matchSupportedLocale(preferred, locales) : void 0) ?? locales[0] : matchSupportedLocale(candidate.tag, locales);
       if (matched) {
         bestLocale = matched;
         bestQuality = candidate.quality;

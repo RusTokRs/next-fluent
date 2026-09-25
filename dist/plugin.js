@@ -1,8 +1,7 @@
-// src/plugin.ts
 import path from "node:path";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-var require2 = createRequire(import.meta.url);
+const require2 = createRequire(import.meta.url);
 function needsLegacyTurboConfig() {
   try {
     const packagePath = require2.resolve("next/package.json");

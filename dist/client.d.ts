@@ -39,3 +39,8 @@ export declare function useNow(options?: {
 export declare function useTranslations<Namespace extends string>(namespace: Namespace): Translations<NamespaceKeys<Namespace>, NamespaceArgs<Namespace>>;
 export declare function useTranslations(): Translations;
 export declare function FormattedMessage<Key extends string = DefaultKey, ArgsMap extends Record<string, any> = Record<string, any>>({ id, args, values, fallback, className, as: Component, }: FormattedMessageProps<Key, ArgsMap>): React.ReactNode;
+/**
+ * Locale-aware link body. It lives in the client entry so that `createNavigation`
+ * can expose a hook-free wrapper that Server Components may render.
+ */
+export declare const LocalizedLink: React.ForwardRefExoticComponent<Omit<any, "ref"> & React.RefAttributes<HTMLAnchorElement>>;

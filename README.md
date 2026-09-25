@@ -8,7 +8,7 @@ The high-performance Project Fluent alternative to `next-intl`.
 
 - **Project Fluent Engine**: Full support for Mozilla Fluent syntax, asymmetric localization, terms (`-brand`), complex pluralization (`one`/`few`/`many`), selectors, and variables via official `@fluent/bundle`.
 - **First-Class App Router Support**: Strict separation between Server Components (`next-fluent/server`) and Client Components (`next-fluent/client`), fully compatible with React 19.
-- **Rich Text & React Node Interpolation**: Pass React components directly into message variables (`{ user: <UserProfile /> }`) and format interactive tags (`<link>docs</link>`, `<br>`).
+- **Rich Text & React Node Interpolation** (via `t.rich()` / `<FormattedMessage>`): Pass React components directly into message variables (`{ user: <UserProfile /> }`) and format interactive tags (`<link>docs</link>`, `<br>`). Plain `t()` always returns a string and refuses React-element interpolation.
 - **Locale-Aware Routing & Navigation**: Centralized `defineRouting` with localized pathnames (`/about` -> `/about-us` / `/o-nas`), custom domain routing, and automatic URL rewriting without 404s.
 - **Next.js Webpack & Turbopack Plugin**: Seamless zero-boilerplate configuration binding via `next-fluent/plugin`.
 - **Synchronized Request Snapshot**: `<FluentServerProvider>` passes messages, fallback messages, serializable default values, time zone, and `now` from one server request snapshot to Client Components.
@@ -102,6 +102,8 @@ export const config = {
   matcher: ['/', '/((?!api|_next|_vercel|.*\\..*).*)'],
 };
 ```
+
+> **Hardening**: pass `trustedHosts` (e.g. `createI18nMiddleware({ ...routing, trustedHosts: ['example.com', '*.example.com'] })`) to reject foreign `Host` headers with `421 Misdirected Request` before any redirect is issued — recommended when responses may be cached by shared caches or CDNs.
 
 ### 5. Root Layout (`app/[locale]/layout.tsx`)
 
@@ -208,6 +210,12 @@ const content = t.rich('welcome-banner', {
   help: <HelpBadge />,
 });
 ```
+
+### `t()` / `raw()` contract
+
+- `t(key, args?)` returns a **string**. If the formatted result still contains a React-element placeholder (e.g. `defaultTranslationValues` injected JSX), it throws and directs you to `t.rich()` / `<FormattedMessage>`. Fluent formatting errors fall back to `namespace.key`.
+- `t.rich(key, args?)` and `<FormattedMessage />` are the only APIs that produce React nodes.
+- `raw('title')` → `string`, `raw('title', { $name: 'Ada' })` → interpolated `string`, `raw('list')` → ordered `string[]` (both Fluent `[]`-lists and JSON arrays). Missing messages fall back to the key; formatting errors are ignored and the literal `{$placeholders}` remain.
 
 ---
 

@@ -21,7 +21,7 @@ test('format errors never expose partial Fluent output or fall through locale fa
   );
 });
 
-test('t.raw rejects partial values and attributes when formatting needs arguments', () => {
+test('t.raw renders placeholders for unresolved references and accepts arguments', () => {
   const bundle = createFluentBundle(
     'en',
     `
@@ -33,6 +33,8 @@ raw-list =
   );
   const t = createTranslator(bundle);
 
-  assert.equal(t.raw('raw-value'), 'raw-value');
-  assert.equal(t.raw('raw-list'), 'raw-list');
+  assert.equal(t.raw('raw-value'), 'Value for {$name}');
+  assert.deepEqual(t.raw('raw-list'), ['Static item', 'Item for {$name}']);
+  assert.equal(t.raw('raw-value', { name: 'Ada' }), 'Value for Ada');
+  assert.deepEqual(t.raw('raw-list', { name: 'Ada' }), ['Static item', 'Item for Ada']);
 });

@@ -2,7 +2,11 @@ import type { FluentBundle } from '@fluent/bundle';
 import React from 'react';
 import type { FluentArgs, FluentVariable, RichTranslationValues, Translations } from './types';
 import { buildKeyCandidates, canonicalizeLocale, withKebabKey } from './utils';
-import { parseRichText, createReactElementToken } from './rich';
+import {
+  parseRichText,
+  createReactElementToken,
+  REACT_ELEMENT_TOKEN_PREFIX,
+} from './rich';
 import {
   getCachedFluentBundle,
   clearBundleCache as clearInternalBundleCache,
@@ -62,7 +66,33 @@ export interface CreateTranslatorOptions {
 
 const FORMAT_ERROR = Symbol('format-error');
 type FormatCandidateResult = string | null | typeof FORMAT_ERROR;
-type RawCandidateResult = string[] | string | null | typeof FORMAT_ERROR;
+type RawCandidateResult = string[] | string | null;
+
+function stripBidiIsolates(value: string): string {
+  return value.replace(/[\u2068\u2069]/g, '');
+}
+
+/**
+ * Converts user-facing translation values into Fluent arguments. React
+ * elements become placeholder tokens that `parseRichText` resolves later.
+ */
+function buildFluentArgs(values: Record<string, unknown> | undefined): FluentArgs {
+  const fluentArgs: FluentArgs = {};
+  if (!values) return fluentArgs;
+  for (const [k, v] of Object.entries(values)) {
+    if (React.isValidElement(v)) {
+      fluentArgs[k] = createReactElementToken(k);
+    } else if (
+      typeof v === 'string' ||
+      typeof v === 'number' ||
+      v instanceof Date ||
+      (typeof v === 'object' && v !== null && 'type' in v)
+    ) {
+      fluentArgs[k] = v as FluentVariable;
+    }
+  }
+  return fluentArgs;
+}
 
 export function createTranslator(
   bundle: FluentBundle | null,
@@ -106,21 +136,7 @@ export function createTranslator(
     namespace = maybeNamespace;
   }
 
-  const defaultFluentArgs: FluentArgs = {};
-  if (defaultTranslationValues) {
-    for (const [k, v] of Object.entries(defaultTranslationValues)) {
-      if (React.isValidElement(v)) {
-        defaultFluentArgs[k] = createReactElementToken(k);
-      } else if (
-        typeof v === 'string' ||
-        typeof v === 'number' ||
-        v instanceof Date ||
-        (typeof v === 'object' && v !== null && 'type' in v)
-      ) {
-        defaultFluentArgs[k] = v as FluentVariable;
-      }
-    }
-  }
+  const defaultFluentArgs = buildFluentArgs(defaultTranslationValues);
 
   const formatCandidate = (
     targetBundle: FluentBundle,
@@ -173,9 +189,14 @@ export function createTranslator(
     return null;
   };
 
-  const tFn = (key: string, args?: FluentArgs): string => {
+  /**
+   * Formats a key to a plain string. Returns the fallback key when the message
+   * is missing or fails to format. React element tokens may survive in the
+   * output — `t()` rejects them while `t.rich()` resolves them.
+   */
+  const formatKey = (key: string, args?: FluentArgs): string => {
     const mergedArgs =
-      defaultTranslationValues && Object.keys(defaultFluentArgs).length > 0
+      Object.keys(defaultFluentArgs).length > 0
         ? { ...defaultFluentArgs, ...args }
         : args;
     const candidates = buildKeyCandidates(namespace, key, { strictNamespace });
@@ -196,9 +217,39 @@ export function createTranslator(
     return fallbackKey;
   };
 
+  const tFn = ((key: string, args?: FluentArgs): string => {
+    // Plain `t()` interpolations may contain React elements only by mistake —
+    // resolve them to tokens first so a clear error can be raised, instead of
+    // leaking placeholder tokens into strings or failing deep inside Fluent.
+    const formatted = formatKey(key, buildFluentArgs(args as Record<string, unknown>));
+    if (formatted.includes(REACT_ELEMENT_TOKEN_PREFIX)) {
+      const fallbackKey = namespace ? `${namespace}.${key}` : key;
+      throw new Error(
+        `[next-fluent] Message "${fallbackKey}" interpolates a React element. ` +
+          'Use t.rich() or <FormattedMessage> for rich content.'
+      );
+    }
+    return formatted;
+  }) as Translations;
+
+  /**
+   * Formats a pattern for `raw()`. Unlike `t()`, unresolved references are not
+   * fatal: missing variables render as `{ $name }`-style placeholders so the
+   * raw text of a message is always available.
+   */
+  const formatRawPattern = (
+    targetBundle: FluentBundle,
+    pattern: Parameters<FluentBundle['formatPattern']>[0],
+    args?: FluentArgs
+  ): string => {
+    const formatted = targetBundle.formatPattern(pattern, args, []) as string;
+    return stripBidiIsolates(formatted);
+  };
+
   const getRawValue = (
     targetBundle: FluentBundle,
-    candidate: string
+    candidate: string,
+    args?: FluentArgs
   ): RawCandidateResult => {
     const msg = targetBundle.getMessage(candidate);
 
@@ -217,51 +268,17 @@ export function createTranslator(
             parentMsg.attributes[withKebabKey(attrName)];
 
           if (pattern) {
-            const errors: Error[] = [];
-            const formatted = targetBundle.formatPattern(pattern, undefined, errors);
-            if (errors.length > 0) {
-              console.warn(
-                `[next-fluent] Format errors for raw attribute "${candidate}":`,
-                errors
-              );
-              return FORMAT_ERROR;
-            }
-            return formatted;
+            return formatRawPattern(targetBundle, pattern, args);
           }
         }
       }
       return null;
     }
 
-    if (msg.attributes && Object.keys(msg.attributes).length > 0) {
-      const sortedAttrKeys = Object.keys(msg.attributes).sort((a, b) =>
-        a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
-      );
-
-      const values: string[] = [];
-      for (const attrKey of sortedAttrKeys) {
-        const pattern = msg.attributes[attrKey];
-        const errors: Error[] = [];
-        const formatted = targetBundle.formatPattern(pattern, undefined, errors);
-        if (errors.length > 0) {
-          console.warn(
-            `[next-fluent] Format errors for raw attribute "${candidate}.${attrKey}":`,
-            errors
-          );
-          return FORMAT_ERROR;
-        }
-        values.push(formatted);
-      }
-      return values;
-    }
-
+    // The message value is the primary content; attributes are available via
+    // `key.attr` or by reading a message that has attributes only.
     if (msg.value) {
-      const errors: Error[] = [];
-      const rawText = targetBundle.formatPattern(msg.value, undefined, errors);
-      if (errors.length > 0) {
-        console.warn(`[next-fluent] Format errors for raw key "${candidate}":`, errors);
-        return FORMAT_ERROR;
-      }
+      const rawText = formatRawPattern(targetBundle, msg.value, args);
       const trimmed = rawText.trim();
       if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
         try {
@@ -276,17 +293,26 @@ export function createTranslator(
       return rawText;
     }
 
+    if (msg.attributes && Object.keys(msg.attributes).length > 0) {
+      const sortedAttrKeys = Object.keys(msg.attributes).sort((a, b) =>
+        a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+      );
+      return sortedAttrKeys.map((attrKey) =>
+        formatRawPattern(targetBundle, msg.attributes![attrKey], args)
+      );
+    }
+
     return null;
   };
 
-  tFn.raw = (key: string): string[] | string => {
+  tFn.raw = ((key: string, args?: FluentArgs): string[] | string => {
+    const mergedArgs = buildFluentArgs(args as Record<string, unknown>);
     const candidates = buildKeyCandidates(namespace, key, { strictNamespace });
     const fallbackKey = namespace ? `${namespace}.${key}` : key;
     for (const b of allBundles) {
       for (const candidate of candidates) {
-        const res = getRawValue(b, candidate);
-        if (res === FORMAT_ERROR) return fallbackKey;
-        if (res !== null) return res;
+        const res = getRawValue(b, candidate, mergedArgs);
+        if (res !== null && res !== undefined) return res;
       }
     }
 
@@ -296,7 +322,7 @@ export function createTranslator(
     }
 
     return fallbackKey;
-  };
+  }) as Translations['raw'];
 
   tFn.rich = (key: string, values?: RichTranslationValues): React.ReactNode => {
     const mergedValues =
@@ -304,23 +330,7 @@ export function createTranslator(
         ? { ...(defaultTranslationValues ?? {}), ...(values ?? {}) }
         : undefined;
 
-    const fluentArgs: FluentArgs = {};
-    if (mergedValues) {
-      for (const [k, v] of Object.entries(mergedValues)) {
-        if (React.isValidElement(v)) {
-          fluentArgs[k] = createReactElementToken(k);
-        } else if (
-          typeof v === 'string' ||
-          typeof v === 'number' ||
-          v instanceof Date ||
-          (typeof v === 'object' && v !== null && 'type' in v)
-        ) {
-          fluentArgs[k] = v as FluentVariable;
-        }
-      }
-    }
-
-    const formattedText = tFn(key, fluentArgs);
+    const formattedText = formatKey(key, buildFluentArgs(mergedValues));
     return parseRichText(formattedText, mergedValues);
   };
 

@@ -1,373 +1,19 @@
-// src/bundle.ts
-import React2 from "react";
-
-// src/utils.ts
-var MAX_LOCALE_TAG_LENGTH = 64;
-function canonicalizeLocale(locale) {
-  if (!locale || typeof locale !== "string") return void 0;
-  if (locale.length > MAX_LOCALE_TAG_LENGTH) return void 0;
-  let raw = locale.trim();
-  if (!raw) return void 0;
-  if (raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"')) {
-    raw = raw.slice(1, -1).trim();
-    if (!raw) return void 0;
-  }
-  const normalized = raw.replaceAll("_", "-");
-  try {
-    const canonical = Intl.getCanonicalLocales(normalized);
-    return canonical[0];
-  } catch {
-    return void 0;
-  }
-}
-function withKebabKey(key) {
-  return key.replaceAll(".", "-");
-}
-function buildKeyCandidates(namespace, key, options) {
-  const candidates = [];
-  const pushCandidate = (candidate) => {
-    if (!candidates.includes(candidate)) {
-      candidates.push(candidate);
-    }
-  };
-  const cleanNs = namespace?.trim();
-  if (cleanNs) {
-    const joined = `${cleanNs}.${key}`;
-    pushCandidate(withKebabKey(joined));
-    pushCandidate(joined);
-    const nsHyphen = withKebabKey(cleanNs);
-    if (nsHyphen !== cleanNs) {
-      pushCandidate(`${nsHyphen}-${key}`);
-    }
-    if (options?.strictNamespace) {
-      return candidates;
-    }
-  }
-  pushCandidate(withKebabKey(key));
-  pushCandidate(key);
-  return candidates;
-}
-
-// src/rich.ts
 import React from "react";
-var VOID_TAGS = /* @__PURE__ */ new Set([
-  "br",
-  "hr",
-  "img",
-  "input",
-  "wbr"
-]);
-var REACT_ELEMENT_TOKEN_PREFIX = "\uE000NF_EL_";
-var REACT_ELEMENT_TOKEN_SUFFIX = "_\uE001";
-function createReactElementToken(key) {
-  return `${REACT_ELEMENT_TOKEN_PREFIX}${key}${REACT_ELEMENT_TOKEN_SUFFIX}`;
-}
-var TOKEN_OR_TAG_PATTERN = "(?:\\u2068)?\\uE000NF_EL_([a-zA-Z0-9_-]+)_\\uE001(?:\\u2069)?|<\\/?([a-zA-Z][a-zA-Z0-9_-]*)\\s*\\/?>";
-function parseRichText(text, values) {
-  if (!values) {
-    return text;
-  }
-  const hasTokens = text.includes(REACT_ELEMENT_TOKEN_PREFIX);
-  const hasTags = text.includes("<");
-  if (!hasTokens && !hasTags) {
-    return text;
-  }
-  const hasInteractive = Object.keys(values).some(
-    (k) => typeof values[k] === "function" || React.isValidElement(values[k])
-  );
-  if (!hasInteractive) {
-    return text;
-  }
-  const root = { children: [] };
-  const stack = [root];
-  let lastIndex = 0;
-  let match;
-  const regex = new RegExp(TOKEN_OR_TAG_PATTERN, "g");
-  while ((match = regex.exec(text)) !== null) {
-    const [fullMatch, elementTokenKey, tagName] = match;
-    const matchIndex = match.index;
-    if (matchIndex > lastIndex) {
-      const textChunk = text.slice(lastIndex, matchIndex);
-      stack[stack.length - 1].children.push(textChunk);
-    }
-    lastIndex = regex.lastIndex;
-    if (elementTokenKey) {
-      if (Object.hasOwn(values, elementTokenKey)) {
-        const val = values[elementTokenKey];
-        if (React.isValidElement(val)) {
-          stack[stack.length - 1].children.push(val);
-        } else if (typeof val === "function") {
-          stack[stack.length - 1].children.push(val(null));
-        } else if (val !== void 0 && val !== null) {
-          stack[stack.length - 1].children.push(String(val));
-        }
-      } else {
-        stack[stack.length - 1].children.push(fullMatch);
-      }
-      continue;
-    }
-    if (tagName) {
-      const isClose = fullMatch.startsWith("</");
-      const isSelfClosing = fullMatch.endsWith("/>") || VOID_TAGS.has(tagName.toLowerCase());
-      if (isSelfClosing && !isClose) {
-        if (Object.hasOwn(values, tagName)) {
-          const renderFnOrEl = values[tagName];
-          if (typeof renderFnOrEl === "function") {
-            stack[stack.length - 1].children.push(renderFnOrEl(null));
-          } else if (React.isValidElement(renderFnOrEl)) {
-            stack[stack.length - 1].children.push(renderFnOrEl);
-          } else {
-            stack[stack.length - 1].children.push(fullMatch);
-          }
-        } else {
-          stack[stack.length - 1].children.push(fullMatch);
-        }
-      } else if (isClose) {
-        if (stack.length > 1 && stack[stack.length - 1].tag === tagName) {
-          const finishedNode = stack.pop();
-          const renderFnOrEl = Object.hasOwn(values, tagName) ? values[tagName] : void 0;
-          const innerChildren = finishedNode.children.length === 1 ? finishedNode.children[0] : React.createElement(React.Fragment, null, ...finishedNode.children);
-          if (typeof renderFnOrEl === "function") {
-            stack[stack.length - 1].children.push(renderFnOrEl(innerChildren));
-          } else if (React.isValidElement(renderFnOrEl)) {
-            stack[stack.length - 1].children.push(
-              React.cloneElement(renderFnOrEl, void 0, innerChildren)
-            );
-          } else {
-            stack[stack.length - 1].children.push(
-              `<${tagName}>`,
-              innerChildren,
-              `</${tagName}>`
-            );
-          }
-        } else {
-          stack[stack.length - 1].children.push(fullMatch);
-        }
-      } else {
-        if (Object.hasOwn(values, tagName)) {
-          stack.push({ tag: tagName, children: [] });
-        } else {
-          stack[stack.length - 1].children.push(fullMatch);
-        }
-      }
-    }
-  }
-  if (lastIndex < text.length) {
-    stack[stack.length - 1].children.push(text.slice(lastIndex));
-  }
-  while (stack.length > 1) {
-    const unclosed = stack.pop();
-    stack[stack.length - 1].children.push(
-      `<${unclosed.tag}>`,
-      ...unclosed.children
-    );
-  }
-  if (root.children.length === 0) return "";
-  if (root.children.length === 1) return root.children[0];
-  return React.createElement(React.Fragment, null, ...root.children);
-}
-
-// src/cache.ts
-import { FluentBundle, FluentResource } from "@fluent/bundle";
-
-// src/lru.ts
-var LRUCache = class {
-  constructor(maxSize) {
-    this.maxSize = maxSize;
-  }
-  maxSize;
-  map = /* @__PURE__ */ new Map();
-  get(key) {
-    const val = this.map.get(key);
-    if (val !== void 0) {
-      this.map.delete(key);
-      this.map.set(key, val);
-    }
-    return val;
-  }
-  set(key, value) {
-    if (this.map.has(key)) {
-      this.map.delete(key);
-    } else if (this.map.size >= this.maxSize) {
-      const oldestKey = this.map.keys().next().value;
-      if (oldestKey !== void 0) {
-        this.map.delete(oldestKey);
-      }
-    }
-    this.map.set(key, value);
-  }
-  has(key) {
-    return this.map.has(key);
-  }
-  delete(key) {
-    return this.map.delete(key);
-  }
-  clear() {
-    this.map.clear();
-  }
-  get size() {
-    return this.map.size;
-  }
-};
-
-// src/functions.ts
-function unwrapFluentValue(val) {
-  if (val && typeof val === "object" && typeof val.valueOf === "function") {
-    return val.valueOf();
-  }
-  return val;
-}
-var numberFormatCache = new LRUCache(200);
-function clearFunctionsCache() {
-  numberFormatCache.clear();
-}
-function getCachedNumberFormat(locale, options) {
-  const cacheKey = `${locale}::${options.style}::${options.currency ?? ""}::${options.currencyDisplay ?? ""}::${options.minimumFractionDigits ?? ""}::${options.maximumFractionDigits ?? ""}`;
-  let nf = numberFormatCache.get(cacheKey);
-  if (!nf) {
-    nf = new Intl.NumberFormat(locale, options);
-    numberFormatCache.set(cacheKey, nf);
-  }
-  return nf;
-}
-function createDefaultFunctions(locale) {
-  return {
-    CURRENCY: (positional, named) => {
-      const rawVal = unwrapFluentValue(positional[0]);
-      const num = typeof rawVal === "number" ? rawVal : Number(rawVal);
-      if (Number.isNaN(num)) {
-        return String(rawVal ?? "");
-      }
-      const currency = String(unwrapFluentValue(named.currency) || "USD");
-      const currencyDisplay = named.currencyDisplay ? String(unwrapFluentValue(named.currencyDisplay)) : void 0;
-      const minFraction = named.minimumFractionDigits !== void 0 ? Number(unwrapFluentValue(named.minimumFractionDigits)) : void 0;
-      const maxFraction = named.maximumFractionDigits !== void 0 ? Number(unwrapFluentValue(named.maximumFractionDigits)) : void 0;
-      try {
-        return getCachedNumberFormat(locale, {
-          style: "currency",
-          currency,
-          currencyDisplay,
-          minimumFractionDigits: minFraction,
-          maximumFractionDigits: maxFraction
-        }).format(num);
-      } catch {
-        return `${num} ${currency}`;
-      }
-    },
-    PERCENT: (positional, named) => {
-      const rawVal = unwrapFluentValue(positional[0]);
-      const num = typeof rawVal === "number" ? rawVal : Number(rawVal);
-      if (Number.isNaN(num)) {
-        return String(rawVal ?? "");
-      }
-      const minFraction = named.minimumFractionDigits !== void 0 ? Number(unwrapFluentValue(named.minimumFractionDigits)) : void 0;
-      const maxFraction = named.maximumFractionDigits !== void 0 ? Number(unwrapFluentValue(named.maximumFractionDigits)) : void 0;
-      try {
-        return getCachedNumberFormat(locale, {
-          style: "percent",
-          minimumFractionDigits: minFraction,
-          maximumFractionDigits: maxFraction
-        }).format(num);
-      } catch {
-        return `${num * 100}%`;
-      }
-    }
-  };
-}
-
-// src/cache.ts
-var MAX_RESOURCE_CACHE = 1e3;
-var MAX_BUNDLE_CACHE = 500;
-function fnv1a32(input) {
-  let hash = 2166136261;
-  for (let i = 0; i < input.length; i++) {
-    hash ^= input.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
-}
-function computeSourceHash(source) {
-  if (typeof source === "string") {
-    return `${source.length}:${fnv1a32(source)}`;
-  }
-  let totalLen = 0;
-  let combinedHash = 2166136261;
-  for (const item of source) {
-    if (!item) continue;
-    totalLen += item.length;
-    for (let i = 0; i < item.length; i++) {
-      combinedHash ^= item.charCodeAt(i);
-      combinedHash = Math.imul(combinedHash, 16777619);
-    }
-    combinedHash ^= 31;
-    combinedHash = Math.imul(combinedHash, 16777619);
-  }
-  return `${source.length}:${totalLen}:${(combinedHash >>> 0).toString(16).padStart(8, "0")}`;
-}
-var resourceCache = new LRUCache(MAX_RESOURCE_CACHE);
-var bundleCache = new LRUCache(MAX_BUNDLE_CACHE);
-function sameSource(a, b) {
-  if (typeof a === "string" || typeof b === "string") return a === b;
-  return a.length === b.length && a.every((item, index) => item === b[index]);
-}
-function getOrCreateResource(source) {
-  const hash = `${source.length}:${fnv1a32(source)}`;
-  const cached = resourceCache.get(hash);
-  if (cached?.source === source) return cached.resource;
-  const res = new FluentResource(source);
-  resourceCache.set(hash, { source, resource: res });
-  return res;
-}
-function getCachedFluentBundle(locale, ftlSource, options = {}) {
-  const useIsolating = options.useIsolating ?? true;
-  const hasCustomFunctions = options.functions && Object.keys(options.functions).length > 0;
-  const sourceHash = computeSourceHash(ftlSource);
-  const cacheKey = `${locale}:iso=${useIsolating}:${sourceHash}`;
-  if (!hasCustomFunctions && !options.disableCache) {
-    const cached = bundleCache.get(cacheKey);
-    if (cached && sameSource(cached.source, ftlSource)) {
-      return cached.bundle;
-    }
-  }
-  const defaultFunctions = createDefaultFunctions(locale);
-  const bundle = new FluentBundle(locale, {
-    useIsolating,
-    functions: {
-      ...defaultFunctions,
-      ...options.functions
-    }
-  });
-  const sources = Array.isArray(ftlSource) ? ftlSource : [ftlSource];
-  for (const src of sources) {
-    if (!src || typeof src !== "string") continue;
-    const resource = options.disableCache ? new FluentResource(src) : getOrCreateResource(src);
-    const errors = bundle.addResource(resource, { allowOverrides: true });
-    if (errors && errors.length > 0) {
-      console.warn(`[next-fluent] Warnings adding FTL resource for locale ${locale}:`, errors);
-    }
-  }
-  if (!hasCustomFunctions && !options.disableCache) {
-    bundleCache.set(cacheKey, {
-      source: typeof ftlSource === "string" ? ftlSource : [...ftlSource],
-      bundle
-    });
-  }
-  return bundle;
-}
+import { buildKeyCandidates, canonicalizeLocale, withKebabKey } from "./utils.js";
+import {
+  parseRichText,
+  createReactElementToken,
+  REACT_ELEMENT_TOKEN_PREFIX
+} from "./rich.js";
+import {
+  getCachedFluentBundle,
+  clearBundleCache as clearInternalBundleCache,
+  getBundleCacheStats,
+  LRUCache
+} from "./cache.js";
+import { clearFunctionsCache } from "./functions.js";
 function clearBundleCache() {
-  resourceCache.clear();
-  bundleCache.clear();
-}
-function getBundleCacheStats() {
-  return {
-    resourceCount: resourceCache.size,
-    bundleCount: bundleCache.size
-  };
-}
-
-// src/bundle.ts
-function clearBundleCache2() {
-  clearBundleCache();
+  clearInternalBundleCache();
   clearFunctionsCache();
 }
 function fluentBundleLocaleDiagnostic(locale) {
@@ -389,7 +35,22 @@ function createFluentBundle(locale, ftlSource, options = {}) {
   }
   return getCachedFluentBundle(canonicalLocale, ftlSource, options);
 }
-var FORMAT_ERROR = /* @__PURE__ */ Symbol("format-error");
+const FORMAT_ERROR = /* @__PURE__ */ Symbol("format-error");
+function stripBidiIsolates(value) {
+  return value.replace(/[\u2068\u2069]/g, "");
+}
+function buildFluentArgs(values) {
+  const fluentArgs = {};
+  if (!values) return fluentArgs;
+  for (const [k, v] of Object.entries(values)) {
+    if (React.isValidElement(v)) {
+      fluentArgs[k] = createReactElementToken(k);
+    } else if (typeof v === "string" || typeof v === "number" || v instanceof Date || typeof v === "object" && v !== null && "type" in v) {
+      fluentArgs[k] = v;
+    }
+  }
+  return fluentArgs;
+}
 function createTranslator(bundle, namespaceOrFallbackOrOpts, maybeNamespace) {
   const allBundles = [];
   if (bundle) allBundles.push(bundle);
@@ -423,16 +84,7 @@ function createTranslator(bundle, namespaceOrFallbackOrOpts, maybeNamespace) {
   } else {
     namespace = maybeNamespace;
   }
-  const defaultFluentArgs = {};
-  if (defaultTranslationValues) {
-    for (const [k, v] of Object.entries(defaultTranslationValues)) {
-      if (React2.isValidElement(v)) {
-        defaultFluentArgs[k] = createReactElementToken(k);
-      } else if (typeof v === "string" || typeof v === "number" || v instanceof Date || typeof v === "object" && v !== null && "type" in v) {
-        defaultFluentArgs[k] = v;
-      }
-    }
-  }
+  const defaultFluentArgs = buildFluentArgs(defaultTranslationValues);
   const formatCandidate = (targetBundle, candidate, args) => {
     const msg = targetBundle.getMessage(candidate);
     if (msg?.value) {
@@ -467,8 +119,8 @@ function createTranslator(bundle, namespaceOrFallbackOrOpts, maybeNamespace) {
     }
     return null;
   };
-  const tFn = (key, args) => {
-    const mergedArgs = defaultTranslationValues && Object.keys(defaultFluentArgs).length > 0 ? { ...defaultFluentArgs, ...args } : args;
+  const formatKey = (key, args) => {
+    const mergedArgs = Object.keys(defaultFluentArgs).length > 0 ? { ...defaultFluentArgs, ...args } : args;
     const candidates = buildKeyCandidates(namespace, key, { strictNamespace });
     const fallbackKey = namespace ? `${namespace}.${key}` : key;
     for (const b of allBundles) {
@@ -484,7 +136,21 @@ function createTranslator(bundle, namespaceOrFallbackOrOpts, maybeNamespace) {
     }
     return fallbackKey;
   };
-  const getRawValue = (targetBundle, candidate) => {
+  const tFn = ((key, args) => {
+    const formatted = formatKey(key, buildFluentArgs(args));
+    if (formatted.includes(REACT_ELEMENT_TOKEN_PREFIX)) {
+      const fallbackKey = namespace ? `${namespace}.${key}` : key;
+      throw new Error(
+        `[next-fluent] Message "${fallbackKey}" interpolates a React element. Use t.rich() or <FormattedMessage> for rich content.`
+      );
+    }
+    return formatted;
+  });
+  const formatRawPattern = (targetBundle, pattern, args) => {
+    const formatted = targetBundle.formatPattern(pattern, args, []);
+    return stripBidiIsolates(formatted);
+  };
+  const getRawValue = (targetBundle, candidate, args) => {
     const msg = targetBundle.getMessage(candidate);
     if (!msg) {
       const lastDot = candidate.lastIndexOf(".");
@@ -495,48 +161,14 @@ function createTranslator(bundle, namespaceOrFallbackOrOpts, maybeNamespace) {
         if (parentMsg?.attributes) {
           const pattern = parentMsg.attributes[attrName] ?? parentMsg.attributes[withKebabKey(attrName)];
           if (pattern) {
-            const errors = [];
-            const formatted = targetBundle.formatPattern(pattern, void 0, errors);
-            if (errors.length > 0) {
-              console.warn(
-                `[next-fluent] Format errors for raw attribute "${candidate}":`,
-                errors
-              );
-              return FORMAT_ERROR;
-            }
-            return formatted;
+            return formatRawPattern(targetBundle, pattern, args);
           }
         }
       }
       return null;
     }
-    if (msg.attributes && Object.keys(msg.attributes).length > 0) {
-      const sortedAttrKeys = Object.keys(msg.attributes).sort(
-        (a, b) => a.localeCompare(b, void 0, { numeric: true, sensitivity: "base" })
-      );
-      const values = [];
-      for (const attrKey of sortedAttrKeys) {
-        const pattern = msg.attributes[attrKey];
-        const errors = [];
-        const formatted = targetBundle.formatPattern(pattern, void 0, errors);
-        if (errors.length > 0) {
-          console.warn(
-            `[next-fluent] Format errors for raw attribute "${candidate}.${attrKey}":`,
-            errors
-          );
-          return FORMAT_ERROR;
-        }
-        values.push(formatted);
-      }
-      return values;
-    }
     if (msg.value) {
-      const errors = [];
-      const rawText = targetBundle.formatPattern(msg.value, void 0, errors);
-      if (errors.length > 0) {
-        console.warn(`[next-fluent] Format errors for raw key "${candidate}":`, errors);
-        return FORMAT_ERROR;
-      }
+      const rawText = formatRawPattern(targetBundle, msg.value, args);
       const trimmed = rawText.trim();
       if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
         try {
@@ -549,16 +181,24 @@ function createTranslator(bundle, namespaceOrFallbackOrOpts, maybeNamespace) {
       }
       return rawText;
     }
+    if (msg.attributes && Object.keys(msg.attributes).length > 0) {
+      const sortedAttrKeys = Object.keys(msg.attributes).sort(
+        (a, b) => a.localeCompare(b, void 0, { numeric: true, sensitivity: "base" })
+      );
+      return sortedAttrKeys.map(
+        (attrKey) => formatRawPattern(targetBundle, msg.attributes[attrKey], args)
+      );
+    }
     return null;
   };
-  tFn.raw = (key) => {
+  tFn.raw = ((key, args) => {
+    const mergedArgs = buildFluentArgs(args);
     const candidates = buildKeyCandidates(namespace, key, { strictNamespace });
     const fallbackKey = namespace ? `${namespace}.${key}` : key;
     for (const b of allBundles) {
       for (const candidate of candidates) {
-        const res = getRawValue(b, candidate);
-        if (res === FORMAT_ERROR) return fallbackKey;
-        if (res !== null) return res;
+        const res = getRawValue(b, candidate, mergedArgs);
+        if (res !== null && res !== void 0) return res;
       }
     }
     if (debug) {
@@ -566,20 +206,10 @@ function createTranslator(bundle, namespaceOrFallbackOrOpts, maybeNamespace) {
       return `[MISSING: ${fallbackKey}]`;
     }
     return fallbackKey;
-  };
+  });
   tFn.rich = (key, values) => {
     const mergedValues = defaultTranslationValues || values ? { ...defaultTranslationValues ?? {}, ...values ?? {} } : void 0;
-    const fluentArgs = {};
-    if (mergedValues) {
-      for (const [k, v] of Object.entries(mergedValues)) {
-        if (React2.isValidElement(v)) {
-          fluentArgs[k] = createReactElementToken(k);
-        } else if (typeof v === "string" || typeof v === "number" || v instanceof Date || typeof v === "object" && v !== null && "type" in v) {
-          fluentArgs[k] = v;
-        }
-      }
-    }
-    const formattedText = tFn(key, fluentArgs);
+    const formattedText = formatKey(key, buildFluentArgs(mergedValues));
     return parseRichText(formattedText, mergedValues);
   };
   tFn.has = (key) => {
@@ -604,7 +234,7 @@ function createTranslator(bundle, namespaceOrFallbackOrOpts, maybeNamespace) {
 }
 export {
   LRUCache,
-  clearBundleCache2 as clearBundleCache,
+  clearBundleCache,
   clearFunctionsCache,
   createFluentBundle,
   createTranslator,

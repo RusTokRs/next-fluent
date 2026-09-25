@@ -1,6 +1,7 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, forwardRef, useContext, useEffect, useMemo, useState } from 'react';
+import NextLink from 'next/link.js';
 import type { FluentBundle, FluentFunction } from '@fluent/bundle';
 import type {
   DefaultKey,
@@ -14,6 +15,8 @@ import type {
 import { createFluentBundle, createTranslator } from './bundle';
 import { createFormatter } from './formatter';
 import { computeSourceHash } from './cache';
+import { resolveLocalizedPathname, switchLocaleHref } from './nav-url';
+import type { NavigationConfig } from './types';
 
 export type { FormattedMessageProps };
 export { createFormatter };
@@ -37,6 +40,9 @@ const FluentContext = createContext<FluentContextValue>({
   fallbackBundle: null,
   debug: false,
 });
+
+/** Stable SSR/hydration fallback so `useNow()` never causes markup mismatch. */
+const STATIC_NOW = new Date(0);
 
 export interface FluentProviderProps {
   locale: string;
@@ -65,15 +71,21 @@ export function FluentProvider({
   debug,
   children,
 }: FluentProviderProps) {
-  const messagesKey =
-    typeof messages === 'string' || Array.isArray(messages)
-      ? computeSourceHash(messages)
-      : null;
+  const messagesKey = useMemo(
+    () =>
+      typeof messages === 'string' || Array.isArray(messages)
+        ? computeSourceHash(messages)
+        : null,
+    [messages]
+  );
 
-  const fallbackMessagesKey =
-    typeof fallbackMessages === 'string' || Array.isArray(fallbackMessages)
-      ? computeSourceHash(fallbackMessages)
-      : null;
+  const fallbackMessagesKey = useMemo(
+    () =>
+      typeof fallbackMessages === 'string' || Array.isArray(fallbackMessages)
+        ? computeSourceHash(fallbackMessages)
+        : null,
+    [fallbackMessages]
+  );
 
   const bundle = useMemo<FluentBundle | null>(() => {
     if (!messages) return null;
@@ -157,15 +169,19 @@ export function useFormatter(): Formatter {
 
 export function useNow(options?: { updateInterval?: number }): Date {
   const context = useContext(FluentContext);
-  const initialDate = context.now ?? new Date();
-  const [now, setNow] = useState<Date>(() => initialDate);
+  const contextNow = context.now;
+  // A fixed, server/client-stable instant keeps hydration consistent. Without
+  // a provider-supplied `now`, the live clock starts ticking after mount.
+  const [now, setNow] = useState<Date>(() => contextNow ?? STATIC_NOW);
   const interval = options?.updateInterval;
 
   useEffect(() => {
-    if (context.now) {
-      setNow(context.now);
+    if (contextNow) {
+      setNow(contextNow);
+    } else {
+      setNow(new Date());
     }
-  }, [context.now]);
+  }, [contextNow]);
 
   useEffect(() => {
     if (!interval || interval <= 0) return;
@@ -237,3 +253,26 @@ export function FormattedMessage<
 
   return content;
 }
+
+/**
+ * Locale-aware link body. It lives in the client entry so that `createNavigation`
+ * can expose a hook-free wrapper that Server Components may render.
+ */
+export const LocalizedLink = forwardRef<HTMLAnchorElement, any>(
+  function LocalizedLink({ navConfig, href, locale: propLocale, ...rest }, ref) {
+    const currentLocale = useLocale();
+    const targetLocale = propLocale ?? currentLocale ?? (navConfig as NavigationConfig).defaultLocale;
+    const localizedHref = switchLocaleHref(
+      resolveLocalizedPathname({ href, locale: targetLocale }, navConfig),
+      propLocale,
+      navConfig
+    );
+    return React.createElement(NextLink, {
+      ...rest,
+      href: localizedHref,
+      prefetch: propLocale && navConfig.localePrefix !== 'always' ? false : rest.prefetch,
+      ref,
+    });
+  }
+);
+LocalizedLink.displayName = 'LocalizedLink';
