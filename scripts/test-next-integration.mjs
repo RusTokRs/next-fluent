@@ -8,6 +8,7 @@ import { createServer } from 'node:net';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const fixture = join(root, 'test', 'fixtures', 'next-app');
 const target = join(root, `.next-integration-${process.pid}`);
+const browserMode = process.argv.includes('--browser') || process.env.NEXT_FLUENT_BROWSER === '1';
 let linked = false;
 
 async function availablePort() {
@@ -113,7 +114,7 @@ async function checkRuntime(nextCli) {
       throw new Error('Explicit locale switch did not update the locale cookie.');
     }
     console.log('[next-fluent] Next runtime routing and RSC checks passed.');
-    if (process.env.NEXT_FLUENT_BROWSER === '1') checkBrowser(base);
+    if (browserMode) checkBrowser(base);
   } finally {
     child.kill();
     await Promise.race([
