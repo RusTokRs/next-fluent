@@ -31,7 +31,7 @@ export type NamespaceArgs<Namespace extends string> = keyof FluentMessages exten
 export type MessageArgsFor<K extends string, ArgsMap> = K extends keyof ArgsMap ? ArgsMap[K] extends Record<string, never> | undefined ? [args?: never] : [args: ArgsMap[K]] : [args?: FluentArgs];
 export interface TranslationFn<Key extends string = DefaultKey, ArgsMap extends Record<string, any> = AppFluentMessages> {
     <K extends Key>(key: K, ...args: MessageArgsFor<K, ArgsMap>): string;
-    raw<K extends Key>(key: K): string[] | string;
+    raw<K extends Key>(key: K, ...args: MessageArgsFor<K, ArgsMap>): string[] | string;
     rich<K extends Key>(key: K, values?: RichTranslationValues): React.ReactNode;
     has<K extends Key>(key: K): boolean;
 }
@@ -176,6 +176,12 @@ export interface I18nMiddlewareOptions {
         locales?: readonly string[];
     }[];
     basePath?: string;
+    /**
+     * When set, requests whose Host does not match this allow-list receive `421
+     * Misdirected Request` instead of redirects. Protects against Host-header
+     * cache poisoning; entries support a `*.` subdomain wildcard.
+     */
+    trustedHosts?: readonly string[];
 }
 export interface I18nConfig {
     locales: readonly string[];
@@ -190,5 +196,6 @@ export interface I18nConfig {
         locales?: readonly string[];
     }[];
     basePath?: string;
+    trustedHosts?: readonly string[];
     loadMessages?: (locale: string) => Promise<string | readonly string[]> | string | readonly string[];
 }

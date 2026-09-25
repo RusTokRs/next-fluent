@@ -1,65 +1,6 @@
-// src/utils.ts
-var MAX_LOCALE_TAG_LENGTH = 64;
-function canonicalizeLocale(locale) {
-  if (!locale || typeof locale !== "string") return void 0;
-  if (locale.length > MAX_LOCALE_TAG_LENGTH) return void 0;
-  let raw = locale.trim();
-  if (!raw) return void 0;
-  if (raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"')) {
-    raw = raw.slice(1, -1).trim();
-    if (!raw) return void 0;
-  }
-  const normalized = raw.replaceAll("_", "-");
-  try {
-    const canonical = Intl.getCanonicalLocales(normalized);
-    return canonical[0];
-  } catch {
-    return void 0;
-  }
-}
-
-// src/lru.ts
-var LRUCache = class {
-  constructor(maxSize) {
-    this.maxSize = maxSize;
-  }
-  maxSize;
-  map = /* @__PURE__ */ new Map();
-  get(key) {
-    const val = this.map.get(key);
-    if (val !== void 0) {
-      this.map.delete(key);
-      this.map.set(key, val);
-    }
-    return val;
-  }
-  set(key, value) {
-    if (this.map.has(key)) {
-      this.map.delete(key);
-    } else if (this.map.size >= this.maxSize) {
-      const oldestKey = this.map.keys().next().value;
-      if (oldestKey !== void 0) {
-        this.map.delete(oldestKey);
-      }
-    }
-    this.map.set(key, value);
-  }
-  has(key) {
-    return this.map.has(key);
-  }
-  delete(key) {
-    return this.map.delete(key);
-  }
-  clear() {
-    this.map.clear();
-  }
-  get size() {
-    return this.map.size;
-  }
-};
-
-// src/formatter.ts
-var MAX_CACHE_SIZE = 200;
+import { canonicalizeLocale } from "./utils.js";
+import { LRUCache } from "./lru.js";
+const MAX_CACHE_SIZE = 200;
 function stringifySorted(obj) {
   if (obj === null || typeof obj !== "object") {
     return JSON.stringify(obj);
@@ -72,10 +13,10 @@ function stringifySorted(obj) {
     (k) => `${JSON.stringify(k)}:${stringifySorted(obj[k])}`
   ).join(",")}}`;
 }
-var dtfCache = new LRUCache(MAX_CACHE_SIZE);
-var nfCache = new LRUCache(MAX_CACHE_SIZE);
-var rtfCache = new LRUCache(MAX_CACHE_SIZE);
-var lfCache = new LRUCache(MAX_CACHE_SIZE);
+const dtfCache = new LRUCache(MAX_CACHE_SIZE);
+const nfCache = new LRUCache(MAX_CACHE_SIZE);
+const rtfCache = new LRUCache(MAX_CACHE_SIZE);
+const lfCache = new LRUCache(MAX_CACHE_SIZE);
 function clearFormatterCache() {
   dtfCache.clear();
   nfCache.clear();

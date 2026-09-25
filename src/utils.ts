@@ -131,7 +131,8 @@ function parseAcceptLanguageEntry(entry: string): { tag: string; quality: number
 
 export function resolveAcceptLanguage(
   header: string | null | undefined,
-  locales: readonly string[]
+  locales: readonly string[],
+  preferred?: string
 ): string | undefined {
   if (!header) return undefined;
 
@@ -150,7 +151,7 @@ export function resolveAcceptLanguage(
 
     if (candidate && candidate.quality > bestQuality) {
       const matched = candidate.tag === '*'
-        ? locales[0]
+        ? (preferred ? matchSupportedLocale(preferred, locales) : undefined) ?? locales[0]
         : matchSupportedLocale(candidate.tag, locales);
 
       if (matched) {

@@ -2,6 +2,19 @@ import type { I18nMiddlewareOptions } from './types';
 import { matchSupportedLocale, resolveAcceptLanguage, validateI18nConfig } from './utils';
 import { rewriteLocalizedPath, validatePathnames, validateRouteEnvironment } from './route-engine';
 
+function hostMatchesTrustedList(requestHost: string, list: readonly string[]): boolean {
+  const hostname = requestHost.replace(/:\d+$/, '');
+  for (const raw of list) {
+    const entry = raw.toLowerCase();
+    if (entry === requestHost || entry === hostname) return true;
+    if (entry.startsWith('*.')) {
+      const base = entry.slice(2);
+      if (hostname === base || hostname.endsWith(`.${base}`)) return true;
+    }
+  }
+  return false;
+}
+
 export interface NextMiddlewareRequestLike {
   url: string;
   nextUrl: {
@@ -33,6 +46,7 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
     pathnames,
     domains,
     basePath = '',
+    trustedHosts,
   } = options;
 
   // Resolve defaultLocale to its exact spelling in `locales` so that string
@@ -61,6 +75,11 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
       } catch { /* Keep NextRequest's origin for an invalid Host header. */ }
     }
     const requestHost = requestOrigin.host.toLowerCase();
+    if (trustedHosts && trustedHosts.length > 0 && !hostMatchesTrustedList(requestHost, trustedHosts)) {
+      // Misdirected/foreign Host: never emit redirects that a poisoned cache
+      // could replay on the real origin.
+      return new NextResponse(null, { status: 421 });
+    }
     const requestUrl = (path: string) => new URL(path, requestOrigin);
     const domain = domains?.find((item) => item.domain.toLowerCase() === requestHost);
     const locales = domain ? domain.locales ?? [domain.defaultLocale] : allLocales;
@@ -90,7 +109,8 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
 
     const headerLocale = resolveAcceptLanguage(
       request.headers.get('accept-language'),
-      locales
+      locales,
+      defaultLocale
     );
 
     const preferredLocale = cookieLocale || headerLocale || defaultLocale;
@@ -136,6 +156,10 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
     };
 
     const createRedirect = (targetUrl: URL | string, targetLocale: string) => {
+      // Next.js re-parses the Location header of middleware responses and
+      // requires it to be absolute. Cross-domain targets are built exclusively
+      // from the trusted `domains` config; same-host targets derive from the
+      // request origin. Host-header injection is mitigated by `trustedHosts`.
       const response = NextResponse.redirect(targetUrl);
       if (response.headers?.set) {
         response.headers.set(headerName, targetLocale);
@@ -168,7 +192,7 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
       return createSuccessResponse(matchedPrefix);
     }
 
-    // Strategy 1: 'never' (no prefixes in URL, internal rewrite to /[locale]/...)
+    // Strategy 1: 'never' (no prefixes in URL, internal rewrite to /[locale]/... )
     if (localePrefix === 'never') {
       if (matchedPrefix) {
         const rest = segments.slice(1).join('/');

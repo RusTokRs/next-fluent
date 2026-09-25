@@ -68,7 +68,7 @@ export interface TranslationFn<
   ArgsMap extends Record<string, any> = AppFluentMessages
 > {
   <K extends Key>(key: K, ...args: MessageArgsFor<K, ArgsMap>): string;
-  raw<K extends Key>(key: K): string[] | string;
+  raw<K extends Key>(key: K, ...args: MessageArgsFor<K, ArgsMap>): string[] | string;
   rich<K extends Key>(key: K, values?: RichTranslationValues): React.ReactNode;
   has<K extends Key>(key: K): boolean;
 }
@@ -238,6 +238,12 @@ export interface I18nMiddlewareOptions {
   pathnames?: Pathnames<any>;
   domains?: readonly { domain: string; defaultLocale: string; locales?: readonly string[] }[];
   basePath?: string;
+  /**
+   * When set, requests whose Host does not match this allow-list receive `421
+   * Misdirected Request` instead of redirects. Protects against Host-header
+   * cache poisoning; entries support a `*.` subdomain wildcard.
+   */
+  trustedHosts?: readonly string[];
 }
 
 export interface I18nConfig {
@@ -249,5 +255,6 @@ export interface I18nConfig {
   pathnames?: Pathnames<any>;
   domains?: readonly { domain: string; defaultLocale: string; locales?: readonly string[] }[];
   basePath?: string;
+  trustedHosts?: readonly string[];
   loadMessages?: (locale: string) => Promise<string | readonly string[]> | string | readonly string[];
 }

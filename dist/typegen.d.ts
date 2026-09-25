@@ -4,6 +4,7 @@
 export interface ExtractedMessage {
     id: string;
     dotId: string;
+    hasValue: boolean;
     attributes: string[];
     variables: string[];
     valueVariables: string[];

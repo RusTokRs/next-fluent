@@ -1,6 +1,5 @@
-// src/typegen.ts
 import { parse, Visitor } from "@fluent/syntax";
-var VariableExtractor = class extends Visitor {
+class VariableExtractor extends Visitor {
   variables = /* @__PURE__ */ new Set();
   visitVariableReference(node) {
     if (node.id?.name) {
@@ -8,7 +7,7 @@ var VariableExtractor = class extends Visitor {
     }
     this.genericVisit(node);
   }
-};
+}
 function extractMessagesFromFtl(ftlContent) {
   const resource = parse(ftlContent, { withSpans: false });
   const messages = [];
@@ -34,6 +33,7 @@ function extractMessagesFromFtl(ftlContent) {
       messages.push({
         id,
         dotId,
+        hasValue: Boolean(msg.value),
         attributes,
         variables: Array.from(extractor.variables).sort(),
         valueVariables: Array.from(valueExtractor.variables).sort(),
@@ -71,9 +71,11 @@ function generateTypeDeclarations(ftlContents) {
     }
   };
   for (const m of allMessages) {
-    addKeyEntry(m.id, m.valueVariables);
-    if (m.dotId !== m.id) {
-      addKeyEntry(m.dotId, m.valueVariables);
+    if (m.hasValue) {
+      addKeyEntry(m.id, m.valueVariables);
+      if (m.dotId !== m.id) {
+        addKeyEntry(m.dotId, m.valueVariables);
+      }
     }
     if (m.attributes) {
       for (const attr of m.attributes) {

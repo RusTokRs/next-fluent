@@ -1,38 +1,34 @@
-import type { Pathnames } from './types';
-import { matchSupportedLocale } from './utils';
-
-type Params = Record<string, string | string[]>;
-interface Match { template: string; params: Params; }
-
-function segments(path: string): string[] {
-  return path.split('/').filter(Boolean);
+import { matchSupportedLocale } from "./utils.js";
+function segments(path) {
+  return path.split("/").filter(Boolean);
 }
-
-function parameter(segment: string): { name: string; kind: 'one' | 'many' | 'optional' } | null {
+function parameter(segment) {
   let match = /^\[\[\.\.\.([A-Za-z][A-Za-z\d_]*)\]\]$/.exec(segment);
-  if (match) return { name: match[1], kind: 'optional' };
+  if (match) return { name: match[1], kind: "optional" };
   match = /^\[\.\.\.([A-Za-z][A-Za-z\d_]*)\]$/.exec(segment);
-  if (match) return { name: match[1], kind: 'many' };
+  if (match) return { name: match[1], kind: "many" };
   match = /^\[([A-Za-z][A-Za-z\d_]*)\]$/.exec(segment);
-  return match ? { name: match[1], kind: 'one' } : null;
+  return match ? { name: match[1], kind: "one" } : null;
 }
-
-function decode(segment: string): string {
-  try { return decodeURIComponent(segment); } catch { return segment; }
+function decode(segment) {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
 }
-
-function matchTemplate(template: string, pathname: string): Params | null {
+function matchTemplate(template, pathname) {
   const pattern = segments(template);
   const actual = segments(pathname);
-  const params: Params = {};
+  const params = {};
   let index = 0;
   for (let i = 0; i < pattern.length; i++) {
     const part = pattern[i];
     const variable = parameter(part);
-    if (variable?.kind === 'many' || variable?.kind === 'optional') {
+    if (variable?.kind === "many" || variable?.kind === "optional") {
       if (i !== pattern.length - 1) return null;
       const rest = actual.slice(index).map(decode);
-      if (variable.kind === 'many' && rest.length === 0) return null;
+      if (variable.kind === "many" && rest.length === 0) return null;
       params[variable.name] = rest;
       index = actual.length;
       break;
@@ -44,25 +40,14 @@ function matchTemplate(template: string, pathname: string): Params | null {
   }
   return index === actual.length ? params : null;
 }
-
-function specificity(template: string): number {
+function specificity(template) {
   return segments(template).reduce((score, part) => score + (parameter(part) ? 0 : 10), 0);
 }
-
-export function externalTemplate(
-  internal: string,
-  locale: string,
-  pathnames?: Pathnames<any>
-): string {
+function externalTemplate(internal, locale, pathnames) {
   const mapped = pathnames?.[internal];
-  return typeof mapped === 'string' ? mapped : mapped?.[locale] ?? internal;
+  return typeof mapped === "string" ? mapped : mapped?.[locale] ?? internal;
 }
-
-export function findInternalPath(
-  pathname: string,
-  locale: string,
-  pathnames?: Pathnames<any>
-): Match | null {
+function findInternalPath(pathname, locale, pathnames) {
   if (!pathnames) return null;
   const entries = Object.keys(pathnames).sort((a, b) => specificity(b) - specificity(a));
   for (const internal of entries) {
@@ -76,46 +61,38 @@ export function findInternalPath(
   }
   return null;
 }
-
-export function renderTemplate(template: string, params: Params): string {
-  const result: string[] = [];
+function renderTemplate(template, params) {
+  const result = [];
   for (const part of segments(template)) {
     const variable = parameter(part);
-    if (!variable) { result.push(part); continue; }
+    if (!variable) {
+      result.push(part);
+      continue;
+    }
     const value = params[variable.name];
-    if (value === undefined) {
-      if (variable.kind === 'optional') continue;
+    if (value === void 0) {
+      if (variable.kind === "optional") continue;
       throw new Error(`[next-fluent] Missing route parameter: ${variable.name}`);
     }
-    if (variable.kind === 'one') {
+    if (variable.kind === "one") {
       if (Array.isArray(value)) throw new Error(`[next-fluent] Expected one route parameter: ${variable.name}`);
       result.push(encodeURIComponent(value));
     } else {
       const list = Array.isArray(value) ? value : [value];
-      if (variable.kind === 'many' && list.length === 0) {
+      if (variable.kind === "many" && list.length === 0) {
         throw new Error(`[next-fluent] Missing route parameter: ${variable.name}`);
       }
       result.push(...list.map(encodeURIComponent));
     }
   }
-  return `/${result.join('/')}`;
+  return `/${result.join("/")}`;
 }
-
-export function localizePath(
-  pathname: string,
-  sourceLocale: string,
-  targetLocale: string,
-  pathnames?: Pathnames<any>,
-  query?: Record<string, unknown>,
-  locales?: readonly string[]
-): { pathname: string; consumed: string[] } {
-  const match = findInternalPath(pathname, sourceLocale, pathnames)
-    ?? findInternalPath(pathname, targetLocale, pathnames)
-    ?? locales?.map((locale) => findInternalPath(pathname, locale, pathnames)).find(Boolean);
+function localizePath(pathname, sourceLocale, targetLocale, pathnames, query, locales) {
+  const match = findInternalPath(pathname, sourceLocale, pathnames) ?? findInternalPath(pathname, targetLocale, pathnames) ?? locales?.map((locale) => findInternalPath(pathname, locale, pathnames)).find(Boolean);
   if (!match) return { pathname, consumed: [] };
   const params = { ...match.params };
   for (const [name, value] of Object.entries(query ?? {})) {
-    if (value !== undefined && value !== null) {
+    if (value !== void 0 && value !== null) {
       params[name] = Array.isArray(value) ? value.map(String) : String(value);
     }
   }
@@ -127,37 +104,31 @@ export function localizePath(
     })
   ) };
 }
-
-export function rewriteLocalizedPath(
-  pathname: string,
-  locale: string,
-  pathnames?: Pathnames<any>
-): string {
+function rewriteLocalizedPath(pathname, locale, pathnames) {
   const match = findInternalPath(pathname, locale, pathnames);
   if (!match) return pathname;
   const result = renderTemplate(match.template, match.params);
-  return pathname.length > 1 && pathname.endsWith('/') && !result.endsWith('/')
-    ? `${result}/`
-    : result;
+  return pathname.length > 1 && pathname.endsWith("/") && !result.endsWith("/") ? `${result}/` : result;
 }
-
-export function validatePathnames(locales: readonly string[], pathnames?: Pathnames<any>): void {
+function validatePathnames(locales, pathnames) {
   if (!pathnames) return;
   for (const locale of locales) {
-    const seen = new Set<string>();
+    const seen = /* @__PURE__ */ new Set();
     for (const internal of Object.keys(pathnames)) {
       const external = externalTemplate(internal, locale, pathnames);
-      if (!internal.startsWith('/') || !external.startsWith('/') || external.startsWith('//')) {
-        throw new Error('[next-fluent] Pathnames must be internal absolute paths.');
+      if (!internal.startsWith("/") || !external.startsWith("/") || external.startsWith("//")) {
+        throw new Error("[next-fluent] Pathnames must be internal absolute paths.");
       }
       const key = external.toLowerCase();
       if (seen.has(key)) throw new Error(`[next-fluent] Duplicate pathname for ${locale}: ${external}`);
       seen.add(key);
       const internalParams = segments(internal).flatMap((part) => {
-        const value = parameter(part); return value ? [value.name] : [];
+        const value = parameter(part);
+        return value ? [value.name] : [];
       }).sort();
       const externalParams = segments(external).flatMap((part) => {
-        const value = parameter(part); return value ? [value.name] : [];
+        const value = parameter(part);
+        return value ? [value.name] : [];
       }).sort();
       if (internalParams.join() !== externalParams.join()) {
         throw new Error(`[next-fluent] Route parameters differ for ${internal} (${locale}).`);
@@ -165,24 +136,19 @@ export function validatePathnames(locales: readonly string[], pathnames?: Pathna
     }
   }
 }
-
-export function validateRouteEnvironment(
-  locales: readonly string[],
-  domains?: readonly { domain: string; defaultLocale: string; locales?: readonly string[] }[],
-  basePath?: string
-): void {
-  if (basePath !== undefined && (basePath !== '' && (
-    !basePath.startsWith('/') || basePath.startsWith('//') ||
-    basePath.endsWith('/') || /[?#\\]/.test(basePath)
-  ))) {
-    throw new Error('[next-fluent] basePath must be an absolute path without a trailing slash.');
+function validateRouteEnvironment(locales, domains, basePath) {
+  if (basePath !== void 0 && (basePath !== "" && (!basePath.startsWith("/") || basePath.startsWith("//") || basePath.endsWith("/") || /[?#\\]/.test(basePath)))) {
+    throw new Error("[next-fluent] basePath must be an absolute path without a trailing slash.");
   }
-  const seen = new Set<string>();
+  const seen = /* @__PURE__ */ new Set();
   for (const entry of domains ?? []) {
-    let url: URL;
-    try { url = new URL(`https://${entry.domain}`); }
-    catch { throw new Error(`[next-fluent] Invalid domain: ${entry.domain}`); }
-    if (url.host.toLowerCase() !== entry.domain.toLowerCase() || url.pathname !== '/' || !url.hostname) {
+    let url;
+    try {
+      url = new URL(`https://${entry.domain}`);
+    } catch {
+      throw new Error(`[next-fluent] Invalid domain: ${entry.domain}`);
+    }
+    if (url.host.toLowerCase() !== entry.domain.toLowerCase() || url.pathname !== "/" || !url.hostname) {
       throw new Error(`[next-fluent] Invalid domain: ${entry.domain}`);
     }
     const name = entry.domain.toLowerCase();
@@ -199,3 +165,12 @@ export function validateRouteEnvironment(
     }
   }
 }
+export {
+  externalTemplate,
+  findInternalPath,
+  localizePath,
+  renderTemplate,
+  rewriteLocalizedPath,
+  validatePathnames,
+  validateRouteEnvironment
+};
