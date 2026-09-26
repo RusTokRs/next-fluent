@@ -278,7 +278,7 @@ Next.js рендерит layout и page независимо, поэтому `se
 | Линт | `npm run lint` (ESLint 9 + react-hooks) | 0 ошибок, 0 предупреждений |
 | Типы | `npm run typecheck` (TS 6.0.3) | ok |
 | Типы потребителя | `npm run test:types` (позитивные + `@ts-expect-error` негативы, включая новые API) | ok |
-| Unit-тесты | `npm test` | **191/191** (136 → 157 → 191) |
+| Unit-тесты | `npm test` | **191/191** (157 после аудита → 178 после дорожной карты → +13 hardening) |
 | Edge-совместимость | `npm run test:edge` | ok |
 | Бюджет размера | `npm run size` | ok (middleware 28.3 kB, edge-таргет) |
 | Полный прогон | `npm run check` | ok (ci + типы потребителя + production Next) |
