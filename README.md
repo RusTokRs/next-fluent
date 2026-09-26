@@ -250,7 +250,7 @@ export default setRequestConfig(async ({ locale }) => ({
 }));
 ```
 
-A throwing handler can never break a render. `debug: true` on `getTranslations()`/`createTranslator()` keeps the development-friendly `[MISSING: namespace.key]` output.
+Missing and formatting errors are logged by default (`console.warn` / `console.error`); pass `onError() {}` to silence them completely. A throwing handler can never break a render. `debug: true` on `getTranslations()`/`createTranslator()` keeps the development-friendly `[MISSING: namespace.key]` output.
 
 ### Named formats
 
