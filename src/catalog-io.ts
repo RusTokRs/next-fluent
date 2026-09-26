@@ -61,6 +61,52 @@ export function readCatalogsByLocale(dir: string): Record<string, string[]> {
   return catalogs;
 }
 
+/** Directories never worth scanning for translator call sites. */
+const SKIPPED_SOURCE_DIRS = new Set([
+  'node_modules',
+  '.git',
+  '.next',
+  'dist',
+  'out',
+  'build',
+  'coverage',
+  '.turbo',
+]);
+
+const SOURCE_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
+
+/**
+ * Collects source files worth scanning for message usage.
+ *
+ * Deliberately shallow about file *types*: `.d.ts` files are skipped because
+ * they contain no call sites, only declarations.
+ */
+export function collectSourceFiles(dir: string): string[] {
+  const found: string[] = [];
+  const walk = (current: string): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        if (SKIPPED_SOURCE_DIRS.has(entry.name) || entry.name.startsWith('.')) continue;
+        walk(full);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      if (entry.name.endsWith('.d.ts')) continue;
+      if (!SOURCE_EXTENSIONS.includes(path.extname(entry.name))) continue;
+      found.push(full);
+    }
+  };
+  walk(dir);
+  return found;
+}
+
 export interface TypegenResult {
   files: string[];
   changed: boolean;

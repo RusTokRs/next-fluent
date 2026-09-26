@@ -4,8 +4,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pseudoLocalizeFtl } from '../dist/pseudo.js';
 import { checkCatalogs, formatCheckReport } from '../dist/check.js';
+import { analyzeUsage, formatUsageReport } from '../dist/usage.js';
 import {
   collectCatalogFiles,
+  collectSourceFiles,
   readCatalog,
   readCatalogsByLocale,
   watchCatalogs,
@@ -16,11 +18,13 @@ import {
 const USAGE = `Usage:
   next-fluent typegen [--input <path>] [--output <path>] [--watch]
   next-fluent check   [--input <path>] [--reference <locale>] [--json]
+                      [--usage] [--src <dir>] [--allow-unused] [--strict-usage]
   next-fluent pseudo  --input <path> --output <path>
 
 Commands:
   typegen  Generate TypeScript declarations for message keys and arguments
-  check    Compare every locale catalog against a reference locale
+  check    Compare every locale catalog against a reference locale.
+           With --usage also report catalog keys no call site references
   pseudo   Generate pseudo-localized catalogs for layout testing
 
 Options:
@@ -29,6 +33,10 @@ Options:
   -r, --reference   Reference locale for "check" (default: first locale, sorted)
   -w, --watch       Regenerate on catalog changes (typegen)
       --json        Machine-readable output (check)
+      --usage       Also analyze source code usage against the catalog (check)
+      --src         Source directory to scan for --usage (default: app, src, pages or components)
+      --allow-unused  Do not report unused catalog keys
+      --strict-usage  Make unused keys and dynamic call sites fail the command
   -h, --help        Show this help message`;
 
 const DEFAULT_TYPEGEN_OUTPUT = 'next-fluent.d.ts';
@@ -76,7 +84,18 @@ if (!['typegen', 'check', 'pseudo'].includes(command)) {
   process.exit(1);
 }
 
-const options = { input: '', output: '', reference: '', watch: false, json: false };
+const options = {
+  input: '',
+  output: '',
+  reference: '',
+  watch: false,
+  json: false,
+  usage: false,
+  src: '',
+  allowUnused: false,
+  strictUsage: false,
+  ignoreUnused: [],
+};
 
 for (let i = 1; i < argv.length; i++) {
   const arg = argv[i];
@@ -93,8 +112,15 @@ for (let i = 1; i < argv.length; i++) {
   if (output !== undefined) { options.output = output; continue; }
   const reference = take('--reference', '-r');
   if (reference !== undefined) { options.reference = reference; continue; }
+  const src = take('--src');
+  if (src !== undefined) { options.src = src; continue; }
+  const ignoreUnused = take('--ignore-unused');
+  if (ignoreUnused !== undefined) { options.ignoreUnused.push(ignoreUnused); continue; }
   if (arg === '--watch' || arg === '-w') { options.watch = true; continue; }
   if (arg === '--json') { options.json = true; continue; }
+  if (arg === '--usage') { options.usage = true; continue; }
+  if (arg === '--allow-unused') { options.allowUnused = true; continue; }
+  if (arg === '--strict-usage') { options.strictUsage = true; continue; }
   if (arg === '--help' || arg === '-h') { console.log(USAGE); process.exit(0); }
 
   console.error(`Error: Unknown option "${arg}".\n\n${USAGE}`);
@@ -163,13 +189,62 @@ if (command === 'check') {
 
   const report = checkCatalogs(catalogs, { referenceLocale: options.reference || undefined });
 
-  if (options.json) {
-    console.log(JSON.stringify(report, null, 2));
-  } else {
-    console.log(formatCheckReport(report));
+  let usageReport = null;
+  if (options.usage) {
+    const sourceDirs = (options.src ? [options.src] : ['app', 'src', 'pages', 'components'])
+      .map((candidate) => path.resolve(process.cwd(), candidate))
+      .filter((candidate) => fs.existsSync(candidate) && fs.statSync(candidate).isDirectory());
+    if (sourceDirs.length === 0) {
+      console.error(
+        'Error: --usage needs a source directory to scan. Pass --src <dir> ' +
+          '(looked for app, src, pages, components).'
+      );
+      process.exit(1);
+    }
+    const files = sourceDirs.flatMap((dir) => collectSourceFiles(dir));
+    const sources = files.map((file) => {
+      const relative = path.relative(process.cwd(), file);
+      return {
+        // Outside the working directory a relative path would be all `..`;
+        // the absolute one is more readable in a report.
+        path: relative.startsWith('..') ? file : relative,
+        content: fs.readFileSync(file, 'utf8'),
+      };
+    });
+    usageReport = runGuarded(() =>
+      analyzeUsage(catalogs, sources, {
+        referenceLocale: options.reference || undefined,
+        reportUnused: !options.allowUnused,
+        ignore: options.ignoreUnused,
+      })
+    );
   }
 
-  process.exit(report.issues.length > 0 ? 1 : 0);
+  if (options.json) {
+    console.log(JSON.stringify(usageReport ? { ...report, usage: usageReport } : report, null, 2));
+  } else {
+    console.log(formatCheckReport(report));
+    if (usageReport) {
+      console.log('');
+      console.log(formatUsageReport(usageReport));
+    }
+  }
+
+  // Locale drift always fails. Usage findings are graded: a key that is used
+  // but absent, or an attrs call on a message without attributes, is a defect;
+  // unused keys and dynamic call sites are advisories unless --strict-usage.
+  const hardUsageIssues = usageReport
+    ? usageReport.issues.filter((issue) => issue.kind === 'missing' || issue.kind === 'missing-attributes')
+    : [];
+  const softUsageIssues = usageReport
+    ? usageReport.issues.filter((issue) => issue.kind === 'unused' || issue.kind === 'dynamic')
+    : [];
+  const failed =
+    report.issues.length > 0 ||
+    hardUsageIssues.length > 0 ||
+    (options.strictUsage && softUsageIssues.length > 0);
+
+  process.exit(failed ? 1 : 0);
 }
 
 // ---------------------------------------------------------------------------

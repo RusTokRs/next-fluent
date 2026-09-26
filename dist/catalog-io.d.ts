@@ -15,6 +15,13 @@ export declare function collectCatalogFiles(target: string): string[];
 export declare function readCatalog(file: string): string;
 /** Groups catalogs by locale: `messages/en.ftl` or `messages/en/app.ftl` → `en`. */
 export declare function readCatalogsByLocale(dir: string): Record<string, string[]>;
+/**
+ * Collects source files worth scanning for message usage.
+ *
+ * Deliberately shallow about file *types*: `.d.ts` files are skipped because
+ * they contain no call sites, only declarations.
+ */
+export declare function collectSourceFiles(dir: string): string[];
 export interface TypegenResult {
     files: string[];
     changed: boolean;

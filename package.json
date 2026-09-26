@@ -71,6 +71,10 @@
       "types": "./dist/check.d.ts",
       "default": "./dist/check.js"
     },
+    "./usage": {
+      "types": "./dist/usage.d.ts",
+      "default": "./dist/usage.js"
+    },
     "./utils": {
       "types": "./dist/utils.d.ts",
       "default": "./dist/utils.js"

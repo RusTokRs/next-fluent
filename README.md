@@ -389,6 +389,49 @@ command exits non-zero, so translation gaps fail the build instead of shipping a
 fallback string. The same engine is available programmatically as
 `checkCatalogs()` from `next-fluent/check`.
 
+### Finding dead messages
+
+`next-intl extract` scans your code because there the code is the source of
+truth and the JSON catalog is a hand-maintained shadow. next-fluent is inverted:
+the catalog is the source of truth and `typegen` derives types from it, so
+`t('unknown')` never compiles in the first place. What types *cannot* tell you is
+the other direction — which messages nobody renders any more. `--usage` answers
+that:
+
+```bash
+npx next-fluent check --input messages --src app --usage
+# Usage against en: 41/52 keys used, 3 dynamic call site(s).
+#
+# missing (1)
+#   "checkout-totl" is used in app/checkout/page.tsx but is missing from en. (app/checkout/page.tsx:18)
+#
+# dynamic (3)
+#   Key is not a string literal and cannot be checked statically. (app/list/item.tsx:9)
+#
+# unused (8)
+#   "legacy-banner" is defined in en but never referenced in the scanned sources.
+```
+
+| Finding | Meaning | Severity |
+| --- | --- | --- |
+| `missing` | a literal key is used but absent from the reference locale | fails the command |
+| `missing-attributes` | `t.attrs(k)` / `t.plain(k)` on a message with no attributes | fails the command |
+| `dynamic` | `t(key)` or `` t(`x-${id}`) `` — unverifiable statically, listed for review | advisory |
+| `unused` | a catalog key no call site references — a safe-delete candidate | advisory |
+
+Advisories never fail the build; pass `--strict-usage` to make them fail, or
+`--allow-unused` to skip the dead-key report entirely. Because a false "unused"
+is the classic way to lose trust in such a tool, the analyzer is deliberately
+conservative: it resolves keys through the same candidate list the runtime uses
+(`useTranslations('checkout')` + `t('total')` finds both `checkout-total` and
+`checkout.total`), it counts every attribute of a message behind `t.attrs()`,
+and anything it cannot resolve is reported as `dynamic` rather than guessed at.
+A single call site can be exempted with a `// next-fluent-ignore` comment, whole
+namespaces with `--ignore-unused <prefix>`.
+
+The analyzer never writes to a catalog. It is also available programmatically as
+`analyzeUsage()` / `formatUsageReport()` from `next-fluent/usage`.
+
 ---
 
 ## API surface (next-intl parity map)
@@ -418,7 +461,7 @@ fallback string. The same engine is available programmatically as
 | JSON catalogs | ✅ | accepted wherever FTL text is, plus in the CLI |
 | — | `pickMessages()` | prune a catalog to one namespace for client payloads |
 | — | `next-fluent check` | cross-locale missing/extra/duplicate/parse report |
-| Message extraction from source | ❌ | `next-intl extract` has no counterpart |
+| Message extraction from source | ✅ by design | not needed: the catalog is the source of truth, so `t('unknown')` is a compile error. `next-fluent check --usage` covers the other direction — dead keys and unverifiable call sites |
 
 ## License
 

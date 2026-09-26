@@ -39,6 +39,42 @@ function readCatalogsByLocale(dir) {
   }
   return catalogs;
 }
+const SKIPPED_SOURCE_DIRS = /* @__PURE__ */ new Set([
+  "node_modules",
+  ".git",
+  ".next",
+  "dist",
+  "out",
+  "build",
+  "coverage",
+  ".turbo"
+]);
+const SOURCE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
+function collectSourceFiles(dir) {
+  const found = [];
+  const walk = (current) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        if (SKIPPED_SOURCE_DIRS.has(entry.name) || entry.name.startsWith(".")) continue;
+        walk(full);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      if (entry.name.endsWith(".d.ts")) continue;
+      if (!SOURCE_EXTENSIONS.includes(path.extname(entry.name))) continue;
+      found.push(full);
+    }
+  };
+  walk(dir);
+  return found;
+}
 function writeTypeDeclarations(input, output) {
   const files = collectCatalogFiles(input);
   const content = generateTypeDeclarations(files.map(readCatalog));
@@ -105,6 +141,7 @@ export {
   CATALOG_EXTENSIONS,
   DEFAULT_CATALOG_DIRS,
   collectCatalogFiles,
+  collectSourceFiles,
   isCatalogFile,
   readCatalog,
   readCatalogsByLocale,

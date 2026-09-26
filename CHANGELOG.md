@@ -39,6 +39,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a neutral platform, rejects `node:*`/`require`/`next/headers` references and
   executes it against a Web-standard `Request`.
 - **Client bundle size budgets** (`npm run size`), enforced in CI.
+- **Usage analysis: `next-fluent check --usage`** and `analyzeUsage()` /
+  `formatUsageReport()` (`next-fluent/usage`). The inverse of message
+  extraction: the catalog stays the source of truth, and the analyzer reports
+  what types cannot — catalog keys no call site references (`unused`), call
+  sites too dynamic to verify (`dynamic`), literal keys absent from the
+  reference locale (`missing`) and `t.attrs()`/`t.plain()` calls on messages
+  without attributes (`missing-attributes`). Keys are resolved through the same
+  candidate list the runtime uses, every attribute behind `t.attrs()` counts as
+  used, `// next-fluent-ignore` exempts a call site and `--ignore-unused
+  <prefix>` a namespace. `missing`/`missing-attributes` fail the command;
+  advisories only do with `--strict-usage`. The analyzer never writes to a
+  catalog.
 
 ### Changed
 
