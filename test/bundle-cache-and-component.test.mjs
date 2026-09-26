@@ -1,14 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import React from 'react';
 import {
   createFluentBundle,
   getCachedFluentBundle,
   clearBundleCache,
   getBundleCacheStats,
-  FluentProvider,
   FormattedMessage,
-  useTranslations,
 } from '../dist/index.js';
 
 test('bundle cache returns identical bundle instance for identical locale and sources', () => {

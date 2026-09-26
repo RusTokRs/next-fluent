@@ -15,7 +15,6 @@ import type {
 import { matchSupportedLocale, validateI18nConfig } from './utils';
 import { validatePathnames, validateRouteEnvironment } from './route-engine';
 import {
-  formatUrlObject,
   resolveLocalizedPathname,
   rewriteToInternalPath,
   switchLocaleHref,
@@ -24,15 +23,6 @@ import { LocalizedLink, useLocale } from './client';
 
 // Pure URL helpers stay available from this entry for backwards compatibility.
 export { formatUrlObject, resolveLocalizedPathname, assertSafeHref, isExternalUrl } from './nav-url';
-
-const STUB_ROUTER = {
-  push: () => {},
-  replace: () => {},
-  prefetch: () => {},
-  back: () => {},
-  forward: () => {},
-  refresh: () => {},
-} as unknown as ReturnType<typeof useNextRouter>;
 
 export function createNavigation<
   const Locales extends readonly string[],
@@ -99,15 +89,10 @@ export function createNavigation<Locales extends readonly string[] = readonly st
   }
 
   function useRouter() {
-    // `useRouter` from next/navigation throws outside the App Router. The hook
-    // registers its context read before the invariant, so the hook order stays
-    // stable even when the throw is caught here.
-    let router: ReturnType<typeof useNextRouter>;
-    try {
-      router = useNextRouter();
-    } catch {
-      router = STUB_ROUTER;
-    }
+    // Called unconditionally so the hook order never depends on control flow.
+    // `next/navigation` throws outside the App Router, which is the expected
+    // contract for this hook (a silent no-op stub hides real wiring bugs).
+    const router = useNextRouter();
     const currentLocale = useLocale();
 
     return useMemo(

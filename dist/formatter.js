@@ -23,15 +23,28 @@ function clearFormatterCache() {
   rtfCache.clear();
   lfCache.clear();
 }
+function resolveFormat(presets, options, kind) {
+  if (options === void 0 || typeof options !== "string") return options;
+  const preset = presets?.[options];
+  if (!preset) {
+    console.warn(
+      `[next-fluent] Unknown ${kind} format "${options}". Configure it in the request config "formats" option.`
+    );
+    return void 0;
+  }
+  return preset;
+}
 function createFormatter(optionsOrLocale) {
   const options = typeof optionsOrLocale === "string" ? { locale: optionsOrLocale } : optionsOrLocale;
   const rawLocale = options.locale || "en";
   const locale = canonicalizeLocale(rawLocale) || rawLocale;
   const timeZone = options.timeZone;
+  const formats = options.formats;
   return {
     locale,
     timeZone,
-    dateTime(value, dtfOptions) {
+    dateTime(value, dtfOptionsOrName) {
+      const dtfOptions = resolveFormat(formats?.dateTime, dtfOptionsOrName, "dateTime");
       const date = value instanceof Date ? value : new Date(typeof value === "number" || typeof value === "string" ? value : NaN);
       if (Number.isNaN(date.getTime())) {
         return String(value);
@@ -56,7 +69,8 @@ function createFormatter(optionsOrLocale) {
         return date.toISOString();
       }
     },
-    number(value, nfOptions) {
+    number(value, nfOptionsOrName) {
+      const nfOptions = resolveFormat(formats?.number, nfOptionsOrName, "number");
       const cacheKey = `${locale}::${stringifySorted(nfOptions ?? {})}`;
       let formatter = nfCache.get(cacheKey);
       if (!formatter) {
@@ -73,7 +87,8 @@ function createFormatter(optionsOrLocale) {
         return String(value);
       }
     },
-    relativeTime(value, unit, rtfOptions) {
+    relativeTime(value, unit, rtfOptionsOrName) {
+      const rtfOptions = resolveFormat(formats?.relativeTime, rtfOptionsOrName, "relativeTime");
       const cacheKey = `${locale}::${stringifySorted(rtfOptions ?? {})}`;
       let formatter = rtfCache.get(cacheKey);
       if (!formatter) {
@@ -90,11 +105,12 @@ function createFormatter(optionsOrLocale) {
         return `${value} ${unit}`;
       }
     },
-    list(value, lfOptions) {
+    list(value, lfOptionsOrName) {
       if (!value || typeof value[Symbol.iterator] !== "function") {
         return String(value ?? "");
       }
       const items = typeof value === "string" ? [value] : value;
+      const lfOptions = resolveFormat(formats?.list, lfOptionsOrName, "list");
       const cacheKey = `${locale}::${stringifySorted(lfOptions ?? {})}`;
       let formatter = lfCache.get(cacheKey);
       if (!formatter) {

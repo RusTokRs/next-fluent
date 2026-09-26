@@ -11,10 +11,12 @@ import {
   forLocale,
   getLocale,
   getTranslations,
+  getMessages,
   configureServerI18n,
   setRequestConfig,
   setRequestLocale,
   getFormatter,
+  getFormats,
   getTimeZone,
   getNow,
   getRequestConfigSnapshot,
@@ -41,7 +43,8 @@ import {
   useTranslations,
   useFormatter,
   useTimeZone,
-  useNow
+  useNow,
+  useMessages
 } from "./client.js";
 import {
   createFluentBundle,
@@ -51,6 +54,12 @@ import {
   getBundleCacheStats,
   LRUCache
 } from "./bundle.js";
+import {
+  FluentError,
+  FluentErrorCode,
+  createErrorReporter,
+  defaultMessageFallback
+} from "./errors.js";
 import {
   createDefaultFunctions,
   unwrapFluentValue,
@@ -69,6 +78,7 @@ import {
 } from "./typegen.js";
 import {
   canonicalizeLocale,
+  hasLocale,
   normalizeLocaleTag,
   matchSupportedLocale,
   localeLookupCandidates,
@@ -78,6 +88,8 @@ import {
   buildKeyCandidates
 } from "./utils.js";
 export {
+  FluentError,
+  FluentErrorCode,
   FluentProvider,
   FluentServerProvider,
   FormattedMessage,
@@ -89,6 +101,7 @@ export {
   clearFunctionsCache,
   configureServerI18n,
   createDefaultFunctions,
+  createErrorReporter,
   createFluentBundle,
   createFormatter,
   createI18n,
@@ -97,6 +110,7 @@ export {
   createNavigation,
   createNextFluentPlugin,
   createTranslator,
+  defaultMessageFallback,
   defineRouting,
   extractMessagesFromFtl,
   forLocale,
@@ -104,13 +118,16 @@ export {
   generateTypeDeclarations,
   getBundleCacheStats,
   getCachedFluentBundle,
+  getFormats,
   getFormatter,
   getLocale,
+  getMessages,
   getNow,
   getRequestConfigSnapshot,
   getStaticParams,
   getTimeZone,
   getTranslations,
+  hasLocale,
   localeLookupCandidates,
   matchSupportedLocale,
   normalizeLocaleTag,
@@ -124,6 +141,7 @@ export {
   unwrapFluentValue,
   useFormatter,
   useLocale,
+  useMessages,
   useNow,
   useTimeZone,
   useTranslations,

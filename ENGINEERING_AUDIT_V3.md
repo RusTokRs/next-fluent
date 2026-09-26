@@ -1,0 +1,255 @@
+# Инженерный аудит next-fluent — проход 3 (V3)
+
+Дата: 26 сентября 2026 года. Ветка `arena/01a0df06-next-fluent`, база — коммит `cb571b1` (`main`).
+Это независимый аудит поверх двух предыдущих (`ENGINEERING_AUDIT.md` от 24.09 — F01–F20, `ENGINEERING_REVIEW.md` от 25.09 — N01–N36). Ниже — новые дефекты **V3-01…V3-18**, их исправления и план развития против `next-intl`.
+
+## Резюме
+
+Библиотека после двух прошлых проходов в рабочем состоянии: `npm run build`, `tsc --noEmit`, `test:types` и 136 unit-тестов были зелёными до правок. Полный проход по коду, сборке, middleware и реальному production-приложению Next.js 15.5.26 нашёл:
+
+* **2 дефекта уровня P1** (неверный результат в заявленном сценарии; один из них эксплуатируется заголовком запроса и приводит к кешируемому 404);
+* **7 дефектов уровня P2** (архитектура, производительность, семантика API);
+* **9 пробелов паритета с next-intl** — из них 7 закрыты в этом проходе.
+
+После исправлений: **157 unit-тестов**, ESLint (раньше отсутствовал) — 0 замечаний, `tsc` чистый, production-сборка фикстуры проходит, **локализованные маршруты реально пререндерятся** (раньше это никем не проверялось, а документированная настройка не позволяла этого достичь).
+
+## Методика
+
+Выполнено и зафиксировано:
+
+| Шаг | Команда | Результат до правок |
+| --- | --- | --- |
+| Установка | `npm ci` | ok, TypeScript 6.0.3, Next 15.5.26, React 19.3.0, esbuild 0.28.2, `@fluent/bundle` 0.19.1 |
+| Сборка | `npm run build` | ok, `git diff dist/` пустой |
+| Типы | `npm run typecheck` | ok |
+| Тесты | `npm test` | 136/136 |
+| Типогенерация | `npm run test:types` | ok |
+| Интеграция | `node scripts/test-next-integration.mjs` | ok (production `next build` + рантайм-проверки) |
+
+Дополнительно, вне стандартного набора:
+
+1. Репро-скрипты на `dist/*`: аргументы `t()`, `t.raw()`, middleware с mock-запросами (заголовки `Host`, `x-forwarded-host`, `x-next-fluent-rewrite`, `sec-fetch-dest`, cookie), `createI18n`, `defineRouting`, `createFormatter`.
+2. Измерение клиентского бандла через esbuild (`metafile`): корневой и клиентский entry дают **идентичные 27 345 B min / 9 633 B gzip**, `@fluent/bundle` = 11 174 B min, **`@fluent/syntax` в клиентский бандл не попадает** (проверено, а не предполагается).
+3. Реальное production-приложение: подсчёт вызовов middleware на запрос, анализ `prerender-manifest.json`, заголовки `Cache-Control`, `Set-Cookie`, `Link`.
+4. Сравнение с конкурентом по установленному пакету **`next-intl@4.14.7`** (чтение `dist/esm/production/middleware/*.js`, `dist/types/routing/config.d.ts`, `navigation/react-client/createNavigation.d.ts`), а не по памяти.
+
+Не покрыто этим аудитом: Edge runtime, нагрузочный бенчмарк, Next 16/Turbopack e2e локально (это делает матрица CI), внешний security pentest, браузерный сценарий (требует Playwright, выполняется в CI).
+
+---
+
+## P1 — дефекты с неверным результатом
+
+### V3-01. Булевы аргументы молча выбрасывались → вместо текста ключ
+
+**Место:** `src/bundle.ts` (`buildFluentArgs`).
+
+`buildFluentArgs` пропускал только `string | number | Date | {'type' in v}`. `boolean` не входил в список, переменная не попадала в `FluentArgs`, `@fluent/bundle` фиксировал `ReferenceError: Unknown variable`, а `formatCandidate` трактовал это как `FORMAT_ERROR` и возвращал ключ.
+
+Воспроизведение (до правки):
+
+```
+ftl: bool-msg = Admin: { $isAdmin }
+t('bool-msg', { isAdmin: true }) → "bool-msg"          // вместо "Admin: true"
+t.raw('bool-msg', { isAdmin: false }) → "Admin: {$isAdmin}"
+console: ReferenceError: Unknown variable: $isAdmin
+```
+
+`@fluent/bundle` 0.19 действительно не поддерживает `boolean` (`resolver.js`: `switch (typeof arg)` → `string | number | object` → иначе `TypeError`), поэтому «пропуск» выглядел защитой, но цена — потеря целого сообщения.
+
+**Исправление.** `boolean` → `String(v)`, `bigint` → `Number(v)`; `null`/`undefined` и не-Fluent объекты собираются в список `rejected` и сообщаются как `INVALID_ARGUMENT` **только если сообщение реально не отформатировалось** (иначе лишний шум на неиспользуемых аргументах).
+
+После: `t('bool-msg', { isAdmin: true })` → `Admin: true`; `t('big', { total: 10n })` → `Total: 10`.
+Тесты: `test/audit-v3.test.mjs` («V3-01»).
+
+### V3-02. Заголовок `x-next-fluent-rewrite` подделывался клиентом → 404 на валидном URL
+
+**Место:** `src/middleware.ts` (ранний выход по сигнальному заголовку).
+
+Middleware проверял `request.headers.get('x-next-fluent-rewrite') === rawPathname` и в этом случае **полностью пропускал** канонизацию и внутренний rewrite. Заголовок приходит из запроса, то есть управляется клиентом.
+
+Воспроизведение (до правки), `as-needed`, `pathnames: { '/about': { en: '/about-us', ru: '/o-nas' } }`:
+
+```
+GET /ru/o-nas                                   → 200, x-middleware-rewrite: /ru/about   (ок)
+GET /ru/o-nas + x-next-fluent-rewrite: /ru/o-nas → 200, x-middleware-next: 1, БЕЗ rewrite
+   ⇒ приложение получает /ru/o-nas, маршрута app/[locale]/o-nas нет ⇒ 404
+GET /ru/o-nas (localePrefix: 'always') + тот же заголовок → тоже без rewrite ⇒ 404
+```
+
+Это не только «сам себе 404»: ответ 404 на валидном локализованном URL может быть закеширован общим кешем/CDN и отдан всем пользователям.
+
+**Почему заголовок вообще существует (проверено, а не по документации).** В Next.js 15.5.26 middleware вызывается **дважды** на запрос: после `NextResponse.rewrite()` он повторно отрабатывает по внутреннему пути. Счётчик в фикстуре: `x-mw-calls: 2` для `GET /`, `x-mw-path: /en`; 5 → `/ru/about`. Без сигнала второй проход канонизирует собственный rewrite-таргет обратно (в `as-needed` для дефолтной локали и в `never` — бесконечный редирект).
+
+**Исправление.** Сигнал учитывается **только в тех двух ветках, где возможен цикл** (`localePrefix: 'never'` и `as-needed` + префикс дефолтной локали). В `always` и в `as-needed` для недефолтной локали второй проход идемпотентен, поэтому заголовок там игнорируется полностью. Дополнительно клиентский заголовок вычищается из проксируемых заголовков (`requestHeaders.delete(...)`), а при rewrite заменяется нашим значением.
+
+После: оба кейса выше дают `x-middleware-rewrite: /ru/about`; защита от цикла сохранена (тест «V3-02: the signal still prevents the as-needed default-locale redirect loop»).
+Тесты: `test/audit-v3.test.mjs` (3 теста «V3-02»).
+
+---
+
+## P2 — архитектура, производительность, семантика
+
+### V3-03. `localePrefix` / `cookieName` / `headerName` не валидировались
+
+`validateI18nConfig` принимал любые значения. Опечатка `localePrefix: 'as-neede'` (или `'AS-NEEDED'`) молча давала поведение `'always'` — и в middleware, и в генерации href; `cookieName` с CRLF принимался и падал позже на `Headers.set`.
+
+```
+defineRouting({ locales:['en','ru'], defaultLocale:'en', localePrefix:'as-neede' }) → принято
+defineRouting({ ..., cookieName: 'bad\r\nname' })                                   → принято
+```
+
+**Исправление:** whitelist режимов и проверка имён cookie/заголовка по RFC 6265/9110 token-грамматике; ошибка на этапе конфигурации. Тест «V3-03».
+
+### V3-04. `Set-Cookie` на каждый ответ middleware → статические страницы нельзя кешировать
+
+До правки `createSuccessResponse` и `createRedirect` **безусловно** ставили `NEXT_LOCALE` (`git show HEAD:src/middleware.ts`, строки 148–154 и 167–173). Следствия: перезапись выбора пользователя на каждом запросе, включая подгрузки RSC/изображения, и `Set-Cookie` в ответе на пререндеренную страницу (общий кеш такой ответ не переиспользует).
+
+Для сравнения прочитан `next-intl@4.14.7` (`middleware/syncCookie.js`): cookie пишется только для `sec-fetch-dest === 'document'`, только если значение отличается, и не пишется, если cookie нет, а `Accept-Language` и так даёт эту локаль.
+
+**Исправление:** та же логика + опция `localeCookie`. Измерено на production-приложении после правки:
+
+```
+GET /ru/o-nas (cookie NEXT_LOCALE=ru, document) → 200, Set-Cookie: <нет>, cache-control: s-maxage=31536000
+GET /ru/o-nas (без cookie)                      → 200, Set-Cookie: NEXT_LOCALE=ru
+GET /ru/o-nas (sec-fetch-dest: image)           → 200, Set-Cookie: <нет>
+```
+
+Тесты «V3-04» + проверка в `scripts/test-next-integration.mjs`.
+
+### V3-05. Cookie не настраивалась и не имела `Secure`
+
+Не было ни имени, ни атрибутов. **Исправление:** `localeCookie: false | { name, maxAge, sameSite, secure, domain, path, httpOnly, partitioned, priority }`, дефолт совместим с предыдущим поведением (`NEXT_LOCALE`, `maxAge=31536000`, `sameSite=lax`, `path=/`). `Secure` намеренно **не** включается автоматически (как в next-intl): молча потерянная cookie на HTTP-деплое хуже явной опции — она документирована в README. Тест «V3-05».
+
+### V3-06. Слаг другой локали давал 404 вместо внутреннего маршрута
+
+`internalPath()` в middleware сопоставлял только шаблоны текущей локали, тогда как навигация (`localizePath`) перебирает все. Асимметрия:
+
+```
+GET /ru/about-us → 200 без rewrite ⇒ 404 (app/[locale]/about ожидает /ru/about)
+```
+
+**Исправление:** middleware резолвит внешний слаг по всем локалям (как `usePathname`). После: `GET /ru/about-us` → `x-middleware-rewrite: /ru/about`. Тест «V3-06».
+
+### V3-07. `createI18n().getFormatter()` игнорировал `timeZone` из request config
+
+`factory.getFormatter` создавал форматтер напрямую, минуя снапшот запроса, — даты рендерились в часовой зоне сервера, тогда как `next-fluent/server.getFormatter` её учитывал.
+
+```
+requestConfig: { timeZone: 'UTC' } → runtime.getFormatter({locale:'en'}).timeZone === undefined
+```
+
+**Исправление:** фабрика делегирует в серверный `getFormatter` (и в `getMessages` — раньше при отсутствии `loadMessages` возвращался `''`, игнорируя `setRequestConfig`). Тест «V3-07» (`Asia/Tokyo` → `'09'` для полуночи UTC).
+
+### V3-08. `t.raw()` сортировал атрибуты по алфавиту
+
+Для сообщения только с атрибутами значения возвращались отсортированными, то есть отвязанными от имён атрибутов:
+
+```
+login-button =
+    .label = Sign in { $name }
+    .aria  = Sign in as { $name }
+t.raw('login-button') → ["Sign in as {$name}", "Sign in {$name}"]   // aria раньше label
+```
+
+**Исправление:** порядок объявления из каталога. Существующий тест, закреплявший алфавитный порядок, обновлён с комментарием (N03 в `review-regressions.test.mjs`).
+
+### V3-09. Биди-изоляторы протекали в `<title>`, meta и JSON; `useIsolating` был недоступен
+
+Fluent по умолчанию вставляет U+2068/U+2069 вокруг плейсхолдеров. `t()` их сохранял, `t.raw()` — вырезал (несогласованно), а отключить через публичный API было нельзя: `createFluentBundle` опцию принимал, но `getTranslations`/request config/`FluentProvider` её не прокидывали.
+
+```
+t('title', { count: 3 }) → "Dashboard ⁨3⁩"   // невидимые символы в <title>/JSON
+t.raw('title', { count: 3 }) → "Dashboard 3"
+```
+
+**Исправление:** `useIsolating` в `RequestConfigResult`, `GetTranslationsOptions`/`ForLocaleOptions` и `FluentProviderProps`; режим входит в ключ кеша бандлов (и глобального, и request-scoped), иначе один кеш отдавал бы бандлы с разным форматом. Тест «V3-09».
+
+### V3-12. `setRequestLocale` тихо не работал вне request scope, а документированная настройка не давала статического рендеринга
+
+`getRequestStore` — это `React.cache()`. Без активного async-диспетчера React не кеширует ничего, поэтому вне рендера каждый вызов создаёт новый store:
+
+```
+setRequestLocale('ru', ['en','ru']); await getLocale() → 'en'
+getNow() === getNow()                                  → false
+```
+
+Хуже другое. В production-сборке фикстуры все локализованные маршруты были `ƒ (Dynamic)`, а `prerender-manifest.json` содержал только `/_not-found`. Причина (измерено пробной страницей):
+
+```
+[probe] store stable: true  store.locale: undefined   // setRequestLocale из layout не дошёл до page
+[probe] getLocale(): en                               // обе локали пререндерились бы как en
+```
+
+Next.js рендерит layout и page независимо, поэтому `setRequestLocale` обязателен **в каждой странице и каждом layout** — то же требование documented у next-intl, но в README next-fluent был показан только layout.
+
+**Исправление.** Фикстура переведена на корректную схему (`generateStaticParams` + `setRequestLocale` в layout и в обеих страницах), а `scripts/test-next-integration.mjs` теперь читает `prerender-manifest.json` и падает, если `/en`, `/ru`, `/en/about`, `/ru/about` не пререндерены (таблица маршрутов в выводе `next build` при этом врёт: `/[locale]/live` с `headers()` показан как `●`, но в манифесте отсутствует — поэтому проверяется именно манифест). README дополнен разделом «Static rendering».
+
+```
+[next-fluent] Static rendering verified for: /en, /ru, /en/about, /ru/about
+```
+
+---
+
+## Закрытые пробелы паритета с next-intl
+
+| ID | Что добавлено | Зачем |
+| --- | --- | --- |
+| V3-10 | `onError` / `getMessageFallback` / `FluentErrorCode` (`MISSING_MESSAGE`, `FORMATTING_ERROR`, `INVALID_ARGUMENT`, `UNSUPPORTED_VALUE`, `ENVIRONMENT_FALLBACK`) в request config, `getTranslations`/`forLocale`, `FluentProvider`; класс `FluentError` с `code/key/namespace/locale/path/cause` | Раньше был зашитый `console.warn` и неизменяемый фолбэк `namespace.key`. Падающий обработчик не ломает рендер. `debug: true` сохраняет `[MISSING: key]` |
+| V3-11 | `strictNamespace` в `FluentProvider`/`useTranslations` | Серверная опция существовала, клиентская — нет (расхождение server/client) |
+| V3-13 | `hasLocale(locales, locale)` | Используется в каждом приложении на next-intl в корневом layout; каноническое, регистронезависимое сравнение |
+| V3-14 | `useMessages()` | Паритет с `next-intl`: доступ к каталогу из контекста провайдера |
+| V3-16 | ESLint 9 + `typescript-eslint` + `eslint-plugin-react-hooks`, `npm run lint` в `ci`/`verify` и шаг в CI | Линта не было вовсе. Первый же прогон дал `react-hooks/rules-of-hooks` **error** в `navigation.ts:107` (N08 из прошлого ревью так и не был закрыт) |
+| V3-17 | `formats` (именованные пресеты `Intl`) в request config/провайдере и во всех методах форматтера | Паритет с `formats` у next-intl |
+| V3-18 | `alternateLinks` — заголовок `Link: <url>; rel="alternate"; hreflang="…"` + `x-default`, с поддержкой доменов, динамических параметров и `basePath` | SEO без ручной разметки; у next-intl включено по умолчанию, у next-fluent не было вовсе |
+
+Отдельно по V3-16: хук `useNextRouter()` вызывался внутри `try/catch` с заглушкой-роутером. Теперь вызов безусловный (порядок хуков не зависит от потока управления), а вне App Router ошибка пробрасывается — молчаливый no-op `push()` маскировал реальные ошибки подключения.
+
+Проверено, что корневой entry не утяжеляет клиент: `import { useTranslations } from 'next-fluent'` и `from 'next-fluent/client'` собираются в **байт-в-байт одинаковый** бандл, `@fluent/syntax` остаётся в typegen/pseudo.
+
+---
+
+## Что осталось (рекомендации, по приоритету)
+
+### 1. До релиза 1.0
+
+1. **`localePrefix: { mode, prefixes }`** — карта префиксов по локалям (`{'/en-US': …}`). Единственная крупная опция маршрутизации next-intl, которой нет. Требует изменений в `route-engine`, middleware и `resolveLocalizedPathname` одновременно — делать одним PR с матричными тестами.
+2. **`t.markup()`-эквивалент не нужен, но нужен явный контракт для атрибутов.** Сейчас `t.raw('msg')` для сообщения только с атрибутами возвращает массив строк без имён. Предложить `t.attrs('msg') → Record<string,string>` и депрекейтнуть массивную форму `raw()`.
+3. **JSON-каталоги.** `typegen` их понимает, рантайм — нет (`loadConfig` требует FTL-строку или массив строк). Либо поддержать, либо убрать из CLI, чтобы не обещать лишнего.
+4. **`getMessages()`/`useMessages()` возвращают FTL-текст**, а не объект сообщений, как у next-intl. Для «передать часть каталога в клиент» нужен `pick`-хелпер (`pickMessages(catalog, 'Checkout')`) — иначе в клиент уезжает весь каталог.
+5. **Edge runtime.** Middleware не проверен в edge-среде ни в одном проходе. Добавить CI-job с `edge-runtime` или хотя бы smoke-тест на `Web Fetch API`-моках без `next/server`.
+
+### 2. Конкурентные преимущества, которые стоит добить
+
+6. **Извлечение сообщений из исходников** (`next-intl extract` + автогенерация `.d.ts` в dev-режиме через плагин). У next-fluent есть AST-typegen — добавить `next-fluent typegen --watch` и хук в `createNextFluentPlugin` (в dev), чтобы типы не устаревали.
+7. **Бенчмарк и бюджет бандла.** Клиент уже легче (`9.6 KB gzip` вместе с `@fluent/bundle` против ICU-стека next-intl), но это не закреплено: добавить `size-limit` на `client.js`/`navigation.js` и микро-бенчмарк `getTranslations`/`t()` на каталогах 100/1k/10k сообщений — именно это и есть «быстрее next-intl» в измеряемой форме.
+8. **`useIsolating: false` по умолчанию для не-HTML sink'ов недостижим — нужен `t.plain()`**, который режет изоляторы для конкретного вызова (`<title>`, OG-теги, JSON API), не меняя весь каталог.
+9. **Проверка ключей в CI**: `next-fluent check --input messages/` — сравнение каталогов между локалями (отсутствующие/лишние ключи) на основе уже готового `extractMessagesFromFtl`. Дёшево в реализации, сильно для команд.
+10. **Документация**: `CHANGELOG.md`, `CONTRIBUTING.md`, отдельные страницы под каждую фичу (сейчас весь README — один длинный файл), раздел «Migration from next-intl» с таблицей соответствий (таблица API уже добавлена в README).
+
+### 3. Мелочи, найденные попутно и оставленные осознанно
+
+| Что | Решение |
+| --- | --- |
+| `getRequestStore()` вне request scope не мемоизируется (V3-12) | Поведение React `cache()`. В рантайме запроса работает; вне — `setRequestLocale` бессмысленна. Стоит бросать явную ошибку в dev вместо тихого no-op |
+| `t.raw()` эвристика `JSON.parse` для значений вида `[...]` | Задокументирована в README, но семантика «магическая». Кандидат на удаление вместе с п.2 |
+| `parseRichText` не поддерживает теги с атрибутами (`<a href="…">`) | Паритет с `t.rich` у next-intl (там тоже только имя тега). Не блокер |
+| `pseudoLocalizeText` regex `\{[^}]*\}` ломается на вложенных `{}` | Публичный хелпер; FTL-путь (`pseudoLocalizeFtl`) идёт через AST и не затронут |
+| `LRUCache` при `maxSize <= 0` держит один элемент | Дегенеративная конфигурация; не воспроизводится в коде |
+
+---
+
+## Верификация
+
+| Проверка | Команда | Результат |
+| --- | --- | --- |
+| Сборка | `npm run build` | ok |
+| Детерминизм dist | `npm run check-dist` | ok после коммита пересобранного `dist/` |
+| Линт | `npm run lint` (ESLint 9 + react-hooks) | 0 ошибок, 0 предупреждений |
+| Типы | `npm run typecheck` (TS 6.0.3) | ok |
+| Типы потребителя | `npm run test:types` (позитивные + `@ts-expect-error` негативы, включая новые API) | ok |
+| Unit-тесты | `npm test` | **157/157** (было 136; +21) |
+| Production Next | `node scripts/test-next-integration.mjs` | сборка, пререндер 4 маршрутов, роутинг, RSC/client-паритет, hreflang, cookie, смена локали — ok |
+
+Новые регрессионные тесты: `test/audit-v3.test.mjs` (21 тест: V3-01…V3-18), обновлены `review-regressions` (порядок атрибутов), `test/types/consumer.ts` (новые API), фикстура `test/fixtures/next-app` и `scripts/test-next-integration.mjs` (статический рендеринг, hreflang, cookie).
+
+Каждое исправление привязано к тесту, который падает без него: булевы аргументы, подделка `x-next-fluent-rewrite`, кросс-локальный слаг, валидация конфигурации, условия записи cookie, `localeDetection`, `alternateLinks`, `useIsolating`, `onError`/`getMessageFallback`, `hasLocale`, `useMessages`, `formats`, `timeZone` фабрики.

@@ -1,6 +1,13 @@
 import type { FluentBundle } from '@fluent/bundle';
 import React from 'react';
-import type { FluentArgs, FluentVariable, RichTranslationValues, Translations } from './types';
+import type {
+  FluentArgs,
+  FluentVariable,
+  GetMessageFallbackFn,
+  OnErrorFn,
+  RichTranslationValues,
+  Translations,
+} from './types';
 import { buildKeyCandidates, canonicalizeLocale, withKebabKey } from './utils';
 import {
   parseRichText,
@@ -15,6 +22,12 @@ import {
   type CreateFluentBundleOptions,
 } from './cache';
 import { clearFunctionsCache } from './functions';
+import {
+  FluentErrorCode,
+  FluentError,
+  createErrorReporter,
+  type FluentErrorDetails,
+} from './errors';
 
 export function clearBundleCache(): void {
   clearInternalBundleCache();
@@ -26,6 +39,8 @@ export {
   clearFunctionsCache,
   getBundleCacheStats,
   LRUCache,
+  FluentError,
+  FluentErrorCode,
   type CreateFluentBundleOptions,
 };
 
@@ -62,36 +77,69 @@ export interface CreateTranslatorOptions {
   debug?: boolean;
   defaultTranslationValues?: RichTranslationValues;
   strictNamespace?: boolean;
+  onError?: OnErrorFn;
+  getMessageFallback?: GetMessageFallbackFn;
 }
 
-const FORMAT_ERROR = Symbol('format-error');
-type FormatCandidateResult = string | null | typeof FORMAT_ERROR;
+type FormatCandidateResult =
+  | { kind: 'ok'; value: string }
+  | { kind: 'error'; errors: readonly Error[] }
+  | { kind: 'missing' };
 type RawCandidateResult = string[] | string | null;
 
 function stripBidiIsolates(value: string): string {
   return value.replace(/[\u2068\u2069]/g, '');
 }
 
+interface BuiltArgs {
+  args: FluentArgs;
+  /** Names of values Fluent cannot represent; kept for error reporting. */
+  rejected: string[];
+}
+
 /**
- * Converts user-facing translation values into Fluent arguments. React
- * elements become placeholder tokens that `parseRichText` resolves later.
+ * Converts user-facing translation values into Fluent arguments.
+ *
+ * React elements become placeholder tokens that `parseRichText` resolves later.
+ * Fluent has no boolean type, so booleans are stringified (`true`/`"true"`)
+ * instead of being dropped — dropping them turned every message that used the
+ * variable into an unresolvable reference.
  */
-function buildFluentArgs(values: Record<string, unknown> | undefined): FluentArgs {
-  const fluentArgs: FluentArgs = {};
-  if (!values) return fluentArgs;
+function buildFluentArgs(values: Record<string, unknown> | undefined): BuiltArgs {
+  const args: FluentArgs = {};
+  const rejected: string[] = [];
+  if (!values) return { args, rejected };
+
   for (const [k, v] of Object.entries(values)) {
     if (React.isValidElement(v)) {
-      fluentArgs[k] = createReactElementToken(k);
-    } else if (
-      typeof v === 'string' ||
-      typeof v === 'number' ||
-      v instanceof Date ||
-      (typeof v === 'object' && v !== null && 'type' in v)
-    ) {
-      fluentArgs[k] = v as FluentVariable;
+      args[k] = createReactElementToken(k);
+      continue;
     }
+    if (v === null || v === undefined) {
+      rejected.push(k);
+      continue;
+    }
+    if (typeof v === 'string' || typeof v === 'number' || v instanceof Date) {
+      args[k] = v as FluentVariable;
+      continue;
+    }
+    if (typeof v === 'boolean') {
+      args[k] = String(v);
+      continue;
+    }
+    if (typeof v === 'bigint') {
+      args[k] = Number(v);
+      continue;
+    }
+    if (typeof v === 'object' && 'type' in v) {
+      // FluentType instance (FluentNumber/FluentDateTime/…) or Temporal object.
+      args[k] = v as FluentVariable;
+      continue;
+    }
+    rejected.push(k);
   }
-  return fluentArgs;
+
+  return { args, rejected };
 }
 
 export function createTranslator(
@@ -106,6 +154,8 @@ export function createTranslator(
   let debug = false;
   let defaultTranslationValues: RichTranslationValues | undefined;
   let strictNamespace: boolean | undefined;
+  let onError: OnErrorFn | undefined;
+  let getMessageFallback: GetMessageFallbackFn | undefined;
 
   if (typeof namespaceOrFallbackOrOpts === 'string') {
     namespace = namespaceOrFallbackOrOpts;
@@ -131,12 +181,18 @@ export function createTranslator(
       debug = opts.debug ?? false;
       defaultTranslationValues = opts.defaultTranslationValues;
       strictNamespace = opts.strictNamespace;
+      onError = opts.onError;
+      getMessageFallback = opts.getMessageFallback;
     }
   } else {
     namespace = maybeNamespace;
   }
 
-  const defaultFluentArgs = buildFluentArgs(defaultTranslationValues);
+  const report = createErrorReporter({ onError, getMessageFallback, debug });
+  const defaults = buildFluentArgs(defaultTranslationValues);
+
+  const bundleLocale = (targetBundle: FluentBundle): string | undefined =>
+    targetBundle.locales?.[0];
 
   const formatCandidate = (
     targetBundle: FluentBundle,
@@ -147,14 +203,8 @@ export function createTranslator(
     if (msg?.value) {
       const errors: Error[] = [];
       const formatted = targetBundle.formatPattern(msg.value, args, errors);
-      if (errors.length > 0) {
-        console.warn(`[next-fluent] Format errors for key "${candidate}":`, errors);
-        // Never expose Fluent's partially formatted output. A message that exists
-        // but cannot be formatted is a terminal resolution failure rather than
-        // silently falling through to another locale.
-        return FORMAT_ERROR;
-      }
-      return formatted;
+      if (errors.length > 0) return { kind: 'error', errors };
+      return { kind: 'ok', value: formatted };
     }
 
     // Direct attribute access: e.g. 'dialog.confirm' or 'login-button.label'
@@ -174,60 +224,82 @@ export function createTranslator(
         if (pattern) {
           const errors: Error[] = [];
           const formatted = targetBundle.formatPattern(pattern, args, errors);
-          if (errors.length > 0) {
-            console.warn(
-              `[next-fluent] Format errors for attribute "${candidate}":`,
-              errors
-            );
-            return FORMAT_ERROR;
-          }
-          return formatted;
+          if (errors.length > 0) return { kind: 'error', errors };
+          return { kind: 'ok', value: formatted };
         }
       }
     }
 
-    return null;
+    return { kind: 'missing' };
   };
 
   /**
-   * Formats a key to a plain string. Returns the fallback key when the message
-   * is missing or fails to format. React element tokens may survive in the
-   * output — `t()` rejects them while `t.rich()` resolves them.
+   * Formats a key to a plain string. Unresolvable keys go through the
+   * configured `onError` / `getMessageFallback` pair. React element tokens may
+   * survive in the output — `t()` rejects them while `t.rich()` resolves them.
    */
-  const formatKey = (key: string, args?: FluentArgs): string => {
+  const formatKey = (
+    key: string,
+    args: FluentArgs | undefined,
+    rejectedArgs: readonly string[]
+  ): string => {
     const mergedArgs =
-      Object.keys(defaultFluentArgs).length > 0
-        ? { ...defaultFluentArgs, ...args }
-        : args;
+      Object.keys(defaults.args).length > 0 || Object.keys(args ?? {}).length > 0
+        ? { ...defaults.args, ...args }
+        : undefined;
+    const rejected =
+      defaults.rejected.length > 0 || rejectedArgs.length > 0
+        ? [...defaults.rejected, ...rejectedArgs]
+        : undefined;
     const candidates = buildKeyCandidates(namespace, key, { strictNamespace });
-    const fallbackKey = namespace ? `${namespace}.${key}` : key;
+
     for (const b of allBundles) {
       for (const candidate of candidates) {
         const formatted = formatCandidate(b, candidate, mergedArgs);
-        if (formatted === FORMAT_ERROR) return fallbackKey;
-        if (formatted !== null) return formatted;
+        if (formatted.kind === 'error') {
+          // Never expose Fluent's partially formatted output. A message that
+          // exists but cannot be formatted is a terminal resolution failure
+          // rather than a silent fall-through to another locale.
+          const details: FluentErrorDetails = rejected
+            ? {
+                code: FluentErrorCode.INVALID_ARGUMENT,
+                key,
+                namespace,
+                locale: bundleLocale(b),
+                cause: { unsupportedArguments: rejected, errors: formatted.errors },
+              }
+            : {
+                code: FluentErrorCode.FORMATTING_ERROR,
+                key,
+                namespace,
+                locale: bundleLocale(b),
+                cause: formatted.errors,
+              };
+          return report(details);
+        }
+        if (formatted.kind === 'ok') return formatted.value;
       }
     }
 
-    if (debug) {
-      console.warn(`[next-fluent] Missing translation for key "${fallbackKey}"`);
-      return `[MISSING: ${fallbackKey}]`;
-    }
-
-    return fallbackKey;
+    return report({ code: FluentErrorCode.MISSING_MESSAGE, key, namespace });
   };
 
   const tFn = ((key: string, args?: FluentArgs): string => {
     // Plain `t()` interpolations may contain React elements only by mistake —
     // resolve them to tokens first so a clear error can be raised, instead of
     // leaking placeholder tokens into strings or failing deep inside Fluent.
-    const formatted = formatKey(key, buildFluentArgs(args as Record<string, unknown>));
+    const built = buildFluentArgs(args as Record<string, unknown>);
+    const formatted = formatKey(key, built.args, built.rejected);
     if (formatted.includes(REACT_ELEMENT_TOKEN_PREFIX)) {
       const fallbackKey = namespace ? `${namespace}.${key}` : key;
-      throw new Error(
-        `[next-fluent] Message "${fallbackKey}" interpolates a React element. ` +
-          'Use t.rich() or <FormattedMessage> for rich content.'
-      );
+      throw new FluentError({
+        code: FluentErrorCode.UNSUPPORTED_VALUE,
+        key,
+        namespace,
+        message:
+          `[next-fluent] Message "${fallbackKey}" interpolates a React element. ` +
+          'Use t.rich() or <FormattedMessage> for rich content.',
+      });
     }
     return formatted;
   }) as Translations;
@@ -294,10 +366,9 @@ export function createTranslator(
     }
 
     if (msg.attributes && Object.keys(msg.attributes).length > 0) {
-      const sortedAttrKeys = Object.keys(msg.attributes).sort((a, b) =>
-        a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
-      );
-      return sortedAttrKeys.map((attrKey) =>
+      // Declaration order — sorting alphabetically detached the values from the
+      // attribute names a caller sees in the catalog.
+      return Object.keys(msg.attributes).map((attrKey) =>
         formatRawPattern(targetBundle, msg.attributes![attrKey], args)
       );
     }
@@ -306,9 +377,12 @@ export function createTranslator(
   };
 
   tFn.raw = ((key: string, args?: FluentArgs): string[] | string => {
-    const mergedArgs = buildFluentArgs(args as Record<string, unknown>);
+    const built = buildFluentArgs(args as Record<string, unknown>);
+    const mergedArgs =
+      Object.keys(defaults.args).length > 0 || Object.keys(built.args).length > 0
+        ? { ...defaults.args, ...built.args }
+        : undefined;
     const candidates = buildKeyCandidates(namespace, key, { strictNamespace });
-    const fallbackKey = namespace ? `${namespace}.${key}` : key;
     for (const b of allBundles) {
       for (const candidate of candidates) {
         const res = getRawValue(b, candidate, mergedArgs);
@@ -316,12 +390,7 @@ export function createTranslator(
       }
     }
 
-    if (debug) {
-      console.warn(`[next-fluent] Missing raw translation for key "${fallbackKey}"`);
-      return `[MISSING: ${fallbackKey}]`;
-    }
-
-    return fallbackKey;
+    return report({ code: FluentErrorCode.MISSING_MESSAGE, key, namespace });
   }) as Translations['raw'];
 
   tFn.rich = (key: string, values?: RichTranslationValues): React.ReactNode => {
@@ -330,7 +399,8 @@ export function createTranslator(
         ? { ...(defaultTranslationValues ?? {}), ...(values ?? {}) }
         : undefined;
 
-    const formattedText = formatKey(key, buildFluentArgs(mergedValues));
+    const built = buildFluentArgs(mergedValues as Record<string, unknown>);
+    const formattedText = formatKey(key, built.args, built.rejected);
     return parseRichText(formattedText, mergedValues);
   };
 

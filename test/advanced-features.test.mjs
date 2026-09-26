@@ -5,11 +5,9 @@ import React from 'react';
 import {
   createFluentBundle,
   createTranslator,
-  parseRichText,
   extractMessagesFromFtl,
   generateTypeDeclarations,
   pseudoLocalizeFtl,
-  pseudoLocalizeText,
 } from '../dist/index.js';
 
 const stripBidiIsolates = (value) =>

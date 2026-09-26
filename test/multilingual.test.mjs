@@ -7,7 +7,6 @@ import {
   matchSupportedLocale,
   resolveAcceptLanguage,
   localeLookupCandidates,
-  normalizeLocaleTag,
   defineRouting,
   resolveLocalizedPathname,
   createI18nMiddleware,

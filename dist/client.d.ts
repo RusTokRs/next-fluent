@@ -1,12 +1,13 @@
 import React from 'react';
 import type { FluentBundle, FluentFunction } from '@fluent/bundle';
-import type { DefaultKey, FormattedMessageProps, Formatter, NamespaceArgs, NamespaceKeys, RichTranslationValues, Translations } from './types';
+import type { DefaultKey, FormattedMessageProps, Formatter, Formats, GetMessageFallbackFn, NamespaceArgs, NamespaceKeys, OnErrorFn, RichTranslationValues, Translations } from './types';
 import { createFormatter } from './formatter';
 export type { FormattedMessageProps };
 export { createFormatter };
 interface FluentContextValue {
     locale: string;
     bundle: FluentBundle | null;
+    messages?: string | readonly string[];
     fallbackLocale?: string;
     fallbackBundle: FluentBundle | null;
     fallbackBundles?: readonly FluentBundle[];
@@ -15,6 +16,10 @@ interface FluentContextValue {
     functions?: Record<string, FluentFunction>;
     defaultTranslationValues?: RichTranslationValues;
     debug?: boolean;
+    strictNamespace?: boolean;
+    formats?: Formats;
+    onError?: OnErrorFn;
+    getMessageFallback?: GetMessageFallbackFn;
 }
 export interface FluentProviderProps {
     locale: string;
@@ -27,11 +32,23 @@ export interface FluentProviderProps {
     functions?: Record<string, FluentFunction>;
     defaultTranslationValues?: RichTranslationValues;
     debug?: boolean;
+    /** Only resolve `namespace.key` candidates (mirrors the server option). */
+    strictNamespace?: boolean;
+    /** Named `Intl` presets used by `useFormatter()`. */
+    formats?: Formats;
+    /** Disable Fluent's bidi isolates so `t()` is safe in non-HTML sinks. */
+    useIsolating?: boolean;
+    /** Client-side error reporting (define inside a `'use client'` wrapper). */
+    onError?: OnErrorFn;
+    /** Client-side fallback rendering (define inside a `'use client'` wrapper). */
+    getMessageFallback?: GetMessageFallbackFn;
     children: React.ReactNode;
 }
-export declare function FluentProvider({ locale, messages, fallbackLocale, fallbackMessages, fallbackBundles, timeZone, now, functions, defaultTranslationValues, debug, children, }: FluentProviderProps): React.FunctionComponentElement<React.ProviderProps<FluentContextValue>>;
+export declare function FluentProvider({ locale, messages, fallbackLocale, fallbackMessages, fallbackBundles, timeZone, now, functions, defaultTranslationValues, debug, strictNamespace, formats, useIsolating, onError, getMessageFallback, children, }: FluentProviderProps): React.FunctionComponentElement<React.ProviderProps<FluentContextValue>>;
 export declare function useLocale(): string;
 export declare function useTimeZone(): string;
+/** Raw catalog (FTL text) provided to the current `FluentProvider`. */
+export declare function useMessages(): string | readonly string[] | undefined;
 export declare function useFormatter(): Formatter;
 export declare function useNow(options?: {
     updateInterval?: number;

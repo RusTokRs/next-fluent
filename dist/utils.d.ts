@@ -11,6 +11,8 @@ export interface BaseI18nConfig {
     headerName?: string;
     loadMessages?: unknown;
 }
+/** Type guard for "is this value one of the configured locales". */
+export declare function hasLocale(locales: readonly string[], locale: string | null | undefined): locale is string;
 export declare function validateI18nConfig(options: BaseI18nConfig): void;
 export declare function withKebabKey(key: string): string;
 export interface BuildKeyCandidatesOptions {

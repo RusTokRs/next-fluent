@@ -54,6 +54,7 @@ export function formatUrlObject(urlObj: UrlObject): {
   if (!pathname.startsWith('/')) {
     pathname = `/${pathname}`;
   }
+  // eslint-disable-next-line no-control-regex -- rejecting C0 controls in a pathname is the point
   if (pathname.startsWith('//') || pathname.includes('\\') || /[\u0000-\u001f]/.test(pathname)) {
     throw new Error('[next-fluent] URL object pathname must be an internal path.');
   }

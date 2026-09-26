@@ -3,8 +3,11 @@ import type { FluentBundle, FluentFunction } from '@fluent/bundle';
 import type {
   DefaultKey,
   Formatter,
+  Formats,
   FluentMessages,
+  GetMessageFallbackFn,
   GetTranslationsOptions,
+  OnErrorFn,
   RequestConfigFn,
   RequestConfigResult,
   RichTranslationValues,
@@ -56,6 +59,11 @@ interface RequestStore {
   timeZone?: string;
   now?: Date;
   defaultTranslationValues?: RichTranslationValues;
+  formats?: Formats;
+  useIsolating?: boolean;
+  onError?: OnErrorFn;
+  getMessageFallback?: GetMessageFallbackFn;
+  strictNamespace?: boolean;
   bundles: Map<string, FluentBundle>;
 }
 
@@ -206,6 +214,11 @@ async function loadConfig(locale: string, override?: RequestConfigFn): Promise<R
     store.defaultTranslationValues ??= result.defaultTranslationValues;
     store.timeZone ??= result.timeZone;
     store.now ??= result.now;
+    store.formats ??= result.formats;
+    store.useIsolating ??= result.useIsolating;
+    store.onError ??= result.onError;
+    store.getMessageFallback ??= result.getMessageFallback;
+    store.strictNamespace ??= result.strictNamespace;
   }
   return result;
 }
@@ -253,15 +266,27 @@ export async function getFormatter(options?: {
   timeZone?: string;
 }): Promise<Formatter> {
   const locale = options?.locale ?? (await getLocale());
-  if (!options?.timeZone) await loadConfig(locale);
+  const config = await loadConfig(locale);
   const store = getRequestStore();
-  const timeZone = options?.timeZone ?? store.timeZone ?? getTimeZone();
-  return createFormatter({ locale, timeZone });
+  const timeZone = options?.timeZone ?? config.timeZone ?? store.timeZone ?? getTimeZone();
+  return createFormatter({ locale, timeZone, formats: config.formats ?? store.formats });
 }
 
 export function getStaticParams(locales?: readonly string[]): { locale: string }[] {
   const list = locales && locales.length > 0 ? locales : globalLocales;
   return list.map((locale) => ({ locale }));
+}
+
+/**
+ * Named `Intl` presets resolved by the request configuration. Returns an empty
+ * object outside of a request scope.
+ */
+export async function getFormats(): Promise<Formats | undefined> {
+  const store = getRequestStore();
+  if (store.formats) return store.formats;
+  const locale = store.locale ?? globalDefaultLocale;
+  const config = await loadConfig(locale);
+  return config.formats ?? store.formats;
 }
 
 export interface ForLocaleOptions {
@@ -274,6 +299,10 @@ export interface ForLocaleOptions {
   debug?: boolean;
   strictNamespace?: boolean;
   functions?: Record<string, FluentFunction>;
+  /** Disable Fluent's U+2068/U+2069 bidi isolates for non-HTML sinks. */
+  useIsolating?: boolean;
+  onError?: OnErrorFn;
+  getMessageFallback?: GetMessageFallbackFn;
   /** Instance-scoped request loader used by createI18n. */
   requestConfig?: RequestConfigFn;
 }
@@ -303,6 +332,9 @@ export async function forLocale(
   let strictNamespace: boolean | undefined;
   let customFunctions: Record<string, FluentFunction> | undefined;
   let requestConfig: RequestConfigFn | undefined;
+  let useIsolating: boolean | undefined;
+  let onError: OnErrorFn | undefined;
+  let getMessageFallback: GetMessageFallbackFn | undefined;
 
   if (typeof options === 'string') {
     namespace = options;
@@ -317,6 +349,9 @@ export async function forLocale(
     strictNamespace = options.strictNamespace;
     customFunctions = options.functions;
     requestConfig = options.requestConfig;
+    useIsolating = options.useIsolating;
+    onError = options.onError;
+    getMessageFallback = options.getMessageFallback;
   }
 
   const store = getRequestStore();
@@ -327,21 +362,29 @@ export async function forLocale(
   fallbackLocale ??= config?.fallbackLocale;
   fallbackMessages ??= config?.fallbackMessages;
   defaultTranslationValues ??= config?.defaultTranslationValues ?? store.defaultTranslationValues;
+  strictNamespace ??= config?.strictNamespace ?? store.strictNamespace;
+  useIsolating ??= config?.useIsolating ?? store.useIsolating;
+  onError ??= config?.onError ?? store.onError;
+  getMessageFallback ??= config?.getMessageFallback ?? store.getMessageFallback;
   const mergedFunctions = {
     ...config?.functions,
     ...customFunctions,
   };
+  // Request-scoped bundles are only reusable when they were built with the
+  // same isolating mode, so keep it part of the cache identity.
+  const bundleSlot = `${effectiveLocale}|iso=${useIsolating ?? true}`;
+  const bundleOptions = { functions: mergedFunctions, useIsolating };
 
   let bundle: FluentBundle;
   if (explicitMessages !== undefined) {
-    bundle = createFluentBundle(effectiveLocale, explicitMessages, { functions: mergedFunctions });
+    bundle = createFluentBundle(effectiveLocale, explicitMessages, bundleOptions);
   } else {
     const hasCustomFuncs = Boolean(requestConfig || Object.keys(mergedFunctions).length > 0);
-    let cached = hasCustomFuncs ? undefined : store.bundles.get(effectiveLocale);
+    let cached = hasCustomFuncs ? undefined : store.bundles.get(bundleSlot);
     if (!cached) {
-      cached = createFluentBundle(effectiveLocale, config?.messages ?? '', { functions: mergedFunctions });
+      cached = createFluentBundle(effectiveLocale, config?.messages ?? '', bundleOptions);
       if (!hasCustomFuncs) {
-        store.bundles.set(effectiveLocale, cached);
+        store.bundles.set(bundleSlot, cached);
       }
     }
     bundle = cached;
@@ -353,7 +396,7 @@ export async function forLocale(
   if (fallbackMessages) {
     const fbLoc = fallbackLocale ?? 'en';
     fallbackBundleList.push(
-      createFluentBundle(fbLoc, fallbackMessages, { functions: mergedFunctions })
+      createFluentBundle(fbLoc, fallbackMessages, bundleOptions)
     );
   }
 
@@ -371,15 +414,17 @@ export async function forLocale(
   if (fallbacksToLoad.size > 0) {
     for (const fbLocale of fallbacksToLoad) {
       const hasCustomFuncs = Boolean(requestConfig || Object.keys(mergedFunctions).length > 0);
-      let fbBundle = hasCustomFuncs ? undefined : store.bundles.get(fbLocale);
+      const fbSlot = `${fbLocale}|iso=${useIsolating ?? true}`;
+      let fbBundle = hasCustomFuncs ? undefined : store.bundles.get(fbSlot);
       if (!fbBundle) {
         const fbConfig = await loadConfig(fbLocale, requestConfig);
         const resolvedFallbackLocale = fbConfig.locale ?? fbLocale;
         fbBundle = createFluentBundle(resolvedFallbackLocale, fbConfig.messages, {
           functions: { ...fbConfig.functions, ...mergedFunctions },
+          useIsolating,
         });
         if (!hasCustomFuncs) {
-          store.bundles.set(fbLocale, fbBundle);
+          store.bundles.set(fbSlot, fbBundle);
         }
       }
       fallbackBundleList.push(fbBundle);
@@ -392,6 +437,8 @@ export async function forLocale(
     debug,
     defaultTranslationValues,
     strictNamespace,
+    onError,
+    getMessageFallback,
   }) as Translations;
 }
 

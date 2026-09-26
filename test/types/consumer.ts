@@ -1,7 +1,10 @@
-import { useTranslations } from '../../dist/client.js';
-import { getTranslations } from '../../dist/server.js';
+import { useTranslations, useMessages, FluentProvider } from '../../dist/client.js';
+import { getTranslations, getFormatter, setRequestConfig } from '../../dist/server.js';
 import { defineRouting } from '../../dist/routing.js';
 import { createNavigation } from '../../dist/navigation.js';
+import { hasLocale } from '../../dist/utils.js';
+import { FluentErrorCode } from '../../dist/errors.js';
+import { createElement, type ReactNode } from 'react';
 
 const t = useTranslations('app');
 t('hello', { name: 'Ada' });
@@ -36,3 +39,46 @@ navigation.getPathname({ href: '/abut' });
 navigation.getPathname({ href: '/about', locale: 'fr' });
 // @ts-expect-error Dynamic route requires its parameter
 navigation.getPathname({ href: { pathname: '/products/[id]', query: {} } });
+
+// V3: locale guard, named formats and error handling are typed.
+const locales = ['en', 'ru'] as const;
+if (hasLocale(locales, 'ru')) {
+  const value: string = 'ru';
+  void value;
+}
+void useMessages();
+
+setRequestConfig(async ({ locale }) => ({
+  locale: locale ?? 'en',
+  messages: 'a = b',
+  useIsolating: false,
+  formats: { dateTime: { short: { dateStyle: 'short' } }, number: { percent: { style: 'percent' } } },
+  onError: (error) => {
+    const code: string = error.code;
+    void code;
+    if (error.code === FluentErrorCode.MISSING_MESSAGE) void error.key;
+  },
+  getMessageFallback: ({ namespace, key, error }) => `${namespace ?? ''}${key}${error.code}`,
+}));
+
+async function formatterConsumer() {
+  const format = await getFormatter();
+  format.dateTime(new Date(), 'short');
+  format.dateTime(new Date(), { dateStyle: 'full' });
+  format.number(1, 'percent');
+  format.list(['a', 'b'], { type: 'conjunction' });
+}
+void formatterConsumer;
+
+export function ProviderConsumer({ children }: { children: ReactNode }) {
+  return createElement(FluentProvider, {
+    locale: 'en',
+    messages: 'a = b',
+    strictNamespace: true,
+    useIsolating: false,
+    formats: { number: { percent: { style: 'percent' } } },
+    onError: (error) => void error.code,
+    getMessageFallback: ({ key }) => key,
+    children,
+  });
+}

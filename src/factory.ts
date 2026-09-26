@@ -6,9 +6,13 @@ import type {
   Translations,
 } from './types';
 import { createI18nMiddleware, type NextMiddlewareRequestLike } from './middleware';
-import { createFormatter } from './formatter';
 import { createNavigation } from './navigation';
-import { forLocale, getLocale } from './server';
+import {
+  forLocale,
+  getFormatter as getServerFormatter,
+  getLocale,
+  getMessages as getServerMessages,
+} from './server';
 import { validateI18nConfig } from './utils';
 
 export interface I18nRuntime {
@@ -83,11 +87,15 @@ export function createI18n(config: I18nConfig): I18nRuntime {
       if (config.loadMessages) {
         return config.loadMessages(targetLocale);
       }
-      return '';
+      // Fall back to the global request config so this never silently returns
+      // an empty catalog for apps configured via `setRequestConfig`.
+      return getServerMessages(targetLocale);
     },
     getFormatter: async (options?: { locale?: string; timeZone?: string }) => {
       const locale = options?.locale ?? (await getLocale(serverOptions));
-      return createFormatter({ locale, timeZone: options?.timeZone });
+      // Respect the request configuration: a formatter that ignores the
+      // configured `timeZone` renders server-local wall-clock times.
+      return getServerFormatter({ locale, timeZone: options?.timeZone });
     },
     getStaticParams: () => {
       return config.locales.map((locale) => ({ locale }));

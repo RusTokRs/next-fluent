@@ -1,4 +1,4 @@
-import type { LocalePrefixMode } from './types';
+import type { LocaleCookieConfig, LocalePrefixMode } from './types';
 import { validateI18nConfig } from './utils';
 import { validatePathnames, validateRouteEnvironment } from './route-engine';
 
@@ -22,6 +22,10 @@ export interface RoutingConfig<Locales extends readonly string[] = readonly stri
   cookieName?: string;
   headerName?: string;
   basePath?: string;
+  localeCookie?: boolean | LocaleCookieConfig;
+  localeDetection?: boolean;
+  alternateLinks?: boolean;
+  trustedHosts?: readonly string[];
 }
 
 /**

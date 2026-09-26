@@ -113,6 +113,12 @@ function resolveAcceptLanguage(header, locales, preferred) {
   }
   return bestLocale;
 }
+const LOCALE_PREFIX_MODES = ["always", "as-needed", "never"];
+const VALID_COOKIE_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+const VALID_HEADER_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+function hasLocale(locales, locale) {
+  return matchSupportedLocale(locale ?? void 0, locales) !== void 0;
+}
 function validateI18nConfig(options) {
   if (!options || !Array.isArray(options.locales) || options.locales.length === 0) {
     throw new Error('[next-fluent] "locales" must be a non-empty array.');
@@ -142,6 +148,21 @@ function validateI18nConfig(options) {
   if (!canonicalLocales.has(defaultCanonical.toLowerCase())) {
     throw new Error(
       `[next-fluent] "defaultLocale" ("${options.defaultLocale}") must be included in "locales" [${options.locales.join(", ")}].`
+    );
+  }
+  if (options.localePrefix !== void 0 && !LOCALE_PREFIX_MODES.includes(options.localePrefix)) {
+    throw new Error(
+      `[next-fluent] "localePrefix" must be one of ${LOCALE_PREFIX_MODES.map((mode) => `"${mode}"`).join(", ")} (received "${options.localePrefix}").`
+    );
+  }
+  if (options.cookieName !== void 0 && !VALID_COOKIE_NAME.test(options.cookieName)) {
+    throw new Error(
+      `[next-fluent] "cookieName" must be a valid HTTP cookie name (received ${JSON.stringify(options.cookieName)}).`
+    );
+  }
+  if (options.headerName !== void 0 && !VALID_HEADER_NAME.test(options.headerName)) {
+    throw new Error(
+      `[next-fluent] "headerName" must be a valid HTTP header name (received ${JSON.stringify(options.headerName)}).`
     );
   }
 }
@@ -175,6 +196,7 @@ function buildKeyCandidates(namespace, key, options) {
 export {
   buildKeyCandidates,
   canonicalizeLocale,
+  hasLocale,
   localeLookupCandidates,
   matchSupportedLocale,
   normalizeLocaleTag,

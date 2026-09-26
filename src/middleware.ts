@@ -1,6 +1,14 @@
-import type { I18nMiddlewareOptions } from './types';
+import type { I18nMiddlewareOptions, LocaleCookieConfig } from './types';
 import { matchSupportedLocale, resolveAcceptLanguage, validateI18nConfig } from './utils';
 import { rewriteLocalizedPath, validatePathnames, validateRouteEnvironment } from './route-engine';
+import { buildAlternateLinksHeader } from './alternate-links';
+
+/**
+ * Internal request header used to recognize the second middleware pass that
+ * Next.js performs after `NextResponse.rewrite()`. Only loop-prone strategies
+ * consult it, so a client cannot use it to skip canonicalization.
+ */
+const REWRITE_SIGNAL_HEADER = 'x-next-fluent-rewrite';
 
 function hostMatchesTrustedList(requestHost: string, list: readonly string[]): boolean {
   const hostname = requestHost.replace(/:\d+$/, '');
@@ -32,6 +40,29 @@ export interface NextMiddlewareRequestLike {
   };
 }
 
+interface ResolvedCookieConfig {
+  name: string;
+  options: Record<string, unknown>;
+}
+
+function resolveCookieConfig(
+  localeCookie: boolean | LocaleCookieConfig | undefined,
+  cookieName: string
+): ResolvedCookieConfig | null {
+  if (localeCookie === false) return null;
+  const custom = typeof localeCookie === 'object' && localeCookie !== null ? localeCookie : {};
+  const { name, ...rest } = custom;
+  return {
+    name: name ?? cookieName,
+    options: {
+      path: '/',
+      maxAge: 31536000,
+      sameSite: 'lax',
+      ...rest,
+    },
+  };
+}
+
 export function createI18nMiddleware(options: I18nMiddlewareOptions) {
   validateI18nConfig(options);
   validatePathnames(options.locales, options.pathnames);
@@ -47,7 +78,11 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
     domains,
     basePath = '',
     trustedHosts,
+    localeDetection = true,
+    alternateLinks = true,
   } = options;
+
+  const cookieConfig = resolveCookieConfig(options.localeCookie, cookieName);
 
   // Resolve defaultLocale to its exact spelling in `locales` so that string
   // comparisons (e.g. `matchedPrefix === defaultLocale` in as-needed mode)
@@ -98,22 +133,51 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
     const pathnameWithoutPrefix = matchedPrefix && firstSegment
       ? pathname.slice(firstSegment.length + 1) || '/'
       : pathname;
-    const internalPath = (locale: string, externalPath: string) =>
-      rewriteLocalizedPath(externalPath, locale, pathnames);
 
-    const cookieLocale = matchSupportedLocale(
-      request.cookies.get(cookieName)?.value ||
-        (cookieName !== 'NEXT_LOCALE' ? request.cookies.get('NEXT_LOCALE')?.value : undefined),
-      locales
-    );
+    /**
+     * Maps a public pathname to its internal route for a locale. Slugs of
+     * *other* locales are resolved too, so `/ru/about-us` (the `en` slug) still
+     * reaches `app/[locale]/about` instead of 404-ing.
+     */
+    const internalPath = (locale: string, externalPath: string) => {
+      const direct = rewriteLocalizedPath(externalPath, locale, pathnames);
+      if (direct !== externalPath) return direct;
+      for (const candidate of allLocales) {
+        if (matchSupportedLocale(candidate, [locale])) continue;
+        const alt = rewriteLocalizedPath(externalPath, candidate, pathnames);
+        if (alt !== externalPath) return alt;
+      }
+      return externalPath;
+    };
 
-    const headerLocale = resolveAcceptLanguage(
-      request.headers.get('accept-language'),
-      locales,
-      defaultLocale
-    );
+    const cookieLocale = localeDetection
+      ? matchSupportedLocale(
+          request.cookies.get(cookieConfig?.name ?? cookieName)?.value ||
+            (cookieName !== 'NEXT_LOCALE' ? request.cookies.get('NEXT_LOCALE')?.value : undefined),
+          locales
+        )
+      : undefined;
+
+    const headerLocale = localeDetection
+      ? resolveAcceptLanguage(request.headers.get('accept-language'), locales, defaultLocale)
+      : undefined;
 
     const preferredLocale = cookieLocale || headerLocale || defaultLocale;
+
+    /**
+     * Writing `Set-Cookie` on every response makes pages uncacheable for
+     * browsers and CDNs, so it is limited to document requests where the
+     * stored locale would actually change.
+     */
+    const cookieValue = (effectiveLocale: string): string | null => {
+      if (!cookieConfig) return null;
+      const dest = request.headers.get('sec-fetch-dest');
+      if (dest && dest !== 'document') return null;
+      const current = request.cookies.get(cookieConfig.name)?.value;
+      if (current === effectiveLocale) return null;
+      if (current === undefined && headerLocale === effectiveLocale) return null;
+      return effectiveLocale;
+    };
 
     const createSuccessResponse = (effectiveLocale: string, rewritePath?: string) => {
       const requestHeaders = new Headers();
@@ -128,7 +192,13 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
       }
       requestHeaders.set(headerName, effectiveLocale);
       if (rewritePath) {
-        requestHeaders.set('x-next-fluent-rewrite', requestUrl(withBasePath(rewritePath)).pathname);
+        requestHeaders.set(
+          REWRITE_SIGNAL_HEADER,
+          requestUrl(withBasePath(rewritePath)).pathname
+        );
+      } else {
+        // Never forward a client-supplied signal to the application.
+        requestHeaders.delete(REWRITE_SIGNAL_HEADER);
       }
 
       const response = rewritePath
@@ -144,13 +214,24 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
 
       if (response.headers?.set) {
         response.headers.set(headerName, effectiveLocale);
+        if (alternateLinks && localePrefix !== 'never') {
+          const header = buildAlternateLinksHeader({
+            locales,
+            defaultLocale,
+            localePrefix,
+            pathname: pathnameWithoutPrefix,
+            pathnames,
+            domains,
+            basePath: hasBasePath ? basePath : '',
+            search,
+            origin: requestOrigin.origin,
+          });
+          if (header) response.headers.set('Link', header);
+        }
       }
-      if (response.cookies?.set) {
-        response.cookies.set(cookieName, effectiveLocale, {
-          path: '/',
-          maxAge: 31536000,
-          sameSite: 'lax',
-        });
+      const cookie = cookieValue(effectiveLocale);
+      if (cookie !== null && response.cookies?.set) {
+        response.cookies.set(cookieConfig!.name, cookie, cookieConfig!.options);
       }
       return response;
     };
@@ -164,12 +245,9 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
       if (response.headers?.set) {
         response.headers.set(headerName, targetLocale);
       }
-      if (response.cookies?.set) {
-        response.cookies.set(cookieName, targetLocale, {
-          path: '/',
-          maxAge: 31536000,
-          sameSite: 'lax',
-        });
+      const cookie = cookieValue(targetLocale);
+      if (cookie !== null && response.cookies?.set) {
+        response.cookies.set(cookieConfig!.name, cookie, cookieConfig!.options);
       }
       return response;
     };
@@ -186,14 +264,21 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
       }
     }
 
-    // Next.js may invoke middleware again for a rewritten internal pathname.
-    // Keep that second pass from canonicalizing /[defaultLocale] back to /.
-    if (request.headers.get('x-next-fluent-rewrite') === rawPathname && matchedPrefix) {
-      return createSuccessResponse(matchedPrefix);
-    }
+    /**
+     * Next.js invokes middleware again for the rewritten internal pathname.
+     * Only the strategies that would otherwise canonicalize their own rewrite
+     * target (and loop) consult the signal header — everywhere else the second
+     * pass is already idempotent, so a spoofed header has no effect.
+     */
+    const isRewriteSignal =
+      matchedPrefix !== undefined &&
+      request.headers.get(REWRITE_SIGNAL_HEADER) === rawPathname;
 
     // Strategy 1: 'never' (no prefixes in URL, internal rewrite to /[locale]/... )
     if (localePrefix === 'never') {
+      if (isRewriteSignal) {
+        return createSuccessResponse(matchedPrefix!);
+      }
       if (matchedPrefix) {
         const rest = segments.slice(1).join('/');
         const remainingPath = rest ? `/${rest}${search}` : `/${search}`;
@@ -207,6 +292,11 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
     // Strategy 2: 'as-needed' (default locale without prefix rewritten, others with prefix)
     if (localePrefix === 'as-needed') {
       if (matchedPrefix === defaultLocale) {
+        // A second pass over our own `/defaultLocale/...` rewrite must not be
+        // canonicalized back, otherwise the browser loops forever.
+        if (isRewriteSignal) {
+          return createSuccessResponse(matchedPrefix);
+        }
         // Strip default locale prefix
         const rest = segments.slice(1).join('/');
         const remainingPath = rest ? `/${rest}${search}` : `/${search}`;

@@ -1,6 +1,9 @@
 import type { FluentBundle, FluentFunction, FluentVariable } from '@fluent/bundle';
 import type React from 'react';
+import type { GetMessageFallbackFn, OnErrorFn } from './errors';
 export type { FluentBundle, FluentVariable, FluentFunction };
+export type { OnErrorFn, GetMessageFallbackFn, MessageFallbackArgs } from './errors';
+export { FluentError, FluentErrorCode } from './errors';
 export type NonEmptyArray<T> = readonly [T, ...T[]];
 export type FluentArgs = Record<string, FluentVariable>;
 export type TagRenderFn = (children: React.ReactNode) => React.ReactNode;
@@ -47,14 +50,27 @@ export interface FormattedMessageProps<Key extends string = DefaultKey, ArgsMap 
 export interface FormatterOptions {
     locale: string;
     timeZone?: string;
+    /** Named formats resolvable by passing a string to the formatter methods. */
+    formats?: Formats;
 }
+/**
+ * Named `Intl` option presets, addressable from the formatter methods:
+ * `format.dateTime(value, 'short')`.
+ */
+export interface Formats {
+    dateTime?: Record<string, Intl.DateTimeFormatOptions>;
+    number?: Record<string, Intl.NumberFormatOptions>;
+    relativeTime?: Record<string, Intl.RelativeTimeFormatOptions>;
+    list?: Record<string, Intl.ListFormatOptions>;
+}
+export type FormatName<T> = T extends Record<infer K, unknown> ? K : never;
 export interface Formatter {
     readonly locale: string;
     readonly timeZone?: string;
-    dateTime(value: Date | number | string, options?: Intl.DateTimeFormatOptions): string;
-    number(value: number | bigint, options?: Intl.NumberFormatOptions): string;
-    relativeTime(value: number, unit: Intl.RelativeTimeFormatUnit, options?: Intl.RelativeTimeFormatOptions): string;
-    list(value: Iterable<string>, options?: Intl.ListFormatOptions): string;
+    dateTime(value: Date | number | string, options?: Intl.DateTimeFormatOptions | string): string;
+    number(value: number | bigint, options?: Intl.NumberFormatOptions | string): string;
+    relativeTime(value: number, unit: Intl.RelativeTimeFormatUnit, options?: Intl.RelativeTimeFormatOptions | string): string;
+    list(value: Iterable<string>, options?: Intl.ListFormatOptions | string): string;
 }
 export type LocalePrefixMode = 'always' | 'as-needed' | 'never';
 export type Pathnames<Locales extends readonly string[] = readonly string[]> = Record<string, string | Record<Locales[number] | string, string>>;
@@ -149,6 +165,20 @@ export interface RequestConfigResult {
     timeZone?: string;
     now?: Date;
     functions?: Record<string, FluentFunction>;
+    /** Named `Intl` presets used by `getFormatter()` / `useFormatter()`. */
+    formats?: Formats;
+    /**
+     * Fluent inserts U+2068/U+2069 bidi isolates around placeables by default.
+     * Disable them for catalogs rendered into non-HTML sinks (`<title>`, meta
+     * tags, JSON APIs, plain-text emails).
+     */
+    useIsolating?: boolean;
+    /** Report missing/unformattable messages to your own monitoring. */
+    onError?: OnErrorFn;
+    /** Customize the string rendered when a message cannot be resolved. */
+    getMessageFallback?: GetMessageFallbackFn;
+    /** Only resolve `namespace.key` candidates (never the bare key). */
+    strictNamespace?: boolean;
 }
 export type RequestConfigFn = (params: RequestConfigParams) => Promise<RequestConfigResult> | RequestConfigResult;
 export interface GetTranslationsOptions {
@@ -162,6 +192,22 @@ export interface GetTranslationsOptions {
     debug?: boolean;
     strictNamespace?: boolean;
     functions?: Record<string, FluentFunction>;
+    useIsolating?: boolean;
+    onError?: OnErrorFn;
+    getMessageFallback?: GetMessageFallbackFn;
+}
+/** Attributes accepted when configuring the locale cookie. */
+export interface LocaleCookieConfig {
+    /** Cookie name. Defaults to `cookieName` (`NEXT_LOCALE`). */
+    name?: string;
+    maxAge?: number;
+    sameSite?: 'strict' | 'lax' | 'none' | boolean;
+    secure?: boolean;
+    domain?: string;
+    path?: string;
+    httpOnly?: boolean;
+    partitioned?: boolean;
+    priority?: 'low' | 'medium' | 'high';
 }
 export interface I18nMiddlewareOptions {
     locales: readonly string[];
@@ -182,6 +228,21 @@ export interface I18nMiddlewareOptions {
      * cache poisoning; entries support a `*.` subdomain wildcard.
      */
     trustedHosts?: readonly string[];
+    /**
+     * Disable or customize the locale cookie. `false` stops the middleware from
+     * ever writing it (the locale then comes from the URL only).
+     */
+    localeCookie?: boolean | LocaleCookieConfig;
+    /**
+     * Set to `false` to ignore the locale cookie and `Accept-Language` when the
+     * URL carries no locale prefix.
+     */
+    localeDetection?: boolean;
+    /**
+     * Emit `Link: <url>; rel="alternate"; hreflang="…"` response headers for the
+     * localized variants of the current route. Defaults to `true`.
+     */
+    alternateLinks?: boolean;
 }
 export interface I18nConfig {
     locales: readonly string[];
@@ -197,5 +258,8 @@ export interface I18nConfig {
     }[];
     basePath?: string;
     trustedHosts?: readonly string[];
+    localeCookie?: boolean | LocaleCookieConfig;
+    localeDetection?: boolean;
+    alternateLinks?: boolean;
     loadMessages?: (locale: string) => Promise<string | readonly string[]> | string | readonly string[];
 }

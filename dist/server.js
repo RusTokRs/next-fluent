@@ -132,6 +132,11 @@ async function loadConfig(locale, override) {
     store.defaultTranslationValues ??= result.defaultTranslationValues;
     store.timeZone ??= result.timeZone;
     store.now ??= result.now;
+    store.formats ??= result.formats;
+    store.useIsolating ??= result.useIsolating;
+    store.onError ??= result.onError;
+    store.getMessageFallback ??= result.getMessageFallback;
+    store.strictNamespace ??= result.strictNamespace;
   }
   return result;
 }
@@ -167,14 +172,21 @@ function getNow() {
 }
 async function getFormatter(options) {
   const locale = options?.locale ?? await getLocale();
-  if (!options?.timeZone) await loadConfig(locale);
+  const config = await loadConfig(locale);
   const store = getRequestStore();
-  const timeZone = options?.timeZone ?? store.timeZone ?? getTimeZone();
-  return createFormatter({ locale, timeZone });
+  const timeZone = options?.timeZone ?? config.timeZone ?? store.timeZone ?? getTimeZone();
+  return createFormatter({ locale, timeZone, formats: config.formats ?? store.formats });
 }
 function getStaticParams(locales) {
   const list = locales && locales.length > 0 ? locales : globalLocales;
   return list.map((locale) => ({ locale }));
+}
+async function getFormats() {
+  const store = getRequestStore();
+  if (store.formats) return store.formats;
+  const locale = store.locale ?? globalDefaultLocale;
+  const config = await loadConfig(locale);
+  return config.formats ?? store.formats;
 }
 async function forLocale(locale, options) {
   let namespace;
@@ -187,6 +199,9 @@ async function forLocale(locale, options) {
   let strictNamespace;
   let customFunctions;
   let requestConfig;
+  let useIsolating;
+  let onError;
+  let getMessageFallback;
   if (typeof options === "string") {
     namespace = options;
   } else if (options) {
@@ -200,6 +215,9 @@ async function forLocale(locale, options) {
     strictNamespace = options.strictNamespace;
     customFunctions = options.functions;
     requestConfig = options.requestConfig;
+    useIsolating = options.useIsolating;
+    onError = options.onError;
+    getMessageFallback = options.getMessageFallback;
   }
   const store = getRequestStore();
   const config = explicitMessages !== void 0 ? void 0 : await loadConfig(locale, requestConfig);
@@ -207,20 +225,26 @@ async function forLocale(locale, options) {
   fallbackLocale ??= config?.fallbackLocale;
   fallbackMessages ??= config?.fallbackMessages;
   defaultTranslationValues ??= config?.defaultTranslationValues ?? store.defaultTranslationValues;
+  strictNamespace ??= config?.strictNamespace ?? store.strictNamespace;
+  useIsolating ??= config?.useIsolating ?? store.useIsolating;
+  onError ??= config?.onError ?? store.onError;
+  getMessageFallback ??= config?.getMessageFallback ?? store.getMessageFallback;
   const mergedFunctions = {
     ...config?.functions,
     ...customFunctions
   };
+  const bundleSlot = `${effectiveLocale}|iso=${useIsolating ?? true}`;
+  const bundleOptions = { functions: mergedFunctions, useIsolating };
   let bundle;
   if (explicitMessages !== void 0) {
-    bundle = createFluentBundle(effectiveLocale, explicitMessages, { functions: mergedFunctions });
+    bundle = createFluentBundle(effectiveLocale, explicitMessages, bundleOptions);
   } else {
     const hasCustomFuncs = Boolean(requestConfig || Object.keys(mergedFunctions).length > 0);
-    let cached = hasCustomFuncs ? void 0 : store.bundles.get(effectiveLocale);
+    let cached = hasCustomFuncs ? void 0 : store.bundles.get(bundleSlot);
     if (!cached) {
-      cached = createFluentBundle(effectiveLocale, config?.messages ?? "", { functions: mergedFunctions });
+      cached = createFluentBundle(effectiveLocale, config?.messages ?? "", bundleOptions);
       if (!hasCustomFuncs) {
-        store.bundles.set(effectiveLocale, cached);
+        store.bundles.set(bundleSlot, cached);
       }
     }
     bundle = cached;
@@ -229,7 +253,7 @@ async function forLocale(locale, options) {
   if (fallbackMessages) {
     const fbLoc = fallbackLocale ?? "en";
     fallbackBundleList.push(
-      createFluentBundle(fbLoc, fallbackMessages, { functions: mergedFunctions })
+      createFluentBundle(fbLoc, fallbackMessages, bundleOptions)
     );
   }
   const fallbacksToLoad = /* @__PURE__ */ new Set();
@@ -244,15 +268,17 @@ async function forLocale(locale, options) {
   if (fallbacksToLoad.size > 0) {
     for (const fbLocale of fallbacksToLoad) {
       const hasCustomFuncs = Boolean(requestConfig || Object.keys(mergedFunctions).length > 0);
-      let fbBundle = hasCustomFuncs ? void 0 : store.bundles.get(fbLocale);
+      const fbSlot = `${fbLocale}|iso=${useIsolating ?? true}`;
+      let fbBundle = hasCustomFuncs ? void 0 : store.bundles.get(fbSlot);
       if (!fbBundle) {
         const fbConfig = await loadConfig(fbLocale, requestConfig);
         const resolvedFallbackLocale = fbConfig.locale ?? fbLocale;
         fbBundle = createFluentBundle(resolvedFallbackLocale, fbConfig.messages, {
-          functions: { ...fbConfig.functions, ...mergedFunctions }
+          functions: { ...fbConfig.functions, ...mergedFunctions },
+          useIsolating
         });
         if (!hasCustomFuncs) {
-          store.bundles.set(fbLocale, fbBundle);
+          store.bundles.set(fbSlot, fbBundle);
         }
       }
       fallbackBundleList.push(fbBundle);
@@ -263,7 +289,9 @@ async function forLocale(locale, options) {
     namespace,
     debug,
     defaultTranslationValues,
-    strictNamespace
+    strictNamespace,
+    onError,
+    getMessageFallback
   });
 }
 async function getTranslations(options) {
@@ -274,6 +302,7 @@ async function getTranslations(options) {
 export {
   configureServerI18n,
   forLocale,
+  getFormats,
   getFormatter,
   getLocale,
   getMessages,

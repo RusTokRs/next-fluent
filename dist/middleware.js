@@ -1,5 +1,7 @@
 import { matchSupportedLocale, resolveAcceptLanguage, validateI18nConfig } from "./utils.js";
 import { rewriteLocalizedPath, validatePathnames, validateRouteEnvironment } from "./route-engine.js";
+import { buildAlternateLinksHeader } from "./alternate-links.js";
+const REWRITE_SIGNAL_HEADER = "x-next-fluent-rewrite";
 function hostMatchesTrustedList(requestHost, list) {
   const hostname = requestHost.replace(/:\d+$/, "");
   for (const raw of list) {
@@ -11,6 +13,20 @@ function hostMatchesTrustedList(requestHost, list) {
     }
   }
   return false;
+}
+function resolveCookieConfig(localeCookie, cookieName) {
+  if (localeCookie === false) return null;
+  const custom = typeof localeCookie === "object" && localeCookie !== null ? localeCookie : {};
+  const { name, ...rest } = custom;
+  return {
+    name: name ?? cookieName,
+    options: {
+      path: "/",
+      maxAge: 31536e3,
+      sameSite: "lax",
+      ...rest
+    }
+  };
 }
 function createI18nMiddleware(options) {
   validateI18nConfig(options);
@@ -25,8 +41,11 @@ function createI18nMiddleware(options) {
     pathnames,
     domains,
     basePath = "",
-    trustedHosts
+    trustedHosts,
+    localeDetection = true,
+    alternateLinks = true
   } = options;
+  const cookieConfig = resolveCookieConfig(options.localeCookie, cookieName);
   const configuredDefaultLocale = matchSupportedLocale(rawDefaultLocale, allLocales) ?? rawDefaultLocale;
   return async function middleware(request) {
     const { NextResponse } = await import("next/server.js").catch(() => import("next/server"));
@@ -61,17 +80,31 @@ function createI18nMiddleware(options) {
     const firstSegment = segments[0];
     const matchedPrefix = matchSupportedLocale(firstSegment, locales);
     const pathnameWithoutPrefix = matchedPrefix && firstSegment ? pathname.slice(firstSegment.length + 1) || "/" : pathname;
-    const internalPath = (locale, externalPath) => rewriteLocalizedPath(externalPath, locale, pathnames);
-    const cookieLocale = matchSupportedLocale(
-      request.cookies.get(cookieName)?.value || (cookieName !== "NEXT_LOCALE" ? request.cookies.get("NEXT_LOCALE")?.value : void 0),
+    const internalPath = (locale, externalPath) => {
+      const direct = rewriteLocalizedPath(externalPath, locale, pathnames);
+      if (direct !== externalPath) return direct;
+      for (const candidate of allLocales) {
+        if (matchSupportedLocale(candidate, [locale])) continue;
+        const alt = rewriteLocalizedPath(externalPath, candidate, pathnames);
+        if (alt !== externalPath) return alt;
+      }
+      return externalPath;
+    };
+    const cookieLocale = localeDetection ? matchSupportedLocale(
+      request.cookies.get(cookieConfig?.name ?? cookieName)?.value || (cookieName !== "NEXT_LOCALE" ? request.cookies.get("NEXT_LOCALE")?.value : void 0),
       locales
-    );
-    const headerLocale = resolveAcceptLanguage(
-      request.headers.get("accept-language"),
-      locales,
-      defaultLocale
-    );
+    ) : void 0;
+    const headerLocale = localeDetection ? resolveAcceptLanguage(request.headers.get("accept-language"), locales, defaultLocale) : void 0;
     const preferredLocale = cookieLocale || headerLocale || defaultLocale;
+    const cookieValue = (effectiveLocale) => {
+      if (!cookieConfig) return null;
+      const dest = request.headers.get("sec-fetch-dest");
+      if (dest && dest !== "document") return null;
+      const current = request.cookies.get(cookieConfig.name)?.value;
+      if (current === effectiveLocale) return null;
+      if (current === void 0 && headerLocale === effectiveLocale) return null;
+      return effectiveLocale;
+    };
     const createSuccessResponse = (effectiveLocale, rewritePath) => {
       const requestHeaders = new Headers();
       if (request.headers) {
@@ -85,7 +118,12 @@ function createI18nMiddleware(options) {
       }
       requestHeaders.set(headerName, effectiveLocale);
       if (rewritePath) {
-        requestHeaders.set("x-next-fluent-rewrite", requestUrl(withBasePath(rewritePath)).pathname);
+        requestHeaders.set(
+          REWRITE_SIGNAL_HEADER,
+          requestUrl(withBasePath(rewritePath)).pathname
+        );
+      } else {
+        requestHeaders.delete(REWRITE_SIGNAL_HEADER);
       }
       const response = rewritePath ? NextResponse.rewrite(requestUrl(withBasePath(rewritePath)), {
         request: { headers: requestHeaders }
@@ -95,13 +133,24 @@ function createI18nMiddleware(options) {
       response.request ??= { headers: requestHeaders };
       if (response.headers?.set) {
         response.headers.set(headerName, effectiveLocale);
+        if (alternateLinks && localePrefix !== "never") {
+          const header = buildAlternateLinksHeader({
+            locales,
+            defaultLocale,
+            localePrefix,
+            pathname: pathnameWithoutPrefix,
+            pathnames,
+            domains,
+            basePath: hasBasePath ? basePath : "",
+            search,
+            origin: requestOrigin.origin
+          });
+          if (header) response.headers.set("Link", header);
+        }
       }
-      if (response.cookies?.set) {
-        response.cookies.set(cookieName, effectiveLocale, {
-          path: "/",
-          maxAge: 31536e3,
-          sameSite: "lax"
-        });
+      const cookie = cookieValue(effectiveLocale);
+      if (cookie !== null && response.cookies?.set) {
+        response.cookies.set(cookieConfig.name, cookie, cookieConfig.options);
       }
       return response;
     };
@@ -110,12 +159,9 @@ function createI18nMiddleware(options) {
       if (response.headers?.set) {
         response.headers.set(headerName, targetLocale);
       }
-      if (response.cookies?.set) {
-        response.cookies.set(cookieName, targetLocale, {
-          path: "/",
-          maxAge: 31536e3,
-          sameSite: "lax"
-        });
+      const cookie = cookieValue(targetLocale);
+      if (cookie !== null && response.cookies?.set) {
+        response.cookies.set(cookieConfig.name, cookie, cookieConfig.options);
       }
       return response;
     };
@@ -130,10 +176,11 @@ function createI18nMiddleware(options) {
         return createRedirect(targetUrl, globalPrefix);
       }
     }
-    if (request.headers.get("x-next-fluent-rewrite") === rawPathname && matchedPrefix) {
-      return createSuccessResponse(matchedPrefix);
-    }
+    const isRewriteSignal = matchedPrefix !== void 0 && request.headers.get(REWRITE_SIGNAL_HEADER) === rawPathname;
     if (localePrefix === "never") {
+      if (isRewriteSignal) {
+        return createSuccessResponse(matchedPrefix);
+      }
       if (matchedPrefix) {
         const rest = segments.slice(1).join("/");
         const remainingPath = rest ? `/${rest}${search}` : `/${search}`;
@@ -145,6 +192,9 @@ function createI18nMiddleware(options) {
     }
     if (localePrefix === "as-needed") {
       if (matchedPrefix === defaultLocale) {
+        if (isRewriteSignal) {
+          return createSuccessResponse(matchedPrefix);
+        }
         const rest = segments.slice(1).join("/");
         const remainingPath = rest ? `/${rest}${search}` : `/${search}`;
         return createRedirect(requestUrl(withBasePath(remainingPath)), defaultLocale);

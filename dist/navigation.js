@@ -13,21 +13,7 @@ import {
   switchLocaleHref
 } from "./nav-url.js";
 import { LocalizedLink, useLocale } from "./client.js";
-import { formatUrlObject as formatUrlObject2, resolveLocalizedPathname as resolveLocalizedPathname2, assertSafeHref, isExternalUrl } from "./nav-url.js";
-const STUB_ROUTER = {
-  push: () => {
-  },
-  replace: () => {
-  },
-  prefetch: () => {
-  },
-  back: () => {
-  },
-  forward: () => {
-  },
-  refresh: () => {
-  }
-};
+import { formatUrlObject, resolveLocalizedPathname as resolveLocalizedPathname2, assertSafeHref, isExternalUrl } from "./nav-url.js";
 function createNavigation(config) {
   validateI18nConfig({
     locales: config.locales,
@@ -65,12 +51,7 @@ function createNavigation(config) {
     return cleanPathname.endsWith("/") && internal !== "/" ? `${internal}/` : internal;
   }
   function useRouter() {
-    let router;
-    try {
-      router = useNextRouter();
-    } catch {
-      router = STUB_ROUTER;
-    }
+    const router = useNextRouter();
     const currentLocale = useLocale();
     return useMemo(
       () => ({
@@ -136,7 +117,7 @@ function createNavigation(config) {
 export {
   assertSafeHref,
   createNavigation,
-  formatUrlObject2 as formatUrlObject,
+  formatUrlObject,
   isExternalUrl,
   resolveLocalizedPathname2 as resolveLocalizedPathname
 };

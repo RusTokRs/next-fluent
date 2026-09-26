@@ -1,5 +1,5 @@
 import type { FluentBundle, FluentFunction } from '@fluent/bundle';
-import type { DefaultKey, Formatter, FluentMessages, GetTranslationsOptions, RequestConfigFn, RequestConfigResult, RichTranslationValues, Translations, NamespaceArgs, NamespaceKeys } from './types';
+import type { DefaultKey, Formatter, Formats, FluentMessages, GetMessageFallbackFn, GetTranslationsOptions, OnErrorFn, RequestConfigFn, RequestConfigResult, RichTranslationValues, Translations, NamespaceArgs, NamespaceKeys } from './types';
 export interface ServerI18nOptions {
     locales?: readonly string[];
     defaultLocale?: string;
@@ -18,6 +18,11 @@ interface RequestStore {
     timeZone?: string;
     now?: Date;
     defaultTranslationValues?: RichTranslationValues;
+    formats?: Formats;
+    useIsolating?: boolean;
+    onError?: OnErrorFn;
+    getMessageFallback?: GetMessageFallbackFn;
+    strictNamespace?: boolean;
     bundles: Map<string, FluentBundle>;
 }
 export declare const getRequestStore: () => RequestStore;
@@ -38,6 +43,11 @@ export declare function getFormatter(options?: {
 export declare function getStaticParams(locales?: readonly string[]): {
     locale: string;
 }[];
+/**
+ * Named `Intl` presets resolved by the request configuration. Returns an empty
+ * object outside of a request scope.
+ */
+export declare function getFormats(): Promise<Formats | undefined>;
 export interface ForLocaleOptions {
     messages?: string | readonly string[];
     fallbackLocale?: string;
@@ -48,6 +58,10 @@ export interface ForLocaleOptions {
     debug?: boolean;
     strictNamespace?: boolean;
     functions?: Record<string, FluentFunction>;
+    /** Disable Fluent's U+2068/U+2069 bidi isolates for non-HTML sinks. */
+    useIsolating?: boolean;
+    onError?: OnErrorFn;
+    getMessageFallback?: GetMessageFallbackFn;
     /** Instance-scoped request loader used by createI18n. */
     requestConfig?: RequestConfigFn;
 }

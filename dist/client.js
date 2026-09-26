@@ -23,6 +23,11 @@ function FluentProvider({
   functions,
   defaultTranslationValues,
   debug,
+  strictNamespace,
+  formats,
+  useIsolating,
+  onError,
+  getMessageFallback,
   children
 }) {
   const messagesKey = useMemo(
@@ -33,21 +38,23 @@ function FluentProvider({
     () => typeof fallbackMessages === "string" || Array.isArray(fallbackMessages) ? computeSourceHash(fallbackMessages) : null,
     [fallbackMessages]
   );
+  const bundleIdentity = messagesKey ?? messages;
+  const fallbackBundleIdentity = fallbackMessagesKey ?? fallbackMessages;
   const bundle = useMemo(() => {
     if (!messages) return null;
     if (typeof messages === "string" || Array.isArray(messages)) {
-      return createFluentBundle(locale, messages, { functions });
+      return createFluentBundle(locale, messages, { functions, useIsolating });
     }
     return messages;
-  }, [locale, messagesKey ?? messages, functions]);
+  }, [locale, bundleIdentity, functions, useIsolating]);
   const fallbackBundle = useMemo(() => {
     if (!fallbackMessages) return null;
     const fLocale = fallbackLocale || "en";
     if (typeof fallbackMessages === "string" || Array.isArray(fallbackMessages)) {
-      return createFluentBundle(fLocale, fallbackMessages, { functions });
+      return createFluentBundle(fLocale, fallbackMessages, { functions, useIsolating });
     }
     return fallbackMessages;
-  }, [fallbackLocale, fallbackMessagesKey ?? fallbackMessages, functions]);
+  }, [fallbackLocale, fallbackBundleIdentity, functions, useIsolating]);
   const resolvedFallbackBundles = useMemo(() => {
     if (fallbackBundles) {
       return Array.isArray(fallbackBundles) ? fallbackBundles : [fallbackBundles];
@@ -61,6 +68,7 @@ function FluentProvider({
     () => ({
       locale,
       bundle,
+      messages: typeof messages === "string" || Array.isArray(messages) ? messages : void 0,
       fallbackLocale,
       fallbackBundle,
       fallbackBundles: resolvedFallbackBundles,
@@ -68,11 +76,16 @@ function FluentProvider({
       now,
       functions,
       defaultTranslationValues,
-      debug
+      debug,
+      strictNamespace,
+      formats,
+      onError,
+      getMessageFallback
     }),
     [
       locale,
       bundle,
+      messages,
       fallbackLocale,
       fallbackBundle,
       resolvedFallbackBundles,
@@ -80,7 +93,11 @@ function FluentProvider({
       now,
       functions,
       defaultTranslationValues,
-      debug
+      debug,
+      strictNamespace,
+      formats,
+      onError,
+      getMessageFallback
     ]
   );
   return React.createElement(FluentContext.Provider, { value }, children);
@@ -100,10 +117,19 @@ function useTimeZone() {
     return "UTC";
   }
 }
+function useMessages() {
+  const context = useContext(FluentContext);
+  return context.messages;
+}
 function useFormatter() {
   const locale = useLocale();
   const timeZone = useTimeZone();
-  return useMemo(() => createFormatter({ locale, timeZone }), [locale, timeZone]);
+  const context = useContext(FluentContext);
+  const formats = context.formats;
+  return useMemo(
+    () => createFormatter({ locale, timeZone, formats }),
+    [locale, timeZone, formats]
+  );
 }
 function useNow(options) {
   const context = useContext(FluentContext);
@@ -131,7 +157,10 @@ function useTranslations(namespace) {
       fallbackBundles: context.fallbackBundles ?? (context.fallbackBundle ? [context.fallbackBundle] : null),
       namespace,
       debug: context.debug,
-      defaultTranslationValues: context.defaultTranslationValues
+      defaultTranslationValues: context.defaultTranslationValues,
+      strictNamespace: context.strictNamespace,
+      onError: context.onError,
+      getMessageFallback: context.getMessageFallback
     }),
     [
       context.bundle,
@@ -139,7 +168,10 @@ function useTranslations(namespace) {
       context.fallbackBundles,
       namespace,
       context.debug,
-      context.defaultTranslationValues
+      context.defaultTranslationValues,
+      context.strictNamespace,
+      context.onError,
+      context.getMessageFallback
     ]
   );
 }
@@ -193,6 +225,7 @@ export {
   createFormatter,
   useFormatter,
   useLocale,
+  useMessages,
   useNow,
   useTimeZone,
   useTranslations

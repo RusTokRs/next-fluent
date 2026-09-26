@@ -176,6 +176,20 @@ export interface BaseI18nConfig {
   loadMessages?: unknown;
 }
 
+const LOCALE_PREFIX_MODES = ['always', 'as-needed', 'never'] as const;
+/** RFC 6265 cookie-name: token characters except `=`. */
+const VALID_COOKIE_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+/** RFC 9110 field-name: token characters. */
+const VALID_HEADER_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+/** Type guard for "is this value one of the configured locales". */
+export function hasLocale(
+  locales: readonly string[],
+  locale: string | null | undefined
+): locale is string {
+  return matchSupportedLocale(locale ?? undefined, locales) !== undefined;
+}
+
 export function validateI18nConfig(options: BaseI18nConfig): void {
   if (!options || !Array.isArray(options.locales) || options.locales.length === 0) {
     throw new Error('[next-fluent] "locales" must be a non-empty array.');
@@ -212,6 +226,29 @@ export function validateI18nConfig(options: BaseI18nConfig): void {
   if (!canonicalLocales.has(defaultCanonical.toLowerCase())) {
     throw new Error(
       `[next-fluent] "defaultLocale" ("${options.defaultLocale}") must be included in "locales" [${options.locales.join(', ')}].`
+    );
+  }
+
+  // A mistyped prefix mode silently degrades to 'always' in the middleware and
+  // to prefixed URLs in navigation, so reject unknown values up front.
+  if (
+    options.localePrefix !== undefined &&
+    !LOCALE_PREFIX_MODES.includes(options.localePrefix as (typeof LOCALE_PREFIX_MODES)[number])
+  ) {
+    throw new Error(
+      `[next-fluent] "localePrefix" must be one of ${LOCALE_PREFIX_MODES.map((mode) => `"${mode}"`).join(', ')} (received "${options.localePrefix}").`
+    );
+  }
+
+  if (options.cookieName !== undefined && !VALID_COOKIE_NAME.test(options.cookieName)) {
+    throw new Error(
+      `[next-fluent] "cookieName" must be a valid HTTP cookie name (received ${JSON.stringify(options.cookieName)}).`
+    );
+  }
+
+  if (options.headerName !== undefined && !VALID_HEADER_NAME.test(options.headerName)) {
+    throw new Error(
+      `[next-fluent] "headerName" must be a valid HTTP header name (received ${JSON.stringify(options.headerName)}).`
     );
   }
 }

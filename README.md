@@ -13,6 +13,10 @@ The high-performance Project Fluent alternative to `next-intl`.
 - **Next.js Webpack & Turbopack Plugin**: Seamless zero-boilerplate configuration binding via `next-fluent/plugin`.
 - **Synchronized Request Snapshot**: `<FluentServerProvider>` passes messages, fallback messages, serializable default values, time zone, and `now` from one server request snapshot to Client Components.
 - **Full Type Safety**: Type generation powered by `@fluent/syntax` AST with TypeScript declaration merging (`declare global { interface FluentMessages extends AppMessages {} }`) and automatic namespace key autocompletion.
+- **Static Rendering**: `setRequestLocale()` keeps localized routes prerenderable (`●`/`○` in `next build`); the CI fixture asserts it.
+- **Production Error Handling**: `onError` / `getMessageFallback` with typed `FluentErrorCode`s instead of hard-coded `console` noise.
+- **Cacheable Responses**: the locale cookie is only written on document requests when it actually changes, so static pages stay CDN-cacheable.
+- **SEO**: automatic `Link: <url>; rel="alternate"; hreflang="…"` headers (including `x-default`) for every localized route.
 - **Bounded LRU Caching**: Resource and bundle caches verify exact source equality even when 32-bit hashes collide.
 - **Clean Standards**: Uses standard `NEXT_LOCALE` cookie and `x-next-locale` headers.
 
@@ -110,8 +114,13 @@ export const config = {
 ```tsx
 import { notFound } from 'next/navigation';
 import { FluentServerProvider } from 'next-fluent/server-provider';
-import { setRequestLocale } from 'next-fluent/server';
+import { setRequestLocale, getStaticParams } from 'next-fluent/server';
+import { hasLocale } from 'next-fluent';
 import { routing } from '@/i18n/routing';
+
+export function generateStaticParams() {
+  return getStaticParams(routing.locales); // [{ locale: 'en' }, { locale: 'ru' }, …]
+}
 
 export default async function RootLayout({
   children,
@@ -121,7 +130,7 @@ export default async function RootLayout({
   params: Promise<{ locale: string }>;
 }) {
   const { locale } = await params;
-  if (!routing.locales.some((item) => item === locale)) notFound();
+  if (!hasLocale(routing.locales, locale)) notFound();
   setRequestLocale(locale, routing.locales);
 
   return (
@@ -135,6 +144,8 @@ export default async function RootLayout({
   );
 }
 ```
+
+> **Static rendering.** Next.js renders layouts and pages independently, so `setRequestLocale(locale)` must be called in **every page and every layout** that should be prerendered — not only in the root layout. Without it, `getTranslations()` falls back to reading request headers and the route silently opts into dynamic rendering (the CI fixture fails the build if any localized route stops being prerendered).
 
 Custom Fluent functions and callback-based rich values must be registered in a Client Component because React cannot serialize functions across the server/client boundary. For consistent date formatting, use `FluentServerProvider` or await `getRequestConfigSnapshot()` before calling the synchronous `getNow()` and `getTimeZone()` helpers.
 
@@ -216,6 +227,73 @@ const content = t.rich('welcome-banner', {
 - `t(key, args?)` returns a **string**. If the formatted result still contains a React-element placeholder (e.g. `defaultTranslationValues` injected JSX), it throws and directs you to `t.rich()` / `<FormattedMessage>`. Fluent formatting errors fall back to `namespace.key`.
 - `t.rich(key, args?)` and `<FormattedMessage />` are the only APIs that produce React nodes.
 - `raw('title')` → `string`, `raw('title', { $name: 'Ada' })` → interpolated `string`, `raw('list')` → ordered `string[]` (both Fluent `[]`-lists and JSON arrays). Missing messages fall back to the key; formatting errors are ignored and the literal `{$placeholders}` remain.
+- Message arguments accept strings, numbers, booleans (`true` → `"true"`, Fluent has no boolean type), `Date`, `bigint` and `FluentType` values. `null`/`undefined` and non-Fluent objects are reported through `onError` as `INVALID_ARGUMENT` instead of being silently dropped.
+
+### Error handling (`onError` / `getMessageFallback`)
+
+Route missing or unformattable messages into your own monitoring instead of the console:
+
+```ts
+import { setRequestConfig } from 'next-fluent/server';
+import { FluentErrorCode } from 'next-fluent';
+
+export default setRequestConfig(async ({ locale }) => ({
+  locale,
+  messages: await loadCatalog(locale),
+  onError(error) {
+    if (error.code === FluentErrorCode.MISSING_MESSAGE) console.warn(error.message);
+    else reportToSentry(error); // FORMATTING_ERROR, INVALID_ARGUMENT, UNSUPPORTED_VALUE
+  },
+  getMessageFallback({ namespace, key, error }) {
+    return error.code === FluentErrorCode.MISSING_MESSAGE ? `${namespace ?? ''}${key}` : '⚠︎';
+  },
+}));
+```
+
+A throwing handler can never break a render. `debug: true` on `getTranslations()`/`createTranslator()` keeps the development-friendly `[MISSING: namespace.key]` output.
+
+### Named formats
+
+Define `Intl` presets once and address them by name from `useFormatter()` / `getFormatter()`:
+
+```ts
+export default setRequestConfig(async ({ locale }) => ({
+  locale,
+  messages: await loadCatalog(locale),
+  timeZone: 'Europe/Berlin',
+  formats: {
+    dateTime: { short: { dateStyle: 'short' }, long: { dateStyle: 'full', timeStyle: 'short' } },
+    number: { percent: { style: 'percent' }, eur: { style: 'currency', currency: 'EUR' } },
+    list: { bullets: { type: 'conjunction' } },
+  },
+}));
+```
+
+```tsx
+const format = useFormatter();
+format.dateTime(order.createdAt, 'short'); // named preset
+format.number(0.19, 'percent');            // → "19%"
+format.dateTime(new Date(), { dateStyle: 'full' }); // raw Intl options still work
+```
+
+### Non-HTML output (`useIsolating`)
+
+Fluent wraps placeables in U+2068/U+2069 bidi isolates — correct for HTML, noise in `<title>`, meta tags, JSON APIs or plain-text emails. Turn them off per request (or per call) with `useIsolating: false` in the request config or in `getTranslations()` options. `t.raw()` always strips them.
+
+### Middleware options
+
+```ts
+createI18nMiddleware({
+  ...routing,
+  trustedHosts: ['example.com', '*.example.com'], // 421 for foreign Host headers
+  localeCookie: { name: 'NEXT_LOCALE', sameSite: 'lax', secure: true, maxAge: 31536000 },
+  // localeCookie: false  → never write the cookie (URL-only locale)
+  localeDetection: true,  // false → ignore cookie + Accept-Language
+  alternateLinks: true,   // Link: <url>; rel="alternate"; hreflang="…" (+ x-default)
+});
+```
+
+The cookie is only written for `Sec-Fetch-Dest: document` requests and only when the stored value changes, so prerendered pages keep `Cache-Control: s-maxage=…` instead of being invalidated on every hit.
 
 ---
 
@@ -239,6 +317,30 @@ declare global {
 Once declared, `useTranslations('namespace')` and `getTranslations('namespace')` **automatically autocomplete message keys and validate arguments** across your entire project!
 
 ---
+
+## API surface (next-intl parity map)
+
+| next-intl | next-fluent | Notes |
+| --- | --- | --- |
+| `useTranslations` / `getTranslations` | ✅ same names | Fluent `.ftl` instead of ICU JSON |
+| `t.rich()` / `FormattedMessage` | ✅ same names | Fluent markup + React element variables |
+| `t.markup()` | ❌ | Fluent has no ICU-HTML duality; use `t.rich()` |
+| `useLocale` / `getLocale` | ✅ | |
+| `useMessages` / `getMessages` | ✅ | returns the raw FTL catalog |
+| `useFormatter` / `getFormatter` | ✅ | plus named `formats` presets |
+| `useNow` / `getNow`, `useTimeZone` / `getTimeZone` | ✅ | request snapshot keeps SSR/CSR identical |
+| `NextIntlClientProvider` | `FluentServerProvider` / `FluentProvider` | forwards messages, fallback, `now`, `timeZone`, defaults |
+| `onError` / `getMessageFallback` / `IntlErrorCode` | ✅ `FluentErrorCode` | server *and* client |
+| `setRequestLocale` | ✅ | required in every page + layout for static rendering |
+| `hasLocale` | ✅ | canonical, case-insensitive |
+| `getRequestConfig` | `setRequestConfig` | |
+| `createNextIntlPlugin` | `createNextFluentPlugin` | Webpack + Turbopack config alias |
+| `defineRouting` (`pathnames`, `domains`, `basePath`, `localePrefix`) | ✅ | |
+| `localeCookie`, `localeDetection`, `alternateLinks` | ✅ | |
+| `localePrefix.prefixes` (per-locale prefix map) | ❌ | on the roadmap |
+| `createNavigation` (`Link`, `redirect`, `permanentRedirect`, `useRouter`, `usePathname`, `getPathname`) | ✅ | |
+| Type-safe messages | ✅ `next-fluent typegen` | AST-based, declaration merging |
+| Message extraction from source | ❌ | `next-intl extract` has no counterpart yet |
 
 ## License
 

@@ -63,6 +63,28 @@ function checkBrowser(base) {
   }
 }
 
+/**
+ * Static rendering is a headline requirement: with `setRequestLocale` in every
+ * page and layout, the localized routes must be prerendered at build time.
+ * The route table is decorative, so read the prerender manifest instead.
+ */
+function checkPrerenderedRoutes(target) {
+  const manifestPath = join(target, '.next', 'prerender-manifest.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  const routes = Object.keys(manifest.routes ?? {});
+  const expected = ['/en', '/ru', '/en/about', '/ru/about'];
+  const missing = expected.filter((route) => !routes.includes(route));
+  if (missing.length > 0) {
+    throw new Error(
+      `Static rendering regression: ${missing.join(', ')} were not prerendered. Prerendered routes: ${routes.join(', ') || '<none>'}`
+    );
+  }
+  if (routes.some((route) => route.endsWith('/live'))) {
+    throw new Error('The intentionally dynamic /live route was prerendered.');
+  }
+  console.log(`[next-fluent] Static rendering verified for: ${expected.join(', ')}`);
+}
+
 async function checkRuntime(nextCli) {
   const port = await availablePort();
   const base = `http://localhost:${port}`;
@@ -94,14 +116,32 @@ async function checkRuntime(nextCli) {
     const russian = await fetch(`${base}/ru`, { redirect: 'manual' });
     const russianHtml = await russian.text();
     if (russian.status !== 200 || russianHtml.split('Привет').length < 3 ||
-        !russianHtml.includes('data-server-locale="ru"') ||
-        !russianHtml.includes('data-header-locale="ru"')) {
+        !russianHtml.includes('data-server-locale="ru"')) {
       throw new Error(`Russian RSC/client locale mismatch (${russian.status}).\n${russianHtml.slice(0, 1500)}\n${output}`);
+    }
+    // The middleware must still forward the resolved locale to the app.
+    const live = await fetch(`${base}/ru/live`, { redirect: 'manual' });
+    const liveHtml = await live.text();
+    if (live.status !== 200 || !liveHtml.includes('data-header-locale="ru"')) {
+      throw new Error(`Locale request header was not forwarded (${live.status}).\n${liveHtml.slice(0, 500)}\n${output}`);
     }
     const localized = await fetch(`${base}/ru/o-nas`, { redirect: 'manual' });
     const localizedHtml = await localized.text();
     if (localized.status !== 200 || !localizedHtml.includes('About route') || !localizedHtml.includes('lang="ru"')) {
       throw new Error(`Localized route failed (${localized.status}).\n${localizedHtml.slice(0, 500)}\n${output}`);
+    }
+    // hreflang alternates for search engines.
+    const link = localized.headers.get('link') ?? '';
+    if (!link.includes('hreflang="en"') || !link.includes('hreflang="ru"') || !link.includes('hreflang="x-default"')) {
+      throw new Error(`Missing hreflang alternates on the localized route.\n${link}\n${output}`);
+    }
+    // A request that already carries the effective locale must stay cacheable.
+    const cached = await fetch(`${base}/ru/o-nas`, {
+      redirect: 'manual',
+      headers: { cookie: 'NEXT_LOCALE=ru', 'sec-fetch-dest': 'document' },
+    });
+    if (cached.headers.get('set-cookie')) {
+      throw new Error(`Unchanged locale still wrote a cookie.\n${cached.headers.get('set-cookie')}\n${output}`);
     }
     const switched = await fetch(`${base}/en/about-us`, {
       redirect: 'manual',
@@ -142,13 +182,16 @@ try {
   });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`Next integration build failed (${result.status}).`);
+  checkPrerenderedRoutes(target);
   await checkRuntime(nextCli);
 } finally {
   const resolvedRoot = realpathSync(root);
   const resolvedTarget = existsSync(target) ? realpathSync(target) : target;
-  if (!resolvedTarget.toLowerCase().startsWith((resolvedRoot + sep).toLowerCase())) {
-    throw new Error('Unsafe integration fixture cleanup path.');
+  const isInsideRepo = resolvedTarget.toLowerCase().startsWith((resolvedRoot + sep).toLowerCase());
+  if (isInsideRepo) {
+    if (linked) await unlink(join(resolvedTarget, 'node_modules', 'next-fluent'));
+    await rm(resolvedTarget, { recursive: true, force: true });
+  } else {
+    console.error(`[next-fluent] Refusing to clean up an unexpected path: ${resolvedTarget}`);
   }
-  if (linked) await unlink(join(resolvedTarget, 'node_modules', 'next-fluent'));
-  await rm(resolvedTarget, { recursive: true, force: true });
 }

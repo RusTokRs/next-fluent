@@ -1,4 +1,4 @@
-import type { LocalePrefixMode } from './types';
+import type { LocaleCookieConfig, LocalePrefixMode } from './types';
 export interface DomainConfig {
     domain: string;
     defaultLocale: string;
@@ -14,6 +14,10 @@ export interface RoutingConfig<Locales extends readonly string[] = readonly stri
     cookieName?: string;
     headerName?: string;
     basePath?: string;
+    localeCookie?: boolean | LocaleCookieConfig;
+    localeDetection?: boolean;
+    alternateLinks?: boolean;
+    trustedHosts?: readonly string[];
 }
 /**
  * Defines the central routing configuration for next-fluent.

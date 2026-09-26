@@ -78,6 +78,7 @@
   "scripts": {
     "build": "node ./scripts/build.mjs",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
     "test:types": "node ./bin/next-fluent.mjs typegen --input test/types/messages.ftl --output test/types/messages.d.ts && tsc -p test/types/tsconfig.json",
     "test:next": "npm run build && node ./scripts/test-next-integration.mjs",
     "test": "node --test \"test/*.test.mjs\"",
@@ -85,9 +86,9 @@
     "test:next:browser": "npm run build && node ./scripts/test-next-integration.mjs --browser",
     "prepack": "npm run build",
     "check-dist": "npm run build && git diff --ignore-space-at-eol --exit-code dist/",
-    "ci": "npm run build && npm run check-dist && npm run typecheck && npm test",
+    "ci": "npm run build && npm run check-dist && npm run lint && npm run typecheck && npm test",
     "check": "npm run ci && npm run test:types && npm run test:next",
-    "verify": "npm run build && npm run typecheck && npm run test:types && npm test"
+    "verify": "npm run build && npm run lint && npm run typecheck && npm run test:types && npm test"
   },
   "dependencies": {
     "@fluent/bundle": "0.19.1",
@@ -102,10 +103,14 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "esbuild": "^0.28.2",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "^6.1.1",
+    "globals": "^17.12.0",
     "next": "^15.1.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.70.1"
   },
   "overrides": {
     "postcss": "^8.5.23"

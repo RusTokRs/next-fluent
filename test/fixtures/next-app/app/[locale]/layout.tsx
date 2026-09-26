@@ -3,6 +3,10 @@ import { FluentServerProvider } from 'next-fluent/server-provider';
 import { setRequestLocale } from 'next-fluent/server';
 import { routing } from '../../i18n/routing';
 
+export function generateStaticParams() {
+  return routing.locales.map((locale) => ({ locale }));
+}
+
 export default async function Layout({
   children,
   params,

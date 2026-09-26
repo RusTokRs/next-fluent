@@ -6,7 +6,6 @@ import {
   clearFormatterCache,
   resolveLocalizedPathname,
   formatUrlObject,
-  createNavigation,
   FluentProvider,
   FormattedMessage,
   createFluentBundle,

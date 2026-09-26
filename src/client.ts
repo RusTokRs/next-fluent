@@ -7,8 +7,11 @@ import type {
   DefaultKey,
   FormattedMessageProps,
   Formatter,
+  Formats,
+  GetMessageFallbackFn,
   NamespaceArgs,
   NamespaceKeys,
+  OnErrorFn,
   RichTranslationValues,
   Translations,
 } from './types';
@@ -24,6 +27,7 @@ export { createFormatter };
 interface FluentContextValue {
   locale: string;
   bundle: FluentBundle | null;
+  messages?: string | readonly string[];
   fallbackLocale?: string;
   fallbackBundle: FluentBundle | null;
   fallbackBundles?: readonly FluentBundle[];
@@ -32,6 +36,10 @@ interface FluentContextValue {
   functions?: Record<string, FluentFunction>;
   defaultTranslationValues?: RichTranslationValues;
   debug?: boolean;
+  strictNamespace?: boolean;
+  formats?: Formats;
+  onError?: OnErrorFn;
+  getMessageFallback?: GetMessageFallbackFn;
 }
 
 const FluentContext = createContext<FluentContextValue>({
@@ -55,6 +63,16 @@ export interface FluentProviderProps {
   functions?: Record<string, FluentFunction>;
   defaultTranslationValues?: RichTranslationValues;
   debug?: boolean;
+  /** Only resolve `namespace.key` candidates (mirrors the server option). */
+  strictNamespace?: boolean;
+  /** Named `Intl` presets used by `useFormatter()`. */
+  formats?: Formats;
+  /** Disable Fluent's bidi isolates so `t()` is safe in non-HTML sinks. */
+  useIsolating?: boolean;
+  /** Client-side error reporting (define inside a `'use client'` wrapper). */
+  onError?: OnErrorFn;
+  /** Client-side fallback rendering (define inside a `'use client'` wrapper). */
+  getMessageFallback?: GetMessageFallbackFn;
   children: React.ReactNode;
 }
 
@@ -69,6 +87,11 @@ export function FluentProvider({
   functions,
   defaultTranslationValues,
   debug,
+  strictNamespace,
+  formats,
+  useIsolating,
+  onError,
+  getMessageFallback,
   children,
 }: FluentProviderProps) {
   const messagesKey = useMemo(
@@ -87,22 +110,29 @@ export function FluentProvider({
     [fallbackMessages]
   );
 
+  // Bundles are keyed by a content hash, so an equal-but-new string reference
+  // does not rebuild the catalog on every render.
+  const bundleIdentity = messagesKey ?? messages;
+  const fallbackBundleIdentity = fallbackMessagesKey ?? fallbackMessages;
+
   const bundle = useMemo<FluentBundle | null>(() => {
     if (!messages) return null;
     if (typeof messages === 'string' || Array.isArray(messages)) {
-      return createFluentBundle(locale, messages, { functions });
+      return createFluentBundle(locale, messages, { functions, useIsolating });
     }
     return messages as FluentBundle;
-  }, [locale, messagesKey ?? messages, functions]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locale, bundleIdentity, functions, useIsolating]);
 
   const fallbackBundle = useMemo<FluentBundle | null>(() => {
     if (!fallbackMessages) return null;
     const fLocale = fallbackLocale || 'en';
     if (typeof fallbackMessages === 'string' || Array.isArray(fallbackMessages)) {
-      return createFluentBundle(fLocale, fallbackMessages, { functions });
+      return createFluentBundle(fLocale, fallbackMessages, { functions, useIsolating });
     }
     return fallbackMessages as FluentBundle;
-  }, [fallbackLocale, fallbackMessagesKey ?? fallbackMessages, functions]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fallbackLocale, fallbackBundleIdentity, functions, useIsolating]);
 
   const resolvedFallbackBundles = useMemo<readonly FluentBundle[] | undefined>(() => {
     if (fallbackBundles) {
@@ -118,6 +148,7 @@ export function FluentProvider({
     () => ({
       locale,
       bundle,
+      messages: typeof messages === 'string' || Array.isArray(messages) ? messages : undefined,
       fallbackLocale,
       fallbackBundle,
       fallbackBundles: resolvedFallbackBundles,
@@ -126,10 +157,15 @@ export function FluentProvider({
       functions,
       defaultTranslationValues,
       debug,
+      strictNamespace,
+      formats,
+      onError,
+      getMessageFallback,
     }),
     [
       locale,
       bundle,
+      messages,
       fallbackLocale,
       fallbackBundle,
       resolvedFallbackBundles,
@@ -138,6 +174,10 @@ export function FluentProvider({
       functions,
       defaultTranslationValues,
       debug,
+      strictNamespace,
+      formats,
+      onError,
+      getMessageFallback,
     ]
   );
 
@@ -161,10 +201,21 @@ export function useTimeZone(): string {
   }
 }
 
+/** Raw catalog (FTL text) provided to the current `FluentProvider`. */
+export function useMessages(): string | readonly string[] | undefined {
+  const context = useContext(FluentContext);
+  return context.messages;
+}
+
 export function useFormatter(): Formatter {
   const locale = useLocale();
   const timeZone = useTimeZone();
-  return useMemo(() => createFormatter({ locale, timeZone }), [locale, timeZone]);
+  const context = useContext(FluentContext);
+  const formats = context.formats;
+  return useMemo(
+    () => createFormatter({ locale, timeZone, formats }),
+    [locale, timeZone, formats]
+  );
 }
 
 export function useNow(options?: { updateInterval?: number }): Date {
@@ -207,6 +258,9 @@ export function useTranslations(namespace?: string): Translations {
         namespace,
         debug: context.debug,
         defaultTranslationValues: context.defaultTranslationValues,
+        strictNamespace: context.strictNamespace,
+        onError: context.onError,
+        getMessageFallback: context.getMessageFallback,
       }) as Translations,
     [
       context.bundle,
@@ -215,6 +269,9 @@ export function useTranslations(namespace?: string): Translations {
       namespace,
       context.debug,
       context.defaultTranslationValues,
+      context.strictNamespace,
+      context.onError,
+      context.getMessageFallback,
     ]
   );
 }

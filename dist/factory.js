@@ -1,7 +1,11 @@
 import { createI18nMiddleware } from "./middleware.js";
-import { createFormatter } from "./formatter.js";
 import { createNavigation } from "./navigation.js";
-import { forLocale, getLocale } from "./server.js";
+import {
+  forLocale,
+  getFormatter as getServerFormatter,
+  getLocale,
+  getMessages as getServerMessages
+} from "./server.js";
 import { validateI18nConfig } from "./utils.js";
 function createI18n(config) {
   validateI18nConfig(config);
@@ -46,11 +50,11 @@ function createI18n(config) {
       if (config.loadMessages) {
         return config.loadMessages(targetLocale);
       }
-      return "";
+      return getServerMessages(targetLocale);
     },
     getFormatter: async (options) => {
       const locale = options?.locale ?? await getLocale(serverOptions);
-      return createFormatter({ locale, timeZone: options?.timeZone });
+      return getServerFormatter({ locale, timeZone: options?.timeZone });
     },
     getStaticParams: () => {
       return config.locales.map((locale) => ({ locale }));
