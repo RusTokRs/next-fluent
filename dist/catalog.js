@@ -38,18 +38,19 @@ function renderInline(text) {
   if (tail !== "") {
     out += /[{}"\\]/.test(tail) ? tail.replace(
       /[{}"\\]/g,
-      (ch) => ch === '"' || ch === "\\" ? `{ "${escapeLiteral(ch)}" }` : `{ "${ch}" }`
+      (ch) => ch === "{" || ch === "}" ? `{ "${ch}" }` : `{ "${escapeLiteral(ch)}" }`
     ) : `{ "${escapeLiteral(tail)}" }`;
   }
   return out === "" ? '{ "" }' : out;
 }
 function renderFluentPattern(text) {
-  if (text === "") return '{ "" }';
-  if (text.includes("\n")) {
+  const normalized = text.replace(/\r\n?/g, "\n");
+  if (normalized === "") return '{ "" }';
+  if (normalized.includes("\n")) {
     return `
-${text.split("\n").map((line) => `    ${renderInline(line)}`).join("\n")}`;
+${normalized.split("\n").map((line) => `    ${renderInline(line)}`).join("\n")}`;
   }
-  return renderInline(text);
+  return renderInline(normalized);
 }
 function normalizeId(segment, path) {
   const id = segment.replaceAll(".", "-");

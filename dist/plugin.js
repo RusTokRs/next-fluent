@@ -25,8 +25,10 @@ function createNextFluentPlugin(i18nRequestPath = "./src/i18n/request.ts", optio
             `[next-fluent] Generated message types at ${path.relative(process.cwd(), output)}`
           );
         }
-        if (options.typegen.watch !== false) {
+        const isProduction = process.env.NODE_ENV === "production";
+        if (options.typegen.watch !== false && !isProduction) {
           watchCatalogs(input, output, {
+            unref: true,
             onUpdate: () => console.log("[next-fluent] Regenerated message types."),
             onError: (error) => console.error(`[next-fluent] Type generation failed: ${error.message}`)
           });

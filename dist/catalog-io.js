@@ -24,7 +24,7 @@ function readCatalog(file) {
   return file.toLowerCase().endsWith(".json") ? jsonToFluent(JSON.parse(raw)) : raw;
 }
 function readCatalogsByLocale(dir) {
-  const catalogs = {};
+  const catalogs = /* @__PURE__ */ Object.create(null);
   for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort(
     (a, b) => a.name.localeCompare(b.name)
   )) {
@@ -48,6 +48,16 @@ function writeTypeDeclarations(input, output) {
   fs.writeFileSync(output, content, "utf8");
   return { files, changed: true, output };
 }
+function catalogSnapshot(dir) {
+  try {
+    return collectCatalogFiles(dir).map((file) => {
+      const stats = fs.statSync(file);
+      return `${path.relative(dir, file)}:${stats.mtimeMs}:${stats.size}`;
+    }).sort().join("|");
+  } catch {
+    return "";
+  }
+}
 function watchCatalogs(input, output, handlers = {}) {
   let timer;
   const regenerate = () => {
@@ -61,10 +71,31 @@ function watchCatalogs(input, output, handlers = {}) {
       }
     }, 50);
   };
-  const watcher = fs.watch(input, { recursive: true }, (_event, filename) => {
-    if (filename && !isCatalogFile(String(filename))) return;
-    regenerate();
-  });
+  if (handlers.unref) {
+    let signature = catalogSnapshot(input);
+    const poller = setInterval(() => {
+      const next = catalogSnapshot(input);
+      if (next !== signature) {
+        signature = next;
+        regenerate();
+      }
+    }, handlers.intervalMs ?? 300);
+    poller.unref?.();
+    return () => {
+      clearInterval(poller);
+      clearTimeout(timer);
+    };
+  }
+  let watcher;
+  try {
+    watcher = fs.watch(input, { recursive: true }, (_event, filename) => {
+      if (filename && !isCatalogFile(String(filename))) return;
+      regenerate();
+    });
+  } catch (error) {
+    handlers.onError?.(error);
+    return () => clearTimeout(timer);
+  }
   return () => {
     clearTimeout(timer);
     watcher.close();

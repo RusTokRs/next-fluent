@@ -33,6 +33,16 @@ Options:
 
 const DEFAULT_TYPEGEN_OUTPUT = 'next-fluent.d.ts';
 
+/** Runs a step, turning thrown errors into a readable CLI failure. */
+function runGuarded(step) {
+  try {
+    return step();
+  } catch (error) {
+    console.error(`Error: ${error.message}`);
+    process.exit(1);
+  }
+}
+
 /** Resolves `--input`, falling back to the conventional catalog directories. */
 function resolveInputPath(explicit) {
   if (explicit) {
@@ -105,7 +115,7 @@ if (command === 'typegen') {
     process.exit(1);
   }
 
-  const result = writeTypeDeclarations(inputPath, output);
+  const result = runGuarded(() => writeTypeDeclarations(inputPath, output));
   console.log(
     result.changed
       ? `[next-fluent] Generated types for ${result.files.length} catalog(s) at: ${path.relative(process.cwd(), result.output)}`
@@ -140,7 +150,7 @@ if (command === 'check') {
     process.exit(1);
   }
 
-  const catalogs = readCatalogsByLocale(inputPath);
+  const catalogs = runGuarded(() => readCatalogsByLocale(inputPath));
 
   const locales = Object.keys(catalogs);
   if (locales.length < 2) {
@@ -189,14 +199,14 @@ if (command === 'pseudo') {
       const relative = path.relative(inputPath, file).replace(/\.json$/i, '.ftl');
       const dest = path.join(resolvedOutput, relative);
       fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.writeFileSync(dest, pseudoLocalizeFtl(readCatalog(file)), 'utf8');
+      fs.writeFileSync(dest, runGuarded(() => pseudoLocalizeFtl(readCatalog(file))), 'utf8');
     }
     console.log(
       `[next-fluent] Generated pseudo-locales for ${files.length} file(s) at: ${outputArg}`
     );
   } else {
     fs.mkdirSync(path.dirname(resolvedOutput), { recursive: true });
-    fs.writeFileSync(resolvedOutput, pseudoLocalizeFtl(readCatalog(files[0])), 'utf8');
+    fs.writeFileSync(resolvedOutput, runGuarded(() => pseudoLocalizeFtl(readCatalog(files[0]))), 'utf8');
     console.log(`[next-fluent] Generated pseudo-locale at: ${outputArg}`);
   }
 }

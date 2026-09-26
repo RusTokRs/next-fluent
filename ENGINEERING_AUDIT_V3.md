@@ -243,6 +243,32 @@ Next.js рендерит layout и page независимо, поэтому `se
 
 ---
 
+## Второй проход: adversarial-проверка
+
+Повторная проверка «не доверяй своему же отчёту»: каждый публичный вход
+(middleware, JSON-каталоги, CLI, конфигурация роутинга) прогнан через набор
+враждебных входов — протокол-относительные пути, инъекция `Host`/cookie,
+`__proto__`, управляющие символы, мусорный `Accept-Language`. Найдено и закрыто
+пять дефектов, каждый закреплён тестом в `test/hardening.test.mjs`.
+
+| # | Дефект | Воспроизведение | Исправление |
+| --- | --- | --- | --- |
+| 1 | **Открытый редирект** | `localePrefix: 'never'` + `GET /ru//evil.example/x` → `307 Location: http://evil.example/x`. То же для `\` вместо `/` и для `as-needed` с префиксом дефолтной локали | `normalizeLeadingSlashes()` схлопывает ведущий набор `/` и `\` в каждом пути, производном от запроса; `requestUrl()` дополнительно сверяет `origin` цели и отказывается уходить на чужой |
+| 2 | **Traversal в префиксах** | `localePrefix: { prefixes: { ru: '/../evil' } }` принимался конфигурацией | `validateLocalePrefix` отклоняет сегменты `.` и `..` |
+| 3 | **Падение CLI** | файл `__proto__.ftl` → `TypeError: catalogs[locale].push is not a function` | карты локалей создаются с `Object.create(null)` |
+| 4 | **Потеря сообщения из JSON-каталога** | `{"e": "value\r\nmore"}` → у `e` внутри литерала оставался «сырой» CR, рантайм-парсер отбрасывал запись целиком (Fluent не поддерживает `\u{…}`) | `renderFluentPattern` нормализует CRLF/CR в LF — значение становится валидным многострочным паттерном |
+| 5 | **`next build` зависал** | плагин с `typegen` открывал рекурсивный `fs.watch`, который держит event loop даже после `unref()` (Linux, Node 22) | в production watcher не стартует, в dev — поллинг по unref-таймеру |
+
+Проверено и признано безопасным (тесты добавлены как постоянная защита):
+инъекция сообщений через значения JSON-каталога (`\n`, `    .attr =`, `#`,
+`-term` остаются текстом), `__proto__` в JSON/`checkCatalogs`/`pickMessages`
+(`Object.prototype` не трогается), недоверенный `x-forwarded-host` игнорируется,
+чужой `Host` при `trustedHosts` даёт 421, CRLF в значении cookie не приводит к
+инъекции заголовка, враждебный `setRequestLocale` отклоняется, `Accept-Language`
+из 20 000 записей разбирается без деградации.
+
+---
+
 ## Верификация
 
 | Проверка | Команда | Результат |
@@ -252,8 +278,11 @@ Next.js рендерит layout и page независимо, поэтому `se
 | Линт | `npm run lint` (ESLint 9 + react-hooks) | 0 ошибок, 0 предупреждений |
 | Типы | `npm run typecheck` (TS 6.0.3) | ok |
 | Типы потребителя | `npm run test:types` (позитивные + `@ts-expect-error` негативы, включая новые API) | ok |
-| Unit-тесты | `npm test` | **157/157** (было 136; +21) |
-| Production Next | `node scripts/test-next-integration.mjs` | сборка, пререндер 4 маршрутов, роутинг, RSC/client-паритет, hreflang, cookie, смена локали — ok |
+| Unit-тесты | `npm test` | **191/191** (136 → 157 → 191) |
+| Edge-совместимость | `npm run test:edge` | ok |
+| Бюджет размера | `npm run size` | ok (middleware 28.3 kB, edge-таргет) |
+| Полный прогон | `npm run check` | ok (ci + типы потребителя + production Next) |
+| Production Next | `node scripts/test-next-integration.mjs` | сборка, пререндер 9 страниц, роутинг, RSC/client-паритет, hreflang, cookie, смена локали — ok |
 
 Новые регрессионные тесты: `test/audit-v3.test.mjs` (21 тест: V3-01…V3-18), обновлены `review-regressions` (порядок атрибутов), `test/types/consumer.ts` (новые API), фикстура `test/fixtures/next-app` и `scripts/test-next-integration.mjs` (статический рендеринг, hreflang, cookie).
 

@@ -43,7 +43,9 @@ export function readCatalog(file: string): string {
 
 /** Groups catalogs by locale: `messages/en.ftl` or `messages/en/app.ftl` → `en`. */
 export function readCatalogsByLocale(dir: string): Record<string, string[]> {
-  const catalogs: Record<string, string[]> = {};
+  // Null prototype: a catalog named `__proto__.ftl` must be a normal key, not a
+  // prototype assignment (which crashed the check command outright).
+  const catalogs: Record<string, string[]> = Object.create(null);
   for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
     a.name.localeCompare(b.name)
   )) {
@@ -83,14 +85,46 @@ export function writeTypeDeclarations(input: string, output: string): TypegenRes
   return { files, changed: true, output };
 }
 
+export interface WatchCatalogsOptions {
+  onUpdate?: (result: TypegenResult) => void;
+  onError?: (error: Error) => void;
+  /**
+   * Poll on an unref'd timer instead of using `fs.watch`, so the watcher never
+   * keeps a process alive. Set by the Next.js plugin: `next build` must be able
+   * to exit even though the config evaluated a watcher.
+   */
+  unref?: boolean;
+  /** Polling interval in ms when `unref` is set. Defaults to 300. */
+  intervalMs?: number;
+}
+
+/** Signature of every catalog file: name, mtime and size. */
+function catalogSnapshot(dir: string): string {
+  try {
+    return collectCatalogFiles(dir)
+      .map((file) => {
+        const stats = fs.statSync(file);
+        return `${path.relative(dir, file)}:${stats.mtimeMs}:${stats.size}`;
+      })
+      .sort()
+      .join('|');
+  } catch {
+    return '';
+  }
+}
+
 /**
  * Regenerates on every catalog change (debounced). Returns a stop function.
  * Errors are reported through `onError` instead of killing the watcher.
+ *
+ * With `unref` the watcher polls on an unref'd timer instead of using
+ * `fs.watch`: a recursive `fs.watch` keeps the event loop alive even after
+ * `unref()` on Linux, which would stop `next build` from ever exiting.
  */
 export function watchCatalogs(
   input: string,
   output: string,
-  handlers: { onUpdate?: (result: TypegenResult) => void; onError?: (error: Error) => void } = {}
+  handlers: WatchCatalogsOptions = {}
 ): () => void {
   let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -106,10 +140,32 @@ export function watchCatalogs(
     }, 50);
   };
 
-  const watcher = fs.watch(input, { recursive: true }, (_event, filename) => {
-    if (filename && !isCatalogFile(String(filename))) return;
-    regenerate();
-  });
+  if (handlers.unref) {
+    let signature = catalogSnapshot(input);
+    const poller = setInterval(() => {
+      const next = catalogSnapshot(input);
+      if (next !== signature) {
+        signature = next;
+        regenerate();
+      }
+    }, handlers.intervalMs ?? 300);
+    poller.unref?.();
+    return () => {
+      clearInterval(poller);
+      clearTimeout(timer);
+    };
+  }
+
+  let watcher: fs.FSWatcher;
+  try {
+    watcher = fs.watch(input, { recursive: true }, (_event, filename) => {
+      if (filename && !isCatalogFile(String(filename))) return;
+      regenerate();
+    });
+  } catch (error) {
+    handlers.onError?.(error as Error);
+    return () => clearTimeout(timer);
+  }
 
   return () => {
     clearTimeout(timer);

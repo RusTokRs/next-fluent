@@ -19,6 +19,25 @@ export interface LocalePrefixMatch {
   rest: string;
 }
 
+/**
+ * Collapses a leading run of `/` and `\` into a single `/`.
+ *
+ * `new URL('//evil.example/x', origin)` is protocol-relative and resolves to
+ * another host, and browsers treat `\` as `/`, so a path such as
+ * `/ru//evil.example/x` must never reach a redirect target verbatim.
+ */
+/**
+ * A leading run of two or more path separators. Both `/` and `\` act as
+ * separators to the URL parser, so `//host` and `/\host` are protocol-relative
+ * and resolve to another origin.
+ */
+const LEADING_SLASH_RUN = /^[/\\]{2,}/;
+
+export function normalizeLeadingSlashes(path: string): string {
+  if (!LEADING_SLASH_RUN.test(path)) return path;
+  return `/${path.replace(LEADING_SLASH_RUN, '')}`;
+}
+
 function canonicalKey(locales: readonly string[], locale: string): string | undefined {
   return matchSupportedLocale(locale, locales);
 }
@@ -75,7 +94,7 @@ export function matchLocalePrefix(
   for (const { locale, prefix } of entries) {
     if (pathname === prefix) return { locale, rest: '/' };
     if (pathname.startsWith(`${prefix}/`)) {
-      return { locale, rest: pathname.slice(prefix.length) || '/' };
+      return { locale, rest: normalizeLeadingSlashes(pathname.slice(prefix.length)) || '/' };
     }
   }
   return null;

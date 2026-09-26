@@ -27,11 +27,24 @@ export interface TypegenResult {
  * are not woken up by no-op regenerations.
  */
 export declare function writeTypeDeclarations(input: string, output: string): TypegenResult;
+export interface WatchCatalogsOptions {
+    onUpdate?: (result: TypegenResult) => void;
+    onError?: (error: Error) => void;
+    /**
+     * Poll on an unref'd timer instead of using `fs.watch`, so the watcher never
+     * keeps a process alive. Set by the Next.js plugin: `next build` must be able
+     * to exit even though the config evaluated a watcher.
+     */
+    unref?: boolean;
+    /** Polling interval in ms when `unref` is set. Defaults to 300. */
+    intervalMs?: number;
+}
 /**
  * Regenerates on every catalog change (debounced). Returns a stop function.
  * Errors are reported through `onError` instead of killing the watcher.
+ *
+ * With `unref` the watcher polls on an unref'd timer instead of using
+ * `fs.watch`: a recursive `fs.watch` keeps the event loop alive even after
+ * `unref()` on Linux, which would stop `next build` from ever exiting.
  */
-export declare function watchCatalogs(input: string, output: string, handlers?: {
-    onUpdate?: (result: TypegenResult) => void;
-    onError?: (error: Error) => void;
-}): () => void;
+export declare function watchCatalogs(input: string, output: string, handlers?: WatchCatalogsOptions): () => void;

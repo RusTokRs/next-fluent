@@ -2,6 +2,7 @@ import type { I18nMiddlewareOptions, LocaleCookieConfig } from './types';
 import { matchSupportedLocale, resolveAcceptLanguage, validateI18nConfig } from './utils';
 import {
   matchLocalePrefix,
+  normalizeLeadingSlashes,
   normalizeLocalePrefix,
   prefixForLocale,
 } from './locale-prefix';
@@ -121,7 +122,15 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
       // could replay on the real origin.
       return new NextResponse(null, { status: 421 });
     }
-    const requestUrl = (path: string) => new URL(path, requestOrigin);
+    /**
+     * Builds a same-origin URL for a redirect/rewrite target. A path that would
+     * resolve elsewhere (protocol-relative `//host`, `\\host`, or an absolute
+     * URL smuggled through the pathname) is refused rather than followed.
+     */
+    const requestUrl = (path: string) => {
+      const url = new URL(normalizeLeadingSlashes(path), requestOrigin);
+      return url.origin === requestOrigin.origin ? url : new URL('/', requestOrigin);
+    };
     const domain = domains?.find((item) => item.domain.toLowerCase() === requestHost);
     const locales = domain ? domain.locales ?? [domain.defaultLocale] : allLocales;
     const defaultLocale = matchSupportedLocale(

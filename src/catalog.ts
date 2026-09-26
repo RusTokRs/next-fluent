@@ -48,7 +48,7 @@ function invalid(message: string, key = '<catalog>'): FluentError {
   });
 }
 
-/** Fluent string-literal escaping (`\` and `"` only). */
+/** Fluent string-literal escaping: only `\` and `"` are escapable. */
 function escapeLiteral(text: string): string {
   return text.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
@@ -88,7 +88,7 @@ function renderInline(text: string): string {
   if (tail !== '') {
     out += /[{}"\\]/.test(tail)
       ? tail.replace(/[{}"\\]/g, (ch) =>
-          ch === '"' || ch === '\\' ? `{ "${escapeLiteral(ch)}" }` : `{ "${ch}" }`
+          ch === '{' || ch === '}' ? `{ "${ch}" }` : `{ "${escapeLiteral(ch)}" }`
         )
       : `{ "${escapeLiteral(tail)}" }`;
   }
@@ -98,14 +98,18 @@ function renderInline(text: string): string {
 
 /** Renders a value as an inline pattern or an indented block pattern. */
 export function renderFluentPattern(text: string): string {
-  if (text === '') return '{ "" }';
-  if (text.includes('\n')) {
-    return `\n${text
+  // Fluent cannot represent a carriage return at all: a raw CR inside a string
+  // literal makes the runtime parser drop the entire message. Normalizing line
+  // breaks to LF turns the value into a valid multi-line pattern instead.
+  const normalized = text.replace(/\r\n?/g, '\n');
+  if (normalized === '') return '{ "" }';
+  if (normalized.includes('\n')) {
+    return `\n${normalized
       .split('\n')
       .map((line) => `    ${renderInline(line)}`)
       .join('\n')}`;
   }
-  return renderInline(text);
+  return renderInline(normalized);
 }
 
 function normalizeId(segment: string, path: string): string {

@@ -54,8 +54,38 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `LRUCache` rejects non-positive and non-integer sizes instead of silently
   behaving like a one-entry cache.
 
+### Security
+
+- **Open redirect closed.** With `localePrefix: 'never'` (and `'as-needed'` for
+  the default locale), a request such as `/ru//evil.example/x` used to produce
+  `307 Location: http://evil.example/x`: stripping the prefix left a
+  protocol-relative path, and `new URL('//host', origin)` resolves it to another
+  origin. `\` behaves as `/` for special schemes, so `/ru/\evil.example/x` worked
+  too. Paths derived from the request now collapse a leading run of `/` and `\`,
+  and every redirect/rewrite target is asserted to stay on the request origin.
+- **`localePrefix.prefixes` rejects traversal segments** (`/..`, `/../evil`,
+  `/./en`) at configuration time instead of emitting `Location` headers the
+  browser would resolve outside the intended tree.
+- **A catalog named `__proto__.ftl` no longer crashes `next-fluent check`**
+  (`TypeError: catalogs[locale].push is not a function`); locale maps are now
+  null-prototype, so the locale is reported like any other.
+
 ### Fixed
 
+- **JSON catalog values containing a carriage return no longer destroy the
+  message.** Fluent has no escape for CR (`\u{…}` is not part of the format) and
+  a raw CR inside a string literal makes the runtime parser drop the entry
+  entirely, so `{"e": "value\r\nmore"}` silently lost `e`. Line breaks are
+  normalized to LF and the value becomes a valid multi-line pattern.
+- **`next build` no longer hangs when `typegen` is enabled in the plugin.** A
+  recursive `fs.watch` keeps the event loop alive even after `unref()` on Linux;
+  the plugin now skips watching in production and otherwise polls on an unref'd
+  timer.
+- The CLI reports catalog and typegen failures as `Error: <message>` instead of a
+  raw stack trace.
+- `scripts/size-budget.mjs` and `scripts/check-edge-runtime.mjs` resolve the repo
+  root with `fileURLToPath`, so they work on Windows (a drive letter made
+  `new URL('..', import.meta.url).pathname` produce `/C:/…`).
 - `setRequestLocale()` called outside a React request scope now throws in
   development (and warns in production) instead of silently discarding the
   locale — the failure mode was a page prerendered in the default language.

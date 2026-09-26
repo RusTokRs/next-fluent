@@ -11,8 +11,9 @@
 import { build } from 'esbuild';
 import { gzipSync } from 'node:zlib';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const root = path.resolve(new URL('..', import.meta.url).pathname);
+const root = fileURLToPath(new URL('..', import.meta.url));
 
 /** Budgets in bytes. */
 const BUDGETS = [

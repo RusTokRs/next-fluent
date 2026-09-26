@@ -1,6 +1,7 @@
 import { matchSupportedLocale, resolveAcceptLanguage, validateI18nConfig } from "./utils.js";
 import {
   matchLocalePrefix,
+  normalizeLeadingSlashes,
   normalizeLocalePrefix,
   prefixForLocale
 } from "./locale-prefix.js";
@@ -72,7 +73,10 @@ function createI18nMiddleware(options) {
     if (trustedHosts && trustedHosts.length > 0 && !hostMatchesTrustedList(requestHost, trustedHosts)) {
       return new NextResponse(null, { status: 421 });
     }
-    const requestUrl = (path) => new URL(path, requestOrigin);
+    const requestUrl = (path) => {
+      const url = new URL(normalizeLeadingSlashes(path), requestOrigin);
+      return url.origin === requestOrigin.origin ? url : new URL("/", requestOrigin);
+    };
     const domain = domains?.find((item) => item.domain.toLowerCase() === requestHost);
     const locales = domain ? domain.locales ?? [domain.defaultLocale] : allLocales;
     const defaultLocale = matchSupportedLocale(

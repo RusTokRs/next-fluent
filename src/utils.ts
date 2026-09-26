@@ -223,6 +223,11 @@ export function validateLocalePrefix(
         `[next-fluent] "localePrefix.prefixes.${locale}" must be an absolute path without a trailing slash (received ${JSON.stringify(prefix)}).`
       );
     }
+    if (prefix.split('/').some((segment) => segment === '.' || segment === '..')) {
+      throw new Error(
+        `[next-fluent] "localePrefix.prefixes.${locale}" must not contain "." or ".." path segments (received ${JSON.stringify(prefix)}).`
+      );
+    }
     const identity = prefix.toLowerCase();
     if (seen.has(identity)) {
       throw new Error(`[next-fluent] Duplicate locale prefix: ${prefix}`);

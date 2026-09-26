@@ -67,8 +67,12 @@ export function createNextFluentPlugin(
             `[next-fluent] Generated message types at ${path.relative(process.cwd(), output)}`
           );
         }
-        if (options.typegen.watch !== false) {
+        // Watching only makes sense while developing, and the handle must never
+        // hold the process open — otherwise `next build` would not exit.
+        const isProduction = process.env.NODE_ENV === 'production';
+        if (options.typegen.watch !== false && !isProduction) {
           watchCatalogs(input, output, {
+            unref: true,
             onUpdate: () => console.log('[next-fluent] Regenerated message types.'),
             onError: (error) =>
               console.error(`[next-fluent] Type generation failed: ${error.message}`),

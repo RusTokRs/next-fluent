@@ -15,6 +15,7 @@ export interface LocalePrefixMatch {
     /** Pathname without the prefix, always `/`-leading. */
     rest: string;
 }
+export declare function normalizeLeadingSlashes(path: string): string;
 export declare function normalizeLocalePrefix(locales: readonly string[], localePrefix?: LocalePrefixConfig): NormalizedLocalePrefix;
 /** The URL prefix a locale is served under (`/ru`, or a configured custom one). */
 export declare function prefixForLocale(locale: string, config: NormalizedLocalePrefix): string;

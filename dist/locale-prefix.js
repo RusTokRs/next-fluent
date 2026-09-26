@@ -1,4 +1,9 @@
 import { matchSupportedLocale, validateLocalePrefix } from "./utils.js";
+const LEADING_SLASH_RUN = /^[/\\]{2,}/;
+function normalizeLeadingSlashes(path) {
+  if (!LEADING_SLASH_RUN.test(path)) return path;
+  return `/${path.replace(LEADING_SLASH_RUN, "")}`;
+}
 function canonicalKey(locales, locale) {
   return matchSupportedLocale(locale, locales);
 }
@@ -25,7 +30,7 @@ function matchLocalePrefix(pathname, locales, config) {
   for (const { locale, prefix } of entries) {
     if (pathname === prefix) return { locale, rest: "/" };
     if (pathname.startsWith(`${prefix}/`)) {
-      return { locale, rest: pathname.slice(prefix.length) || "/" };
+      return { locale, rest: normalizeLeadingSlashes(pathname.slice(prefix.length)) || "/" };
     }
   }
   return null;
@@ -33,6 +38,7 @@ function matchLocalePrefix(pathname, locales, config) {
 export {
   localeNeedsPrefix,
   matchLocalePrefix,
+  normalizeLeadingSlashes,
   normalizeLocalePrefix,
   prefixForLocale,
   validateLocalePrefix
