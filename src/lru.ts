@@ -1,6 +1,15 @@
 export class LRUCache<V> {
   private readonly map = new Map<string, V>();
-  constructor(private readonly maxSize: number) {}
+  private readonly maxSize: number;
+
+  constructor(maxSize: number) {
+    if (!Number.isInteger(maxSize) || maxSize <= 0) {
+      throw new Error(
+        `[next-fluent] LRUCache size must be a positive integer (received ${maxSize}).`
+      );
+    }
+    this.maxSize = maxSize;
+  }
 
   get(key: string): V | undefined {
     const val = this.map.get(key);

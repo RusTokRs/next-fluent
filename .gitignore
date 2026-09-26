@@ -9,3 +9,6 @@ coverage/
 .turbo/
 .next/
 deep-research-report.md
+
+# edge-runtime check scratch bundle
+.tmp-edge-*/

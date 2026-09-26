@@ -1,0 +1,109 @@
+/**
+ * Client bundle size budget.
+ *
+ * The client entry ships to every browser that renders a localized page, so its
+ * size is a product constraint rather than an implementation detail. This script
+ * bundles the public client entries the way an app bundler would (React and Next
+ * external, minified) and fails when a budget is exceeded.
+ *
+ * Run with `npm run size`; wired into `npm run ci`.
+ */
+import { build } from 'esbuild';
+import { gzipSync } from 'node:zlib';
+import path from 'node:path';
+
+const root = path.resolve(new URL('..', import.meta.url).pathname);
+
+/** Budgets in bytes. */
+const BUDGETS = [
+  {
+    name: 'next-fluent (root, client)',
+    entry: path.join(root, 'src/index-browser.ts'),
+    maxMinified: 47 * 1024,
+    maxGzip: 15.5 * 1024,
+  },
+  {
+    name: 'next-fluent/client',
+    entry: path.join(root, 'src/client.ts'),
+    maxMinified: 39 * 1024,
+    maxGzip: 13 * 1024,
+  },
+  {
+    // The library's own code, without the Fluent runtime it depends on.
+    name: 'next-fluent own code (bundle external)',
+    entry: path.join(root, 'src/index-browser.ts'),
+    extraExternal: ['@fluent/bundle'],
+    maxMinified: 35 * 1024,
+    maxGzip: 11.5 * 1024,
+  },
+  {
+    name: '@fluent/bundle (runtime dependency)',
+    entry: path.join(root, 'node_modules/@fluent/bundle/esm/index.js'),
+    maxMinified: 12.5 * 1024,
+    maxGzip: 4.5 * 1024,
+  },
+];
+
+const failures = [];
+const rows = [];
+
+for (const budget of BUDGETS) {
+  const result = await build({
+    entryPoints: [budget.entry],
+    bundle: true,
+    write: false,
+    minify: true,
+    format: 'esm',
+    platform: 'browser',
+    target: ['es2020'],
+    external: [
+      'react',
+      'react/jsx-runtime',
+      'next',
+      'next/link',
+      'next/link.js',
+      'next/navigation',
+      'next/router',
+      ...(budget.extraExternal ?? []),
+    ],
+  });
+
+  const code = result.outputFiles[0].text;
+  const minified = Buffer.byteLength(code, 'utf8');
+  const gzip = gzipSync(code).length;
+
+  rows.push({
+    name: budget.name,
+    minified,
+    gzip,
+    minBudget: budget.maxMinified,
+    gzipBudget: budget.maxGzip,
+  });
+
+  if (minified > budget.maxMinified) {
+    failures.push(
+      `${budget.name}: minified ${minified} B exceeds the ${budget.maxMinified} B budget`
+    );
+  }
+  if (gzip > budget.maxGzip) {
+    failures.push(`${budget.name}: gzip ${gzip} B exceeds the ${budget.maxGzip} B budget`);
+  }
+}
+
+const fmt = (bytes) => `${(bytes / 1024).toFixed(1)} kB`;
+const width = Math.max(...rows.map((row) => row.name.length));
+console.log(`${'entry'.padEnd(width)}  minified      gzip`);
+for (const row of rows) {
+  console.log(
+    `${row.name.padEnd(width)}  ${fmt(row.minified).padStart(9)} / ${fmt(row.minBudget).padStart(9)}  ` +
+      `${fmt(row.gzip).padStart(8)} / ${fmt(row.gzipBudget).padStart(8)}`
+  );
+}
+
+if (failures.length > 0) {
+  console.error('\n[next-fluent] Size budget exceeded:');
+  for (const failure of failures) console.error(`  ✗ ${failure}`);
+  process.exit(1);
+}
+
+console.log('\n[next-fluent] Size budgets respected.');

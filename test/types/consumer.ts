@@ -4,6 +4,9 @@ import { defineRouting } from '../../dist/routing.js';
 import { createNavigation } from '../../dist/navigation.js';
 import { hasLocale } from '../../dist/utils.js';
 import { FluentErrorCode } from '../../dist/errors.js';
+import { pickMessages } from '../../dist/pick-messages.js';
+import { jsonToFluent } from '../../dist/catalog.js';
+import { checkCatalogs } from '../../dist/check.js';
 import { createElement, type ReactNode } from 'react';
 
 const t = useTranslations('app');
@@ -79,6 +82,47 @@ export function ProviderConsumer({ children }: { children: ReactNode }) {
     formats: { number: { percent: { style: 'percent' } } },
     onError: (error) => void error.code,
     getMessageFallback: ({ key }) => key,
+    children,
+  });
+}
+
+// Roadmap APIs: per-locale prefixes, attributes, plain text, JSON catalogs and
+// catalog pruning must be typed like everything else.
+const prefixedRouting = defineRouting({
+  locales: ['en', 'en-US', 'ru'] as const,
+  defaultLocale: 'en',
+  localePrefix: { mode: 'as-needed', prefixes: { 'en-US': '/usa', ru: '/rus' } },
+});
+void prefixedRouting;
+// @ts-expect-error Unknown prefix mode
+defineRouting({ locales: ['en'] as const, defaultLocale: 'en', localePrefix: { mode: 'sometimes' } });
+
+function attributesConsumer() {
+  const attrs: Record<string, string> = t.attrs('hello', { name: 'Ada' });
+  const plain: string = t.plain('title');
+  void attrs;
+  void plain;
+  // @ts-expect-error Unknown message key
+  t.attrs('unknown');
+}
+void attributesConsumer;
+
+async function jsonCatalogConsumer() {
+  const translate = await getTranslations({ messages: { 'app-hello': 'Hi {name}' } });
+  translate('app-hello', { name: 'Ada' });
+  const picked: string = pickMessages('app-hello = Hi', 'app');
+  const json: string = jsonToFluent({ hello: 'Hi' });
+  const report = checkCatalogs({ en: 'a = 1', ru: 'a = 1' }, { referenceLocale: 'en' });
+  void report.issues;
+  void picked;
+  void json;
+}
+void jsonCatalogConsumer;
+
+export function JsonProviderConsumer({ children }: { children: ReactNode }) {
+  return createElement(FluentProvider, {
+    locale: 'en',
+    messages: { 'app-title': 'Title {version}' },
     children,
   });
 }

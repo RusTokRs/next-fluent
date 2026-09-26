@@ -5,7 +5,8 @@ import {
   redirect as nextRedirect,
   permanentRedirect as nextPermanentRedirect
 } from "next/navigation.js";
-import { matchSupportedLocale, validateI18nConfig } from "./utils.js";
+import { validateI18nConfig } from "./utils.js";
+import { matchLocalePrefix, normalizeLocalePrefix } from "./locale-prefix.js";
 import { validatePathnames, validateRouteEnvironment } from "./route-engine.js";
 import {
   resolveLocalizedPathname,
@@ -38,14 +39,13 @@ function createNavigation(config) {
     if (basePath && (rawPathname === basePath || rawPathname.startsWith(`${basePath}/`))) {
       rawPathname = rawPathname.slice(basePath.length) || "/";
     }
-    const segments = rawPathname.split("/").filter(Boolean);
-    if (segments.length === 0) return "/";
-    let cleanPathname = rawPathname;
-    const first = segments[0];
-    if (matchSupportedLocale(first, locales)) {
-      const rest = segments.slice(1).join("/");
-      cleanPathname = rest ? `/${rest}` : "/";
-    }
+    const prefixMatch = matchLocalePrefix(
+      rawPathname,
+      locales,
+      normalizeLocalePrefix(locales, config.localePrefix)
+    );
+    const cleanPathname = prefixMatch ? prefixMatch.rest : rawPathname;
+    if (cleanPathname === "/") return "/";
     const lookupKey = cleanPathname.length > 1 && cleanPathname.endsWith("/") ? cleanPathname.slice(0, -1) : cleanPathname;
     const internal = rewriteToInternalPath(lookupKey, currentLocale, locales, pathnames);
     return cleanPathname.endsWith("/") && internal !== "/" ? `${internal}/` : internal;

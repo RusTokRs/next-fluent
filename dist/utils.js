@@ -114,6 +114,49 @@ function resolveAcceptLanguage(header, locales, preferred) {
   return bestLocale;
 }
 const LOCALE_PREFIX_MODES = ["always", "as-needed", "never"];
+function validateLocalePrefix(locales, localePrefix) {
+  if (localePrefix === void 0 || typeof localePrefix === "string") {
+    if (localePrefix !== void 0 && !LOCALE_PREFIX_MODES.includes(localePrefix)) {
+      throw new Error(
+        `[next-fluent] "localePrefix" must be one of ${LOCALE_PREFIX_MODES.map((mode2) => `"${mode2}"`).join(", ")} (received "${localePrefix}").`
+      );
+    }
+    return;
+  }
+  const { mode, prefixes } = localePrefix;
+  if (mode !== void 0 && !LOCALE_PREFIX_MODES.includes(mode)) {
+    throw new Error(
+      `[next-fluent] "localePrefix.mode" must be one of ${LOCALE_PREFIX_MODES.map((m) => `"${m}"`).join(", ")} (received "${mode}").`
+    );
+  }
+  if (prefixes === void 0) return;
+  if (typeof prefixes !== "object" || prefixes === null) {
+    throw new Error('[next-fluent] "localePrefix.prefixes" must be an object.');
+  }
+  const seen = /* @__PURE__ */ new Set();
+  for (const [locale, prefix] of Object.entries(prefixes)) {
+    if (!matchSupportedLocale(locale, locales)) {
+      throw new Error(
+        `[next-fluent] "localePrefix.prefixes" contains an unsupported locale: "${locale}".`
+      );
+    }
+    if (typeof prefix !== "string" || !prefix.startsWith("/") || prefix.startsWith("//") || prefix.endsWith("/") || /[?#\\]/.test(prefix)) {
+      throw new Error(
+        `[next-fluent] "localePrefix.prefixes.${locale}" must be an absolute path without a trailing slash (received ${JSON.stringify(prefix)}).`
+      );
+    }
+    const identity = prefix.toLowerCase();
+    if (seen.has(identity)) {
+      throw new Error(`[next-fluent] Duplicate locale prefix: ${prefix}`);
+    }
+    for (const other of seen) {
+      if (other.startsWith(`${identity}/`) || identity.startsWith(`${other}/`)) {
+        throw new Error(`[next-fluent] Ambiguous locale prefixes: ${identity} and ${other}`);
+      }
+    }
+    seen.add(identity);
+  }
+}
 const VALID_COOKIE_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 const VALID_HEADER_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 function hasLocale(locales, locale) {
@@ -150,11 +193,7 @@ function validateI18nConfig(options) {
       `[next-fluent] "defaultLocale" ("${options.defaultLocale}") must be included in "locales" [${options.locales.join(", ")}].`
     );
   }
-  if (options.localePrefix !== void 0 && !LOCALE_PREFIX_MODES.includes(options.localePrefix)) {
-    throw new Error(
-      `[next-fluent] "localePrefix" must be one of ${LOCALE_PREFIX_MODES.map((mode) => `"${mode}"`).join(", ")} (received "${options.localePrefix}").`
-    );
-  }
+  validateLocalePrefix(options.locales, options.localePrefix);
   if (options.cookieName !== void 0 && !VALID_COOKIE_NAME.test(options.cookieName)) {
     throw new Error(
       `[next-fluent] "cookieName" must be a valid HTTP cookie name (received ${JSON.stringify(options.cookieName)}).`
@@ -202,5 +241,6 @@ export {
   normalizeLocaleTag,
   resolveAcceptLanguage,
   validateI18nConfig,
+  validateLocalePrefix,
   withKebabKey
 };

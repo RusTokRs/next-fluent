@@ -208,33 +208,38 @@ Next.js рендерит layout и page независимо, поэтому `se
 
 ---
 
-## Что осталось (рекомендации, по приоритету)
+## Дорожная карта: реализовано после аудита
 
-### 1. До релиза 1.0
+Пункты ниже были рекомендациями в первой версии отчёта. Сейчас это код с тестами.
 
-1. **`localePrefix: { mode, prefixes }`** — карта префиксов по локалям (`{'/en-US': …}`). Единственная крупная опция маршрутизации next-intl, которой нет. Требует изменений в `route-engine`, middleware и `resolveLocalizedPathname` одновременно — делать одним PR с матричными тестами.
-2. **`t.markup()`-эквивалент не нужен, но нужен явный контракт для атрибутов.** Сейчас `t.raw('msg')` для сообщения только с атрибутами возвращает массив строк без имён. Предложить `t.attrs('msg') → Record<string,string>` и депрекейтнуть массивную форму `raw()`.
-3. **JSON-каталоги.** `typegen` их понимает, рантайм — нет (`loadConfig` требует FTL-строку или массив строк). Либо поддержать, либо убрать из CLI, чтобы не обещать лишнего.
-4. **`getMessages()`/`useMessages()` возвращают FTL-текст**, а не объект сообщений, как у next-intl. Для «передать часть каталога в клиент» нужен `pick`-хелпер (`pickMessages(catalog, 'Checkout')`) — иначе в клиент уезжает весь каталог.
-5. **Edge runtime.** Middleware не проверен в edge-среде ни в одном проходе. Добавить CI-job с `edge-runtime` или хотя бы smoke-тест на `Web Fetch API`-моках без `next/server`.
+| # | Пункт | Статус | Где смотреть |
+| --- | --- | --- | --- |
+| 1 | `localePrefix: { mode, prefixes }` — карта префиксов по локалям | ✅ реализовано | `src/locale-prefix.ts`, `src/utils.ts` (валидация), `src/middleware.ts`, `src/nav-url.ts`, `src/navigation.ts`, `src/alternate-links.ts`; тесты `test/locale-prefixes.test.mjs` (5) |
+| 2 | Явный контракт для атрибутов вместо массивной формы `raw()` | ✅ реализовано | `t.attrs(key) → Record<string,string>` в порядке объявления (`src/bundle.ts`), `test/translator-extras.test.mjs` |
+| 3 | JSON-каталоги в рантайме | ✅ реализовано | `src/catalog.ts` (`jsonToFluent`, `toFluentSource`), подключено в `createFluentBundle`, `FluentProvider`, `loadConfig`, `getTranslations`, `forLocale`; CLI читает `.json` рядом с `.ftl` |
+| 4 | `pickMessages(catalog, namespace)` | ✅ реализовано | `src/pick-messages.ts` (`next-fluent/messages`), сохраняет используемые термы (`-brand`) |
+| 5 | Edge runtime | ✅ реализовано | `npm run test:edge` → `scripts/check-edge-runtime.mjs`: бандл middleware под нейтральную платформу, запрет `node:*`/`require`/`next/headers`/`react`, выполнение на реальном `Request` |
+| 6 | `typegen --watch` + хук в плагине | ✅ реализовано | `next-fluent typegen --watch`, `createNextFluentPlugin(path, { typegen })`, автодетект `--input` |
+| 7 | Бюджет бандла | ✅ реализовано | `npm run size` → `scripts/size-budget.mjs` (min + gzip, шаг в CI) |
+| 8 | `t.plain()` для не-HTML sink'ов | ✅ реализовано | `src/bundle.ts` + `stripRichText` в `src/rich.ts` |
+| 9 | `next-fluent check` | ✅ реализовано | `src/check.ts` (`checkCatalogs`, `formatCheckReport`) + команда `check` в CLI, ненулевой код возврата |
+| 10 | Документация | ✅ реализовано | `CHANGELOG.md`, `CONTRIBUTING.md`, `docs/MIGRATING_FROM_NEXT_INTL.md`, обновлённый README |
+| — | `setRequestLocale` вне request scope | ✅ исправлено | Явная ошибка в dev (`src/server.ts`), вместо тихой потери локали |
+| — | `pseudoLocalizeText` на вложенных `{}` | ✅ исправлено | Токенайзер с учётом глубины скобок и строковых литералов (`splitPreservedTokens`) |
+| — | `LRUCache` при `maxSize <= 0` | ✅ исправлено | Конструктор отклоняет неположительные и нецелые значения |
+| — | `@fluent/syntax` в клиентском entry | ✅ исправлено | `pseudo`/`typegen`/`pick-messages`/`check` вынесены из `index-browser`: клиентский entry 68.2 kB → **44.2 kB** min |
 
-### 2. Конкурентные преимущества, которые стоит добить
+Открытым остаётся только извлечение сообщений из исходников (аналог
+`next-intl extract`): у next-fluent источник истины — каталог, из которого типы
+генерируются, а не наоборот.
 
-6. **Извлечение сообщений из исходников** (`next-intl extract` + автогенерация `.d.ts` в dev-режиме через плагин). У next-fluent есть AST-typegen — добавить `next-fluent typegen --watch` и хук в `createNextFluentPlugin` (в dev), чтобы типы не устаревали.
-7. **Бенчмарк и бюджет бандла.** Клиент уже легче (`9.6 KB gzip` вместе с `@fluent/bundle` против ICU-стека next-intl), но это не закреплено: добавить `size-limit` на `client.js`/`navigation.js` и микро-бенчмарк `getTranslations`/`t()` на каталогах 100/1k/10k сообщений — именно это и есть «быстрее next-intl» в измеряемой форме.
-8. **`useIsolating: false` по умолчанию для не-HTML sink'ов недостижим — нужен `t.plain()`**, который режет изоляторы для конкретного вызова (`<title>`, OG-теги, JSON API), не меняя весь каталог.
-9. **Проверка ключей в CI**: `next-fluent check --input messages/` — сравнение каталогов между локалями (отсутствующие/лишние ключи) на основе уже готового `extractMessagesFromFtl`. Дёшево в реализации, сильно для команд.
-10. **Документация**: `CHANGELOG.md`, `CONTRIBUTING.md`, отдельные страницы под каждую фичу (сейчас весь README — один длинный файл), раздел «Migration from next-intl» с таблицей соответствий (таблица API уже добавлена в README).
+### Изменение публичного API
 
-### 3. Мелочи, найденные попутно и оставленные осознанно
-
-| Что | Решение |
-| --- | --- |
-| `getRequestStore()` вне request scope не мемоизируется (V3-12) | Поведение React `cache()`. В рантайме запроса работает; вне — `setRequestLocale` бессмысленна. Стоит бросать явную ошибку в dev вместо тихого no-op |
-| `t.raw()` эвристика `JSON.parse` для значений вида `[...]` | Задокументирована в README, но семантика «магическая». Кандидат на удаление вместе с п.2 |
-| `parseRichText` не поддерживает теги с атрибутами (`<a href="…">`) | Паритет с `t.rich` у next-intl (там тоже только имя тега). Не блокер |
-| `pseudoLocalizeText` regex `\{[^}]*\}` ломается на вложенных `{}` | Публичный хелпер; FTL-путь (`pseudoLocalizeFtl`) идёт через AST и не затронут |
-| `LRUCache` при `maxSize <= 0` держит один элемент | Дегенеративная конфигурация; не воспроизводится в коде |
+Инструменты сборки убраны из точек входа приложения и доступны по отдельным
+путям: `next-fluent/pseudo`, `next-fluent/typegen`, `next-fluent/catalog-io`,
+`next-fluent/messages`, `next-fluent/check`. `pseudoLocalizeFtl` и
+`generateTypeDeclarations` больше не экспортируются из корневого entry — они
+тянут за собой полный FTL-парсер, который браузеру не нужен.
 
 ---
 

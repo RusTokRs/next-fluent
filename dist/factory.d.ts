@@ -1,5 +1,6 @@
 import type { Formatter, GetTranslationsOptions, I18nConfig, Navigation, Translations } from './types';
 import { type NextMiddlewareRequestLike } from './middleware';
+import type { MessageSource } from './catalog';
 export interface I18nRuntime {
     readonly config: I18nConfig;
     readonly middleware: (request: NextMiddlewareRequestLike) => Promise<any>;
@@ -11,7 +12,7 @@ export interface I18nRuntime {
         fallbackLocales?: readonly string[];
         debug?: boolean;
     }) => Promise<Translations>;
-    readonly getMessages: (locale?: string) => Promise<string | readonly string[]>;
+    readonly getMessages: (locale?: string) => Promise<MessageSource>;
     readonly getFormatter: (options?: {
         locale?: string;
         timeZone?: string;

@@ -1,3 +1,4 @@
+import type { LocalePrefixConfig } from './types';
 export declare function canonicalizeLocale(locale?: string | null): string | undefined;
 export declare function normalizeLocaleTag(value?: string | null): string | undefined;
 export declare function localeLookupCandidates(canonical: string): string[];
@@ -6,11 +7,13 @@ export declare function resolveAcceptLanguage(header: string | null | undefined,
 export interface BaseI18nConfig {
     locales: readonly string[];
     defaultLocale: string;
-    localePrefix?: string;
+    localePrefix?: LocalePrefixConfig;
     cookieName?: string;
     headerName?: string;
     loadMessages?: unknown;
 }
+/** Throws on malformed `localePrefix` maps so misconfiguration fails at boot. */
+export declare function validateLocalePrefix(locales: readonly string[], localePrefix?: LocalePrefixConfig): void;
 /** Type guard for "is this value one of the configured locales". */
 export declare function hasLocale(locales: readonly string[], locale: string | null | undefined): locale is string;
 export declare function validateI18nConfig(options: BaseI18nConfig): void;

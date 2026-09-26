@@ -12,7 +12,8 @@ import type {
   NavigationConfig,
   UrlObject,
 } from './types';
-import { matchSupportedLocale, validateI18nConfig } from './utils';
+import { validateI18nConfig } from './utils';
+import { matchLocalePrefix, normalizeLocalePrefix } from './locale-prefix';
 import { validatePathnames, validateRouteEnvironment } from './route-engine';
 import {
   resolveLocalizedPathname,
@@ -69,15 +70,13 @@ export function createNavigation<Locales extends readonly string[] = readonly st
       rawPathname = rawPathname.slice(basePath.length) || '/';
     }
 
-    const segments = rawPathname.split('/').filter(Boolean);
-    if (segments.length === 0) return '/';
-
-    let cleanPathname = rawPathname;
-    const first = segments[0];
-    if (matchSupportedLocale(first, locales)) {
-      const rest = segments.slice(1).join('/');
-      cleanPathname = rest ? `/${rest}` : '/';
-    }
+    const prefixMatch = matchLocalePrefix(
+      rawPathname,
+      locales,
+      normalizeLocalePrefix(locales, config.localePrefix)
+    );
+    const cleanPathname = prefixMatch ? prefixMatch.rest : rawPathname;
+    if (cleanPathname === '/') return '/';
 
     const lookupKey =
       cleanPathname.length > 1 && cleanPathname.endsWith('/')

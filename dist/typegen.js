@@ -1,4 +1,5 @@
 import { parse, Visitor } from "@fluent/syntax";
+import { toFluentSource } from "./catalog.js";
 class VariableExtractor extends Visitor {
   variables = /* @__PURE__ */ new Set();
   visitVariableReference(node) {
@@ -9,7 +10,10 @@ class VariableExtractor extends Visitor {
   }
 }
 function extractMessagesFromFtl(ftlContent) {
-  const resource = parse(ftlContent, { withSpans: false });
+  const source = toFluentSource(ftlContent);
+  const resource = parse(typeof source === "string" ? source : source.join("\n"), {
+    withSpans: false
+  });
   const messages = [];
   for (const entry of resource.body) {
     if (entry.type === "Message") {

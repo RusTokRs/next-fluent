@@ -16,6 +16,7 @@ import type {
   Translations,
 } from './types';
 import { createFluentBundle, createTranslator } from './bundle';
+import { isJsonCatalog, jsonToFluent, type MessageSource } from './catalog';
 import { createFormatter } from './formatter';
 import { computeSourceHash } from './cache';
 import { resolveLocalizedPathname, switchLocaleHref } from './nav-url';
@@ -27,7 +28,7 @@ export { createFormatter };
 interface FluentContextValue {
   locale: string;
   bundle: FluentBundle | null;
-  messages?: string | readonly string[];
+  messages?: MessageSource;
   fallbackLocale?: string;
   fallbackBundle: FluentBundle | null;
   fallbackBundles?: readonly FluentBundle[];
@@ -54,9 +55,10 @@ const STATIC_NOW = new Date(0);
 
 export interface FluentProviderProps {
   locale: string;
-  messages: string | readonly string[] | FluentBundle;
+  /** FTL text, an array of FTL sources, a JSON catalog, or a `FluentBundle`. */
+  messages: MessageSource | FluentBundle;
   fallbackLocale?: string;
-  fallbackMessages?: string | readonly string[] | FluentBundle;
+  fallbackMessages?: MessageSource | FluentBundle;
   fallbackBundles?: FluentBundle | readonly FluentBundle[];
   timeZone?: string;
   now?: Date;
@@ -94,43 +96,56 @@ export function FluentProvider({
   getMessageFallback,
   children,
 }: FluentProviderProps) {
+  // JSON catalogs are converted once per payload change; everything else passes
+  // through untouched (including pre-built bundles).
+  const normalizedMessages = useMemo(
+    () => (isJsonCatalog(messages) ? jsonToFluent(messages) : messages),
+    [messages]
+  );
+  const normalizedFallbackMessages = useMemo(
+    () => (isJsonCatalog(fallbackMessages) ? jsonToFluent(fallbackMessages) : fallbackMessages),
+    [fallbackMessages]
+  );
+
+  // The hash is derived from `normalizedMessages`; the raw prop is only checked
+  // for its shape, which cannot change without the normalized value changing.
   const messagesKey = useMemo(
     () =>
-      typeof messages === 'string' || Array.isArray(messages)
-        ? computeSourceHash(messages)
+      typeof normalizedMessages === 'string' || Array.isArray(normalizedMessages)
+        ? computeSourceHash(normalizedMessages as string | readonly string[])
         : null,
-    [messages]
+    [normalizedMessages]
   );
 
   const fallbackMessagesKey = useMemo(
     () =>
-      typeof fallbackMessages === 'string' || Array.isArray(fallbackMessages)
-        ? computeSourceHash(fallbackMessages)
+      typeof normalizedFallbackMessages === 'string' || Array.isArray(normalizedFallbackMessages)
+        ? computeSourceHash(normalizedFallbackMessages as string | readonly string[])
         : null,
-    [fallbackMessages]
+    [normalizedFallbackMessages]
   );
 
   // Bundles are keyed by a content hash, so an equal-but-new string reference
   // does not rebuild the catalog on every render.
-  const bundleIdentity = messagesKey ?? messages;
-  const fallbackBundleIdentity = fallbackMessagesKey ?? fallbackMessages;
+  const bundleIdentity = messagesKey ?? normalizedMessages;
+  const fallbackBundleIdentity = fallbackMessagesKey ?? normalizedFallbackMessages;
 
   const bundle = useMemo<FluentBundle | null>(() => {
-    if (!messages) return null;
-    if (typeof messages === 'string' || Array.isArray(messages)) {
-      return createFluentBundle(locale, messages, { functions, useIsolating });
+    if (!normalizedMessages) return null;
+    if (typeof normalizedMessages === 'string' || Array.isArray(normalizedMessages)) {
+      return createFluentBundle(locale, normalizedMessages as string | readonly string[], { functions, useIsolating });
     }
-    return messages as FluentBundle;
+    return normalizedMessages as FluentBundle;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [locale, bundleIdentity, functions, useIsolating]);
 
   const fallbackBundle = useMemo<FluentBundle | null>(() => {
-    if (!fallbackMessages) return null;
+    if (!normalizedFallbackMessages) return null;
     const fLocale = fallbackLocale || 'en';
-    if (typeof fallbackMessages === 'string' || Array.isArray(fallbackMessages)) {
-      return createFluentBundle(fLocale, fallbackMessages, { functions, useIsolating });
+    if (typeof normalizedFallbackMessages === 'string' || Array.isArray(normalizedFallbackMessages)) {
+      return createFluentBundle(fLocale, normalizedFallbackMessages as string | readonly string[], { functions, useIsolating });
     }
-    return fallbackMessages as FluentBundle;
+    return normalizedFallbackMessages as FluentBundle;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fallbackLocale, fallbackBundleIdentity, functions, useIsolating]);
 
@@ -148,7 +163,10 @@ export function FluentProvider({
     () => ({
       locale,
       bundle,
-      messages: typeof messages === 'string' || Array.isArray(messages) ? messages : undefined,
+      messages:
+        typeof normalizedMessages === 'string' || Array.isArray(normalizedMessages)
+          ? (normalizedMessages as string | readonly string[])
+          : undefined,
       fallbackLocale,
       fallbackBundle,
       fallbackBundles: resolvedFallbackBundles,
@@ -165,7 +183,7 @@ export function FluentProvider({
     [
       locale,
       bundle,
-      messages,
+      normalizedMessages,
       fallbackLocale,
       fallbackBundle,
       resolvedFallbackBundles,
@@ -202,7 +220,7 @@ export function useTimeZone(): string {
 }
 
 /** Raw catalog (FTL text) provided to the current `FluentProvider`. */
-export function useMessages(): string | readonly string[] | undefined {
+export function useMessages(): MessageSource | undefined {
   const context = useContext(FluentContext);
   return context.messages;
 }

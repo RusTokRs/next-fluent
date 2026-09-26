@@ -1,4 +1,4 @@
-import type { LocaleCookieConfig, LocalePrefixMode } from './types';
+import type { LocaleCookieConfig, LocalePrefixConfig } from './types';
 import { validateI18nConfig } from './utils';
 import { validatePathnames, validateRouteEnvironment } from './route-engine';
 
@@ -16,7 +16,7 @@ export type Pathnames<Locales extends readonly string[] = readonly string[]> = R
 export interface RoutingConfig<Locales extends readonly string[] = readonly string[]> {
   locales: Locales;
   defaultLocale: Locales[number];
-  localePrefix?: LocalePrefixMode;
+  localePrefix?: LocalePrefixConfig;
   pathnames?: Pathnames<Locales>;
   domains?: readonly DomainConfig[];
   cookieName?: string;

@@ -55,6 +55,12 @@ jobs:
       - name: Run test suite
         run: npm test
 
+      - name: Verify edge runtime compatibility
+        run: npm run test:edge
+
+      - name: Verify client bundle size budgets
+        run: npm run size
+
       - name: Install Chromium for browser integration
         if: matrix.os == 'ubuntu-latest' && matrix.profile.node == '22.x' && matrix.profile.next == '16'
         run: npx --yes --package @playwright/cli@0.1.21 playwright-cli install-browser chromium

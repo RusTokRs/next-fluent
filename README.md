@@ -57,7 +57,9 @@ import { defineRouting } from 'next-fluent/routing';
 export const routing = defineRouting({
   locales: ['en', 'ru', 'de'] as const,
   defaultLocale: 'en',
-  localePrefix: 'as-needed', // 'always' | 'as-needed' | 'never'
+  // 'always' | 'as-needed' | 'never', or an object with per-locale prefixes:
+  // localePrefix: { mode: 'as-needed', prefixes: { 'en-US': '/usa', ru: '/rus' } }
+  localePrefix: 'as-needed',
   pathnames: {
     '/about': {
       en: '/about-us',
@@ -226,8 +228,48 @@ const content = t.rich('welcome-banner', {
 
 - `t(key, args?)` returns a **string**. If the formatted result still contains a React-element placeholder (e.g. `defaultTranslationValues` injected JSX), it throws and directs you to `t.rich()` / `<FormattedMessage>`. Fluent formatting errors fall back to `namespace.key`.
 - `t.rich(key, args?)` and `<FormattedMessage />` are the only APIs that produce React nodes.
+- `t.attrs(key, args?)` returns **every attribute of a message in declaration order** — `{ label, 'aria-label', title }` — for spreading onto an element. Bidi isolation marks are stripped, since attribute values belong in HTML attributes.
+- `t.plain(key, args?)` returns the message as **plain text**: rich-text markers (`<link>…</link>`, React element tokens) are removed instead of throwing. Use it for `aria-label`, `title`, `alt` and `<meta>` content that shares a message with the visible UI.
 - `raw('title')` → `string`, `raw('title', { $name: 'Ada' })` → interpolated `string`, `raw('list')` → ordered `string[]` (both Fluent `[]`-lists and JSON arrays). Missing messages fall back to the key; formatting errors are ignored and the literal `{$placeholders}` remain.
 - Message arguments accept strings, numbers, booleans (`true` → `"true"`, Fluent has no boolean type), `Date`, `bigint` and `FluentType` values. `null`/`undefined` and non-Fluent objects are reported through `onError` as `INVALID_ARGUMENT` instead of being silently dropped.
+
+### JSON catalogs
+
+Fluent catalogs are `.ftl` text, but every place that accepts FTL text also
+accepts a plain object — `FluentProvider messages`, `setRequestConfig({ loadMessages })`,
+`getTranslations({ messages })` and the CLI (`.json` files next to `.ftl`):
+
+```tsx
+<FluentProvider locale={locale} messages={{ 'nav-home': 'Home', greeting: 'Hi {name}!' }}>
+```
+
+Mapping rules:
+
+| JSON | FTL |
+| --- | --- |
+| `{ "nav": { "home": "Home" } }` | `nav-home = Home` (addressable as `t('nav.home')` or `t('nav-home')`) |
+| `{ "hello": "Hi {name}!" }` / `{ $name }` | `hello = Hi { $name }!` |
+| `{ "btn": { "": "OK", "aria-label": "Confirm" } }` | `btn = OK` + `.aria-label = Confirm` |
+| numbers / booleans | stringified |
+| arrays, `null` | rejected with an actionable error (Fluent uses selectors, not lists) |
+
+Braces, quotes, backslashes, padding and newlines are escaped so a converted
+catalog round-trips byte for byte.
+
+### Sending a client component only what it renders
+
+```tsx
+import { pickMessages } from 'next-fluent/messages';
+
+<FluentProvider
+  locale={locale}
+  messages={pickMessages(await getMessages(locale), 'checkout')}
+/>
+```
+
+`pickMessages` prunes the catalog to one namespace — plus the shared Fluent
+terms (`-brand`) that namespace references — so the serialized payload scales
+with the page instead of the app.
 
 ### Error handling (`onError` / `getMessageFallback`)
 
@@ -302,7 +344,21 @@ The cookie is only written for `Sec-Fetch-Dest: document` requests and only when
 Generate full TypeScript definitions from your `.ftl` catalogs using AST-based typegen:
 
 ```bash
-npx next-fluent typegen --input messages/en.ftl --output src/types/i18n.d.ts
+# --input defaults to ./messages, ./locales, ./src/messages or ./src/locales
+npx next-fluent typegen --output src/types/i18n.d.ts --watch
+```
+
+Or let the Next.js plugin regenerate during `next dev`:
+
+```js
+// next.config.mjs
+import createNextFluentPlugin from 'next-fluent/plugin';
+
+const withNextFluent = createNextFluentPlugin('./src/i18n/request.ts', {
+  typegen: { input: './messages', output: './src/types/i18n.d.ts' },
+});
+
+export default withNextFluent({});
 ```
 
 The generator produces a declaration merging interface:
@@ -316,6 +372,23 @@ declare global {
 
 Once declared, `useTranslations('namespace')` and `getTranslations('namespace')` **automatically autocomplete message keys and validate arguments** across your entire project!
 
+### Catalog consistency in CI
+
+```bash
+npx next-fluent check --input messages --reference en
+# [next-fluent] Checked 3 catalog(s) against "en" (412 keys).
+#   ru:
+#     [missing] "checkout-total" is missing.
+#   de:
+#     [duplicate] "nav-home" is defined more than once; Fluent keeps the first definition.
+# [next-fluent] 2 issue(s) found.
+```
+
+Missing, extra, duplicated and unparsable keys are reported per locale and the
+command exits non-zero, so translation gaps fail the build instead of shipping a
+fallback string. The same engine is available programmatically as
+`checkCatalogs()` from `next-fluent/check`.
+
 ---
 
 ## API surface (next-intl parity map)
@@ -324,7 +397,8 @@ Once declared, `useTranslations('namespace')` and `getTranslations('namespace')`
 | --- | --- | --- |
 | `useTranslations` / `getTranslations` | ✅ same names | Fluent `.ftl` instead of ICU JSON |
 | `t.rich()` / `FormattedMessage` | ✅ same names | Fluent markup + React element variables |
-| `t.markup()` | ❌ | Fluent has no ICU-HTML duality; use `t.rich()` |
+| `t.markup()` | `t.rich()` | Fluent has no ICU-HTML duality |
+| — | `t.attrs()` / `t.plain()` | Fluent attributes; markup-free text for HTML attributes |
 | `useLocale` / `getLocale` | ✅ | |
 | `useMessages` / `getMessages` | ✅ | returns the raw FTL catalog |
 | `useFormatter` / `getFormatter` | ✅ | plus named `formats` presets |
@@ -337,10 +411,14 @@ Once declared, `useTranslations('namespace')` and `getTranslations('namespace')`
 | `createNextIntlPlugin` | `createNextFluentPlugin` | Webpack + Turbopack config alias |
 | `defineRouting` (`pathnames`, `domains`, `basePath`, `localePrefix`) | ✅ | |
 | `localeCookie`, `localeDetection`, `alternateLinks` | ✅ | |
-| `localePrefix.prefixes` (per-locale prefix map) | ❌ | on the roadmap |
+| `localePrefix.prefixes` (per-locale prefix map) | ✅ | validated: absolute, unique, non-shadowing |
 | `createNavigation` (`Link`, `redirect`, `permanentRedirect`, `useRouter`, `usePathname`, `getPathname`) | ✅ | |
-| Type-safe messages | ✅ `next-fluent typegen` | AST-based, declaration merging |
-| Message extraction from source | ❌ | `next-intl extract` has no counterpart yet |
+| Type-safe messages | ✅ `next-fluent typegen` | AST-based, declaration merging, `--watch` |
+| `createMessagesDeclaration` | ✅ plugin `typegen` option | regenerates during `next dev` |
+| JSON catalogs | ✅ | accepted wherever FTL text is, plus in the CLI |
+| — | `pickMessages()` | prune a catalog to one namespace for client payloads |
+| — | `next-fluent check` | cross-locale missing/extra/duplicate/parse report |
+| Message extraction from source | ❌ | `next-intl extract` has no counterpart |
 
 ## License
 

@@ -1,13 +1,14 @@
 import React from 'react';
 import type { FluentBundle, FluentFunction } from '@fluent/bundle';
 import type { DefaultKey, FormattedMessageProps, Formatter, Formats, GetMessageFallbackFn, NamespaceArgs, NamespaceKeys, OnErrorFn, RichTranslationValues, Translations } from './types';
+import { type MessageSource } from './catalog';
 import { createFormatter } from './formatter';
 export type { FormattedMessageProps };
 export { createFormatter };
 interface FluentContextValue {
     locale: string;
     bundle: FluentBundle | null;
-    messages?: string | readonly string[];
+    messages?: MessageSource;
     fallbackLocale?: string;
     fallbackBundle: FluentBundle | null;
     fallbackBundles?: readonly FluentBundle[];
@@ -23,9 +24,10 @@ interface FluentContextValue {
 }
 export interface FluentProviderProps {
     locale: string;
-    messages: string | readonly string[] | FluentBundle;
+    /** FTL text, an array of FTL sources, a JSON catalog, or a `FluentBundle`. */
+    messages: MessageSource | FluentBundle;
     fallbackLocale?: string;
-    fallbackMessages?: string | readonly string[] | FluentBundle;
+    fallbackMessages?: MessageSource | FluentBundle;
     fallbackBundles?: FluentBundle | readonly FluentBundle[];
     timeZone?: string;
     now?: Date;
@@ -48,7 +50,7 @@ export declare function FluentProvider({ locale, messages, fallbackLocale, fallb
 export declare function useLocale(): string;
 export declare function useTimeZone(): string;
 /** Raw catalog (FTL text) provided to the current `FluentProvider`. */
-export declare function useMessages(): string | readonly string[] | undefined;
+export declare function useMessages(): MessageSource | undefined;
 export declare function useFormatter(): Formatter;
 export declare function useNow(options?: {
     updateInterval?: number;

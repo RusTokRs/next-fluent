@@ -1,6 +1,12 @@
 import type { NavigationConfig, Pathnames, UrlObject } from './types';
 import { matchSupportedLocale } from './utils';
 import { localizePath, rewriteLocalizedPath } from './route-engine';
+import {
+  localeNeedsPrefix,
+  matchLocalePrefix,
+  normalizeLocalePrefix,
+  prefixForLocale,
+} from './locale-prefix';
 
 /**
  * Pure URL helpers shared by the navigation entry (server- and client-safe)
@@ -105,7 +111,9 @@ export function resolveLocalizedPathname(
   config: NavigationConfig
 ): string {
   const { href, locale: explicitLocale } = options;
-  const { locales, defaultLocale, localePrefix = 'always', pathnames, domains, basePath = '' } = config;
+  const { locales, defaultLocale, pathnames, domains, basePath = '' } = config;
+  const prefixConfig = normalizeLocalePrefix(locales, config.localePrefix);
+  const localePrefix = prefixConfig.mode;
 
   let rawPathname = '';
   let search = '';
@@ -149,17 +157,13 @@ export function resolveLocalizedPathname(
     rawPathname = rawPathname.slice(basePath.length) || '/';
   }
 
-  // Strip existing supported locale prefix if present
-  const segments = rawPathname.split('/').filter(Boolean);
+  // Strip an existing locale prefix (including custom per-locale prefixes).
   let cleanPathname = rawPathname;
   let sourceLocale: string | undefined;
-  if (segments.length > 0) {
-    const first = segments[0];
-    sourceLocale = matchSupportedLocale(first, locales);
-    if (sourceLocale) {
-      const rest = segments.slice(1).join('/');
-      cleanPathname = rest ? `/${rest}` : '/';
-    }
+  const prefixMatch = matchLocalePrefix(rawPathname, locales, prefixConfig);
+  if (prefixMatch) {
+    sourceLocale = prefixMatch.locale;
+    cleanPathname = prefixMatch.rest;
   }
 
   const hasTrailingSlash =
@@ -195,17 +199,9 @@ export function resolveLocalizedPathname(
     mappedPathname = `${mappedPathname}/`;
   }
 
-  let prefix = '';
-  if (localePrefix === 'never') {
-    prefix = '';
-  } else if (localePrefix === 'as-needed') {
-    if (resolvedLocale !== resolvedDefaultLocale) {
-      prefix = `/${resolvedLocale}`;
-    }
-  } else {
-    // 'always'
-    prefix = `/${resolvedLocale}`;
-  }
+  const prefix = localeNeedsPrefix(resolvedLocale, resolvedDefaultLocale, localePrefix)
+    ? prefixForLocale(resolvedLocale, prefixConfig)
+    : '';
 
   const finalPath = prefix
     ? mappedPathname === '/'
@@ -239,7 +235,9 @@ export function switchLocaleHref(
   explicitLocale: string | undefined,
   config: NavigationConfig
 ): string {
-  const { locales, localePrefix = 'always', basePath = '' } = config;
+  const { locales, basePath = '' } = config;
+  const prefixConfig = normalizeLocalePrefix(locales, config.localePrefix);
+  const localePrefix = prefixConfig.mode;
   if (!explicitLocale || isExternalUrl(target) || target.startsWith('#')) {
     return target;
   }
@@ -260,13 +258,12 @@ export function switchLocaleHref(
     // A prefixed canonical href (switch to a non-default locale) is already
     // unambiguous — return it as is. Only prefix-less canonical hrefs need the
     // temporary signal URL so that middleware can update the locale cookie.
-    const firstSegment = route.split('/').filter(Boolean)[0];
-    if (firstSegment && matchSupportedLocale(firstSegment, locales)) {
+    if (matchLocalePrefix(route, locales, prefixConfig)) {
       return target;
     }
   }
 
-  return `${basePath}/${locale}${route === '/' ? '' : route}${url.search}${url.hash}`;
+  return `${basePath}${prefixForLocale(locale, prefixConfig)}${route === '/' ? '' : route}${url.search}${url.hash}`;
 }
 
 /**

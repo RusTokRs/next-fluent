@@ -1,9 +1,14 @@
 import { matchSupportedLocale } from "./utils.js";
 import { findInternalPath, externalTemplate, renderTemplate } from "./route-engine.js";
+import {
+  localeNeedsPrefix,
+  normalizeLocalePrefix,
+  prefixForLocale
+} from "./locale-prefix.js";
 function withLocalePrefix(path, locale, defaultLocale, localePrefix) {
-  if (localePrefix === "never") return path;
-  if (localePrefix === "as-needed" && locale === defaultLocale) return path;
-  return path === "/" ? `/${locale}` : `/${locale}${path}`;
+  if (!localeNeedsPrefix(locale, defaultLocale, localePrefix.mode)) return path;
+  const prefix = prefixForLocale(locale, localePrefix);
+  return path === "/" ? prefix : `${prefix}${path}`;
 }
 function buildAlternateLinksHeader(options) {
   const {
@@ -17,7 +22,8 @@ function buildAlternateLinksHeader(options) {
     search = "",
     origin
   } = options;
-  if (localePrefix === "never" || locales.length < 2) return void 0;
+  const prefixConfig = normalizeLocalePrefix(locales, localePrefix);
+  if (prefixConfig.mode === "never" || locales.length < 2) return void 0;
   let match = null;
   if (pathnames) {
     for (const locale of locales) {
@@ -39,15 +45,15 @@ function buildAlternateLinksHeader(options) {
   for (const locale of locales) {
     const external = template ? externalTemplate(template, locale, pathnames) : pathname;
     const rendered = template ? renderTemplate(external, params) : pathname;
-    const path = withLocalePrefix(rendered, locale, defaultLocale, localePrefix);
+    const path = withLocalePrefix(rendered, locale, defaultLocale, prefixConfig);
     const domain = domains?.find(
       (entry) => (entry.locales ?? [entry.defaultLocale]).some(
         (item) => matchSupportedLocale(locale, [item])
       )
     );
     if (domain) {
-      const needsPrefix = !(domain.defaultLocale === locale && localePrefix !== "always");
-      const domainPath = needsPrefix ? withLocalePrefix(rendered, locale, domain.defaultLocale, "always") : rendered;
+      const needsPrefix = !(domain.defaultLocale === locale && prefixConfig.mode !== "always");
+      const domainPath = needsPrefix ? `${prefixForLocale(locale, prefixConfig)}${rendered === "/" ? "" : rendered}` : rendered;
       push(`https://${domain.domain}${basePathname(domainPath)}${search}`, locale);
       continue;
     }
@@ -61,7 +67,7 @@ function buildAlternateLinksHeader(options) {
       template ? renderTemplate(externalTemplate(template, defaultLocale, pathnames), params) : pathname,
       defaultLocale,
       defaultLocale,
-      localePrefix
+      prefixConfig
     );
     const url = new URL(base);
     url.pathname = basePathname(defaultPath);

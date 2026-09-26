@@ -1,0 +1,68 @@
+# Changelog
+
+All notable changes to `next-fluent` are documented here.
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## Unreleased
+
+### Added
+
+- **Per-locale URL prefixes.** `localePrefix` now accepts the next-intl shape
+  `{ mode, prefixes: { 'en-US': '/usa' } }` in addition to the bare
+  `'always' | 'as-needed' | 'never'` mode. Prefixes are validated at
+  configuration time (absolute path, no trailing slash, unique, not shadowing
+  another prefix) and are honoured by the middleware, `getPathname`, `Link`,
+  `redirect`, `usePathname` and the `Link` alternates header.
+- **`t.attrs(key)`** returns every attribute of a message in declaration order,
+  so `<input {...spreadAttrs(t.attrs('login'))} />` no longer needs one lookup
+  per attribute. Bidi isolation marks are stripped because attribute values end
+  up in HTML attributes.
+- **`t.plain(key)`** formats a message to plain text, dropping rich-text markers
+  instead of throwing (`t()`) or returning React nodes (`t.rich()`) — for
+  `aria-label`, `title`, `alt` and `<meta>` content.
+- **JSON catalogs.** Everywhere FTL text is accepted — `FluentProvider
+  messages`, `setRequestConfig({ loadMessages })`, `getTranslations({ messages })`,
+  `createFluentBundle` and the CLI — a plain object now works too. Nested keys
+  become namespaced ids, `{count}` / `{$count}` become Fluent variables, and a
+  `""` key defines the message value while its siblings become attributes.
+- **`pickMessages(catalog, namespace)`** (`next-fluent/messages`) prunes a
+  catalog to one namespace — including the terms that namespace references — so
+  Client Components receive only the strings they render.
+- **`checkCatalogs()`** (`next-fluent/check`) and the **`next-fluent check`** CLI
+  compare every locale against a reference catalog and report missing, extra,
+  duplicated and unparsable keys. Exits non-zero so it can gate CI.
+- **`next-fluent typegen --watch`**, plus a `typegen` option on
+  `createNextFluentPlugin` that regenerates declarations during `next dev`.
+  `--input` is now optional (`./messages`, `./locales`, `./src/messages`,
+  `./src/locales` are probed) and `.json` catalogs are picked up next to `.ftl`.
+- **Edge runtime check** (`npm run test:edge`): bundles the middleware graph for
+  a neutral platform, rejects `node:*`/`require`/`next/headers` references and
+  executes it against a Web-standard `Request`.
+- **Client bundle size budgets** (`npm run size`), enforced in CI.
+
+### Changed
+
+- Build-time tools moved out of the app entry points. `pseudoLocalizeFtl` and
+  `generateTypeDeclarations` are now imported from `next-fluent/pseudo` and
+  `next-fluent/typegen`; `pickMessages` and `checkCatalogs` from
+  `next-fluent/messages` and `next-fluent/check`. They pull in `@fluent/syntax`
+  (a full FTL parser), which no browser bundle needs — the client entry dropped
+  from 68.2 kB to 44.2 kB minified as a result.
+- `createFluentBundle`, `FluentProvider`, `loadMessages`, `getMessages` and
+  `getTranslations` accept `MessageSource` (`string | readonly string[] | JsonCatalog`).
+- `useMessages()` is typed as `MessageSource | undefined`.
+- `LRUCache` rejects non-positive and non-integer sizes instead of silently
+  behaving like a one-entry cache.
+
+### Fixed
+
+- `setRequestLocale()` called outside a React request scope now throws in
+  development (and warns in production) instead of silently discarding the
+  locale — the failure mode was a page prerendered in the default language.
+- `t.attrs()` treats a message without attributes as a miss, so a fallback
+  bundle that does define them is still consulted.
+- Pseudo-localization no longer breaks on nested placeables
+  (`{ $count -> [one] { NUMBER($count) } }`): the tokenizer tracks brace depth
+  and Fluent string literals instead of matching to the first `}`.
+- The CLI no longer falls through into the `pseudo` branch when `typegen --watch`
+  keeps the process alive.

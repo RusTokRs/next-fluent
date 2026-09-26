@@ -1,5 +1,10 @@
 import type { I18nMiddlewareOptions, LocaleCookieConfig } from './types';
 import { matchSupportedLocale, resolveAcceptLanguage, validateI18nConfig } from './utils';
+import {
+  matchLocalePrefix,
+  normalizeLocalePrefix,
+  prefixForLocale,
+} from './locale-prefix';
 import { rewriteLocalizedPath, validatePathnames, validateRouteEnvironment } from './route-engine';
 import { buildAlternateLinksHeader } from './alternate-links';
 
@@ -71,7 +76,6 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
   const {
     locales: allLocales,
     defaultLocale: rawDefaultLocale,
-    localePrefix = 'always',
     cookieName = 'NEXT_LOCALE',
     headerName = 'x-next-locale',
     pathnames,
@@ -83,6 +87,8 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
   } = options;
 
   const cookieConfig = resolveCookieConfig(options.localeCookie, cookieName);
+  const prefixConfig = normalizeLocalePrefix(allLocales, options.localePrefix);
+  const localePrefix = prefixConfig.mode;
 
   // Resolve defaultLocale to its exact spelling in `locales` so that string
   // comparisons (e.g. `matchedPrefix === defaultLocale` in as-needed mode)
@@ -127,12 +133,9 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
     ));
     const pathname = hasBasePath ? rawPathname.slice(basePath.length) || '/' : rawPathname;
     const withBasePath = (path: string) => hasBasePath ? `${basePath}${path}` : path;
-    const segments = pathname.split('/').filter(Boolean);
-    const firstSegment = segments[0];
-    const matchedPrefix = matchSupportedLocale(firstSegment, locales);
-    const pathnameWithoutPrefix = matchedPrefix && firstSegment
-      ? pathname.slice(firstSegment.length + 1) || '/'
-      : pathname;
+    const prefixMatch = matchLocalePrefix(pathname, locales, prefixConfig);
+    const matchedPrefix = prefixMatch?.locale;
+    const pathnameWithoutPrefix = prefixMatch ? prefixMatch.rest : pathname;
 
     /**
      * Maps a public pathname to its internal route for a locale. Slugs of
@@ -218,7 +221,7 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
           const header = buildAlternateLinksHeader({
             locales,
             defaultLocale,
-            localePrefix,
+            localePrefix: options.localePrefix,
             pathname: pathnameWithoutPrefix,
             pathnames,
             domains,
@@ -252,7 +255,7 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
       return response;
     };
 
-    const globalPrefix = matchSupportedLocale(firstSegment, allLocales);
+    const globalPrefix = matchLocalePrefix(pathname, allLocales, prefixConfig)?.locale;
     if (domain && globalPrefix && !matchSupportedLocale(globalPrefix, locales)) {
       const targetDomain = domains?.find((item) =>
         (item.locales ?? [item.defaultLocale]).some((locale) => matchSupportedLocale(globalPrefix, [locale]))
@@ -280,12 +283,11 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
         return createSuccessResponse(matchedPrefix!);
       }
       if (matchedPrefix) {
-        const rest = segments.slice(1).join('/');
-        const remainingPath = rest ? `/${rest}${search}` : `/${search}`;
+        const remainingPath = `${pathnameWithoutPrefix === '/' ? '/' : pathnameWithoutPrefix}${search}`;
         return createRedirect(requestUrl(withBasePath(remainingPath)), matchedPrefix);
       }
       const route = internalPath(preferredLocale, pathname);
-      const rewritePath = `/${preferredLocale}${route === '/' ? '' : route}${search}`;
+      const rewritePath = `${prefixForLocale(preferredLocale, prefixConfig)}${route === '/' ? '' : route}${search}`;
       return createSuccessResponse(preferredLocale, rewritePath);
     }
 
@@ -298,8 +300,7 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
           return createSuccessResponse(matchedPrefix);
         }
         // Strip default locale prefix
-        const rest = segments.slice(1).join('/');
-        const remainingPath = rest ? `/${rest}${search}` : `/${search}`;
+        const remainingPath = `${pathnameWithoutPrefix === '/' ? '/' : pathnameWithoutPrefix}${search}`;
         return createRedirect(requestUrl(withBasePath(remainingPath)), defaultLocale);
       }
       if (matchedPrefix) {
@@ -307,17 +308,17 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
         const route = internalPath(matchedPrefix, pathnameWithoutPrefix);
         const rewritePath = route === pathnameWithoutPrefix
           ? undefined
-          : `/${matchedPrefix}${route === '/' ? '' : route}${search}`;
+          : `${prefixForLocale(matchedPrefix, prefixConfig)}${route === '/' ? '' : route}${search}`;
         return createSuccessResponse(matchedPrefix, rewritePath);
       }
       // No prefix in URL:
       if (preferredLocale === defaultLocale) {
         const route = internalPath(defaultLocale, pathname);
-        const rewritePath = `/${defaultLocale}${route === '/' ? '' : route}${search}`;
+        const rewritePath = `${prefixForLocale(defaultLocale, prefixConfig)}${route === '/' ? '' : route}${search}`;
         return createSuccessResponse(defaultLocale, rewritePath);
       }
       // Preferred locale is non-default: redirect to /{preferredLocale}/path
-      const targetPath = `/${preferredLocale}${pathname === '/' ? '' : pathname}${search}`;
+      const targetPath = `${prefixForLocale(preferredLocale, prefixConfig)}${pathname === '/' ? '' : pathname}${search}`;
       return createRedirect(requestUrl(withBasePath(targetPath)), preferredLocale);
     }
 
@@ -326,11 +327,11 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
       const route = internalPath(matchedPrefix, pathnameWithoutPrefix);
       const rewritePath = route === pathnameWithoutPrefix
         ? undefined
-        : `/${matchedPrefix}${route === '/' ? '' : route}${search}`;
+        : `${prefixForLocale(matchedPrefix, prefixConfig)}${route === '/' ? '' : route}${search}`;
       return createSuccessResponse(matchedPrefix, rewritePath);
     }
 
-    const targetPath = `/${preferredLocale}${pathname === '/' ? '' : pathname}${search}`;
+    const targetPath = `${prefixForLocale(preferredLocale, prefixConfig)}${pathname === '/' ? '' : pathname}${search}`;
     return createRedirect(requestUrl(withBasePath(targetPath)), preferredLocale);
   };
 }

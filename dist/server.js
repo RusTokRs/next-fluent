@@ -1,5 +1,6 @@
 import { cache } from "react";
 import { createFluentBundle, createTranslator } from "./bundle.js";
+import { isJsonCatalog, toFluentSource } from "./catalog.js";
 import { createFormatter } from "./formatter.js";
 import { canonicalizeLocale, matchSupportedLocale, resolveAcceptLanguage } from "./utils.js";
 let globalConfigFn = null;
@@ -25,12 +26,23 @@ function getRequestConfig() {
 const getRequestStore = cache(() => ({
   bundles: /* @__PURE__ */ new Map()
 }));
+function isRequestScopeActive() {
+  return getRequestStore() === getRequestStore();
+}
 function setRequestLocale(locale, locales) {
   const canonical = canonicalizeLocale(locale);
   if (!canonical) throw new Error("[next-fluent] Invalid request locale.");
   const allowed = locales ?? (globalLocalesConfigured ? globalLocales : void 0);
   const matched = allowed ? matchSupportedLocale(canonical, allowed) : canonical;
   if (!matched) throw new Error(`[next-fluent] Unsupported request locale: ${canonical}`);
+  if (!isRequestScopeActive()) {
+    const message = `[next-fluent] setRequestLocale("${canonical}") was called outside a request scope, so the locale cannot be stored. Call it while rendering a page, layout, generateMetadata or generateStaticParams entry \u2014 not at module scope.`;
+    if (typeof process !== "undefined" && process.env?.NODE_ENV !== "production") {
+      throw new Error(message);
+    }
+    console.warn(message);
+    return;
+  }
   getRequestStore().locale = matched;
 }
 async function getLocale(options) {
@@ -121,8 +133,10 @@ async function loadConfig(locale, override) {
   const configFn = override ?? await resolveConfigFn();
   if (!configFn) return { locale, messages: "" };
   const result = await runConfigFn(configFn, locale);
-  if (!result || !Array.isArray(result.messages) && typeof result.messages !== "string") {
-    throw new Error("[next-fluent] Request config must return messages as FTL text or an array.");
+  if (!result || typeof result.messages !== "string" && !Array.isArray(result.messages) && !isJsonCatalog(result.messages)) {
+    throw new Error(
+      "[next-fluent] Request config must return messages as FTL text, an array of FTL sources, or a JSON catalog object."
+    );
   }
   if (result.locale && !canonicalizeLocale(result.locale)) {
     throw new Error("[next-fluent] Request config returned an invalid locale.");
@@ -237,12 +251,12 @@ async function forLocale(locale, options) {
   const bundleOptions = { functions: mergedFunctions, useIsolating };
   let bundle;
   if (explicitMessages !== void 0) {
-    bundle = createFluentBundle(effectiveLocale, explicitMessages, bundleOptions);
+    bundle = createFluentBundle(effectiveLocale, toFluentSource(explicitMessages), bundleOptions);
   } else {
     const hasCustomFuncs = Boolean(requestConfig || Object.keys(mergedFunctions).length > 0);
     let cached = hasCustomFuncs ? void 0 : store.bundles.get(bundleSlot);
     if (!cached) {
-      cached = createFluentBundle(effectiveLocale, config?.messages ?? "", bundleOptions);
+      cached = createFluentBundle(effectiveLocale, toFluentSource(config?.messages ?? ""), bundleOptions);
       if (!hasCustomFuncs) {
         store.bundles.set(bundleSlot, cached);
       }
@@ -253,7 +267,7 @@ async function forLocale(locale, options) {
   if (fallbackMessages) {
     const fbLoc = fallbackLocale ?? "en";
     fallbackBundleList.push(
-      createFluentBundle(fbLoc, fallbackMessages, bundleOptions)
+      createFluentBundle(fbLoc, toFluentSource(fallbackMessages), bundleOptions)
     );
   }
   const fallbacksToLoad = /* @__PURE__ */ new Set();
@@ -273,7 +287,7 @@ async function forLocale(locale, options) {
       if (!fbBundle) {
         const fbConfig = await loadConfig(fbLocale, requestConfig);
         const resolvedFallbackLocale = fbConfig.locale ?? fbLocale;
-        fbBundle = createFluentBundle(resolvedFallbackLocale, fbConfig.messages, {
+        fbBundle = createFluentBundle(resolvedFallbackLocale, toFluentSource(fbConfig.messages), {
           functions: { ...fbConfig.functions, ...mergedFunctions },
           useIsolating
         });

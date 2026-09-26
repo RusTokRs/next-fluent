@@ -1,4 +1,5 @@
 import { parse, Visitor, type Message, type VariableReference } from '@fluent/syntax';
+import { toFluentSource, type MessageSource } from './catalog';
 
 /**
  * FTL AST Key & Variable Extractor for TypeScript declaration generation.
@@ -25,8 +26,11 @@ class VariableExtractor extends Visitor {
   }
 }
 
-export function extractMessagesFromFtl(ftlContent: string): ExtractedMessage[] {
-  const resource = parse(ftlContent, { withSpans: false });
+export function extractMessagesFromFtl(ftlContent: MessageSource): ExtractedMessage[] {
+  const source = toFluentSource(ftlContent);
+  const resource = parse(typeof source === 'string' ? source : source.join('\n'), {
+    withSpans: false,
+  });
   const messages: ExtractedMessage[] = [];
 
   for (const entry of resource.body) {
@@ -67,9 +71,11 @@ export function extractMessagesFromFtl(ftlContent: string): ExtractedMessage[] {
 }
 
 export function generateTypeDeclarations(
-  ftlContents: string | readonly string[]
+  ftlContents: MessageSource | readonly MessageSource[]
 ): string {
-  const contents = Array.isArray(ftlContents) ? ftlContents : [ftlContents];
+  const contents = (Array.isArray(ftlContents)
+    ? (ftlContents as readonly MessageSource[])
+    : [ftlContents as MessageSource]) as readonly MessageSource[];
   const allMessages: ExtractedMessage[] = [];
   const seenIds = new Set<string>();
 

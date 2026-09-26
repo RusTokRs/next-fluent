@@ -3,6 +3,8 @@ import type React from 'react';
 import type { GetMessageFallbackFn, OnErrorFn } from './errors';
 
 export type { FluentBundle, FluentVariable, FluentFunction };
+export type { JsonCatalog, MessageSource } from './catalog';
+import type { MessageSource } from './catalog';
 export type { OnErrorFn, GetMessageFallbackFn, MessageFallbackArgs } from './errors';
 export { FluentError, FluentErrorCode } from './errors';
 
@@ -73,6 +75,10 @@ export interface TranslationFn<
   <K extends Key>(key: K, ...args: MessageArgsFor<K, ArgsMap>): string;
   raw<K extends Key>(key: K, ...args: MessageArgsFor<K, ArgsMap>): string[] | string;
   rich<K extends Key>(key: K, values?: RichTranslationValues): React.ReactNode;
+  /** Every attribute of a message, in declaration order. */
+  attrs<K extends Key>(key: K, ...args: MessageArgsFor<K, ArgsMap>): Record<string, string>;
+  /** Message text with rich-text markers removed. */
+  plain<K extends Key>(key: K, ...args: MessageArgsFor<K, ArgsMap>): string;
   has<K extends Key>(key: K): boolean;
 }
 
@@ -131,6 +137,17 @@ export interface Formatter {
 
 export type LocalePrefixMode = 'always' | 'as-needed' | 'never';
 
+/** Locale → URL prefix, e.g. `{ 'en-US': '/usa', de: '/deutsch' }`. */
+export type LocalePrefixes = Partial<Record<string, string>>;
+
+/**
+ * `'always' | 'as-needed' | 'never'`, or the verbose form that also maps
+ * individual locales to custom URL prefixes.
+ */
+export type LocalePrefixConfig =
+  | LocalePrefixMode
+  | { mode?: LocalePrefixMode; prefixes?: LocalePrefixes };
+
 export type Pathnames<Locales extends readonly string[] = readonly string[]> = Record<
   string,
   string | Record<Locales[number] | string, string>
@@ -139,7 +156,7 @@ export type Pathnames<Locales extends readonly string[] = readonly string[]> = R
 export interface NavigationConfig<Locales extends readonly string[] = readonly string[]> {
   locales: Locales;
   defaultLocale: Locales[number] | string;
-  localePrefix?: LocalePrefixMode;
+  localePrefix?: LocalePrefixConfig;
   pathnames?: Pathnames<Locales>;
   domains?: readonly { domain: string; defaultLocale: string; locales?: readonly string[] }[];
   basePath?: string;
@@ -224,9 +241,10 @@ export interface RequestConfigParams {
 
 export interface RequestConfigResult {
   locale?: string;
-  messages: string | readonly string[];
+  /** FTL text, an array of FTL sources, or a JSON catalog object. */
+  messages: MessageSource;
   fallbackLocale?: string;
-  fallbackMessages?: string | readonly string[];
+  fallbackMessages?: MessageSource;
   defaultTranslationValues?: RichTranslationValues;
   timeZone?: string;
   now?: Date;
@@ -253,10 +271,10 @@ export type RequestConfigFn = (
 
 export interface GetTranslationsOptions {
   locale?: string;
-  messages?: string | readonly string[];
+  messages?: MessageSource;
   fallbackLocale?: string;
   fallbackLocales?: readonly string[];
-  fallbackMessages?: string | readonly string[];
+  fallbackMessages?: MessageSource;
   defaultTranslationValues?: RichTranslationValues;
   namespace?: string;
   debug?: boolean;
@@ -284,7 +302,7 @@ export interface LocaleCookieConfig {
 export interface I18nMiddlewareOptions {
   locales: readonly string[];
   defaultLocale: string;
-  localePrefix?: 'always' | 'as-needed' | 'never';
+  localePrefix?: LocalePrefixConfig;
   cookieName?: string;
   headerName?: string;
   pathnames?: Pathnames<any>;
@@ -316,7 +334,7 @@ export interface I18nMiddlewareOptions {
 export interface I18nConfig {
   locales: readonly string[];
   defaultLocale: string;
-  localePrefix?: 'always' | 'as-needed' | 'never';
+  localePrefix?: LocalePrefixConfig;
   cookieName?: string;
   headerName?: string;
   pathnames?: Pathnames<any>;
@@ -326,5 +344,5 @@ export interface I18nConfig {
   localeCookie?: boolean | LocaleCookieConfig;
   localeDetection?: boolean;
   alternateLinks?: boolean;
-  loadMessages?: (locale: string) => Promise<string | readonly string[]> | string | readonly string[];
+  loadMessages?: (locale: string) => Promise<MessageSource> | MessageSource;
 }

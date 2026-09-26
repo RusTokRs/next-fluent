@@ -1,7 +1,9 @@
 import React from "react";
 import { buildKeyCandidates, canonicalizeLocale, withKebabKey } from "./utils.js";
+import { toFluentSource } from "./catalog.js";
 import {
   parseRichText,
+  stripRichText,
   createReactElementToken,
   REACT_ELEMENT_TOKEN_PREFIX
 } from "./rich.js";
@@ -38,7 +40,7 @@ function createFluentBundle(locale, ftlSource, options = {}) {
       `[next-fluent] Invalid Fluent bundle locale: "${fluentBundleLocaleDiagnostic(locale)}"`
     );
   }
-  return getCachedFluentBundle(canonicalLocale, ftlSource, options);
+  return getCachedFluentBundle(canonicalLocale, toFluentSource(ftlSource), options);
 }
 function stripBidiIsolates(value) {
   return value.replace(/[\u2068\u2069]/g, "");
@@ -243,6 +245,91 @@ function createTranslator(bundle, namespaceOrFallbackOrOpts, maybeNamespace) {
     const formattedText = formatKey(key, built.args, built.rejected);
     return parseRichText(formattedText, mergedValues);
   };
+  tFn.attrs = ((key, args) => {
+    const built = buildFluentArgs(args);
+    const mergedArgs = Object.keys(defaults.args).length > 0 || Object.keys(built.args).length > 0 ? { ...defaults.args, ...built.args } : void 0;
+    const candidates = buildKeyCandidates(namespace, key, { strictNamespace });
+    for (const b of allBundles) {
+      for (const candidate of candidates) {
+        const msg = b.getMessage(candidate);
+        if (!msg?.attributes || Object.keys(msg.attributes).length === 0) continue;
+        const result = {};
+        const errors = [];
+        for (const [attrKey, pattern] of Object.entries(msg.attributes)) {
+          result[attrKey] = stripBidiIsolates(
+            b.formatPattern(pattern, mergedArgs, errors)
+          );
+        }
+        if (errors.length > 0) {
+          const details = built.rejected.length > 0 ? {
+            code: FluentErrorCode.INVALID_ARGUMENT,
+            key,
+            namespace,
+            locale: bundleLocale(b),
+            cause: { unsupportedArguments: built.rejected, errors }
+          } : {
+            code: FluentErrorCode.FORMATTING_ERROR,
+            key,
+            namespace,
+            locale: bundleLocale(b),
+            cause: errors
+          };
+          report(details);
+          return {};
+        }
+        return result;
+      }
+    }
+    report({ code: FluentErrorCode.MISSING_MESSAGE, key, namespace });
+    return {};
+  });
+  tFn.plain = ((key, args) => {
+    const built = buildFluentArgs(args);
+    return stripRichText(formatKey(key, built.args, built.rejected));
+  });
+  tFn.attrs = ((key, args) => {
+    const built = buildFluentArgs(args);
+    const mergedArgs = Object.keys(defaults.args).length > 0 || Object.keys(built.args).length > 0 ? { ...defaults.args, ...built.args } : void 0;
+    const candidates = buildKeyCandidates(namespace, key, { strictNamespace });
+    for (const b of allBundles) {
+      for (const candidate of candidates) {
+        const msg = b.getMessage(candidate) ?? b.getMessage(withKebabKey(candidate));
+        if (!msg?.attributes || Object.keys(msg.attributes).length === 0) continue;
+        const result = {};
+        const errors = [];
+        for (const [attrKey, pattern] of Object.entries(msg.attributes)) {
+          result[attrKey] = stripBidiIsolates(
+            b.formatPattern(pattern, mergedArgs, errors)
+          );
+        }
+        if (errors.length > 0) {
+          report(
+            built.rejected.length > 0 ? {
+              code: FluentErrorCode.INVALID_ARGUMENT,
+              key,
+              namespace,
+              locale: bundleLocale(b),
+              cause: { unsupportedArguments: built.rejected, errors }
+            } : {
+              code: FluentErrorCode.FORMATTING_ERROR,
+              key,
+              namespace,
+              locale: bundleLocale(b),
+              cause: errors
+            }
+          );
+          return {};
+        }
+        return result;
+      }
+    }
+    report({ code: FluentErrorCode.MISSING_MESSAGE, key, namespace });
+    return {};
+  });
+  tFn.plain = ((key, args) => {
+    const built = buildFluentArgs(args);
+    return stripRichText(formatKey(key, built.args, built.rejected));
+  });
   tFn.has = (key) => {
     const candidates = buildKeyCandidates(namespace, key, { strictNamespace });
     for (const candidate of candidates) {

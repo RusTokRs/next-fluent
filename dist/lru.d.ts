@@ -1,6 +1,6 @@
 export declare class LRUCache<V> {
-    private readonly maxSize;
     private readonly map;
+    private readonly maxSize;
     constructor(maxSize: number);
     get(key: string): V | undefined;
     set(key: string, value: V): void;

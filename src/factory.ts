@@ -14,6 +14,7 @@ import {
   getMessages as getServerMessages,
 } from './server';
 import { validateI18nConfig } from './utils';
+import type { MessageSource } from './catalog';
 
 export interface I18nRuntime {
   readonly config: I18nConfig;
@@ -24,7 +25,7 @@ export interface I18nRuntime {
     locale: string,
     options?: string | { namespace?: string; fallbackLocale?: string; fallbackLocales?: readonly string[]; debug?: boolean }
   ) => Promise<Translations>;
-  readonly getMessages: (locale?: string) => Promise<string | readonly string[]>;
+  readonly getMessages: (locale?: string) => Promise<MessageSource>;
   readonly getFormatter: (options?: { locale?: string; timeZone?: string }) => Promise<Formatter>;
   readonly getStaticParams: () => { locale: string }[];
   readonly navigation: Navigation<any>;

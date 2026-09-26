@@ -1,8 +1,8 @@
-import type { Pathnames } from './types';
+import type { LocalePrefixConfig, Pathnames } from './types';
 export interface AlternateLinksOptions {
     locales: readonly string[];
     defaultLocale: string;
-    localePrefix: 'always' | 'as-needed' | 'never';
+    localePrefix?: LocalePrefixConfig;
     /** Pathname without locale prefix and without basePath (internal form). */
     pathname: string;
     /** Internal route template matched for the current request, when known. */

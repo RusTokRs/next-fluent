@@ -1,5 +1,6 @@
 import type { FluentBundle, FluentFunction } from '@fluent/bundle';
 import type { DefaultKey, Formatter, Formats, FluentMessages, GetMessageFallbackFn, GetTranslationsOptions, OnErrorFn, RequestConfigFn, RequestConfigResult, RichTranslationValues, Translations, NamespaceArgs, NamespaceKeys } from './types';
+import { type MessageSource } from './catalog';
 export interface ServerI18nOptions {
     locales?: readonly string[];
     defaultLocale?: string;
@@ -28,7 +29,7 @@ interface RequestStore {
 export declare const getRequestStore: () => RequestStore;
 export declare function setRequestLocale(locale: string, locales?: readonly string[]): void;
 export declare function getLocale(options?: ServerI18nOptions): Promise<string>;
-export declare function getMessages(localeArg?: string): Promise<string | readonly string[]>;
+export declare function getMessages(localeArg?: string): Promise<MessageSource>;
 export declare function getRequestConfigSnapshot(localeArg?: string): Promise<RequestConfigResult & {
     locale: string;
     timeZone: string;
@@ -49,10 +50,10 @@ export declare function getStaticParams(locales?: readonly string[]): {
  */
 export declare function getFormats(): Promise<Formats | undefined>;
 export interface ForLocaleOptions {
-    messages?: string | readonly string[];
+    messages?: MessageSource;
     fallbackLocale?: string;
     fallbackLocales?: readonly string[];
-    fallbackMessages?: string | readonly string[];
+    fallbackMessages?: MessageSource;
     defaultTranslationValues?: RichTranslationValues;
     namespace?: string;
     debug?: boolean;

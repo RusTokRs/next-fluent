@@ -24,6 +24,19 @@ export function createReactElementToken(key: string): string {
 const TOKEN_OR_TAG_PATTERN =
   '(?:\\u2068)?\\uE000NF_EL_([a-zA-Z0-9_-]+)_\\uE001(?:\\u2069)?|<\\/?([a-zA-Z][a-zA-Z0-9_-]*)\\s*\\/?>';
 
+const STRIP_PATTERN = new RegExp(TOKEN_OR_TAG_PATTERN, 'g');
+
+/**
+ * Removes rich-text markers (React element tokens and `<tag>` markup) from a
+ * formatted message, leaving readable plain text. Bidi isolation marks are
+ * removed too: the result is meant for attributes, not for HTML text nodes.
+ */
+export function stripRichText(text: string): string {
+  if (!text.includes(REACT_ELEMENT_TOKEN_PREFIX) && !text.includes('<')) return text;
+  return text.replace(STRIP_PATTERN, '').replace(/[\u2068\u2069]/g, '');
+}
+
+
 /**
  * Parses a formatted string containing markup tags (e.g. `<link>text</link>`, `<br/>`, `<br>`)
  * and embedded React element tokens, mapping them to React elements or tag render functions in `values`.

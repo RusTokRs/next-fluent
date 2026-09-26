@@ -1,6 +1,7 @@
 import path from "node:path";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { watchCatalogs, writeTypeDeclarations } from "./catalog-io.js";
 const require2 = createRequire(import.meta.url);
 function needsLegacyTurboConfig() {
   try {
@@ -12,8 +13,28 @@ function needsLegacyTurboConfig() {
     return false;
   }
 }
-function createNextFluentPlugin(i18nRequestPath = "./src/i18n/request.ts") {
+function createNextFluentPlugin(i18nRequestPath = "./src/i18n/request.ts", options = {}) {
   return function withNextFluent(nextConfig = {}) {
+    if (options.typegen) {
+      const input = path.resolve(process.cwd(), options.typegen.input ?? "./messages");
+      const output = path.resolve(process.cwd(), options.typegen.output ?? "./next-fluent.d.ts");
+      try {
+        const result = writeTypeDeclarations(input, output);
+        if (result.changed) {
+          console.log(
+            `[next-fluent] Generated message types at ${path.relative(process.cwd(), output)}`
+          );
+        }
+        if (options.typegen.watch !== false) {
+          watchCatalogs(input, output, {
+            onUpdate: () => console.log("[next-fluent] Regenerated message types."),
+            onError: (error) => console.error(`[next-fluent] Type generation failed: ${error.message}`)
+          });
+        }
+      } catch (error) {
+        console.error(`[next-fluent] Type generation failed: ${error.message}`);
+      }
+    }
     const resolvedPath = path.resolve(process.cwd(), i18nRequestPath);
     const relativePath = path.relative(process.cwd(), resolvedPath).split(path.sep).join("/");
     const turbopackPath = relativePath.startsWith(".") ? relativePath : `./${relativePath}`;

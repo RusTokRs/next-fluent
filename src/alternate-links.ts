@@ -1,11 +1,17 @@
-import type { Pathnames } from './types';
+import type { LocalePrefixConfig, Pathnames } from './types';
 import { matchSupportedLocale } from './utils';
 import { findInternalPath, externalTemplate, renderTemplate } from './route-engine';
+import {
+  localeNeedsPrefix,
+  normalizeLocalePrefix,
+  prefixForLocale,
+  type NormalizedLocalePrefix,
+} from './locale-prefix';
 
 export interface AlternateLinksOptions {
   locales: readonly string[];
   defaultLocale: string;
-  localePrefix: 'always' | 'as-needed' | 'never';
+  localePrefix?: LocalePrefixConfig;
   /** Pathname without locale prefix and without basePath (internal form). */
   pathname: string;
   /** Internal route template matched for the current request, when known. */
@@ -21,11 +27,11 @@ function withLocalePrefix(
   path: string,
   locale: string,
   defaultLocale: string,
-  localePrefix: 'always' | 'as-needed' | 'never'
+  localePrefix: NormalizedLocalePrefix
 ): string {
-  if (localePrefix === 'never') return path;
-  if (localePrefix === 'as-needed' && locale === defaultLocale) return path;
-  return path === '/' ? `/${locale}` : `/${locale}${path}`;
+  if (!localeNeedsPrefix(locale, defaultLocale, localePrefix.mode)) return path;
+  const prefix = prefixForLocale(locale, localePrefix);
+  return path === '/' ? prefix : `${prefix}${path}`;
 }
 
 /**
@@ -46,7 +52,9 @@ export function buildAlternateLinksHeader(options: AlternateLinksOptions): strin
     origin,
   } = options;
 
-  if (localePrefix === 'never' || locales.length < 2) return undefined;
+  const prefixConfig = normalizeLocalePrefix(locales, localePrefix);
+
+  if (prefixConfig.mode === 'never' || locales.length < 2) return undefined;
 
   // Resolve the internal template and its concrete parameters once, probing
   // every locale so a slug from another language still resolves.
@@ -76,7 +84,7 @@ export function buildAlternateLinksHeader(options: AlternateLinksOptions): strin
     // Render with the parameters captured from the current request so dynamic
     // routes keep their concrete values.
     const rendered = template ? renderTemplate(external, params) : pathname;
-    const path = withLocalePrefix(rendered, locale, defaultLocale, localePrefix);
+    const path = withLocalePrefix(rendered, locale, defaultLocale, prefixConfig);
 
     const domain = domains?.find((entry) =>
       (entry.locales ?? [entry.defaultLocale]).some((item) =>
@@ -86,9 +94,11 @@ export function buildAlternateLinksHeader(options: AlternateLinksOptions): strin
 
     if (domain) {
       const needsPrefix = !(
-        domain.defaultLocale === locale && localePrefix !== 'always'
+        domain.defaultLocale === locale && prefixConfig.mode !== 'always'
       );
-      const domainPath = needsPrefix ? withLocalePrefix(rendered, locale, domain.defaultLocale, 'always') : rendered;
+      const domainPath = needsPrefix
+        ? `${prefixForLocale(locale, prefixConfig)}${rendered === '/' ? '' : rendered}`
+        : rendered;
       push(`https://${domain.domain}${basePathname(domainPath)}${search}`, locale);
       continue;
     }
@@ -104,7 +114,7 @@ export function buildAlternateLinksHeader(options: AlternateLinksOptions): strin
       template ? renderTemplate(externalTemplate(template, defaultLocale, pathnames), params) : pathname,
       defaultLocale,
       defaultLocale,
-      localePrefix
+      prefixConfig
     );
     const url = new URL(base);
     url.pathname = basePathname(defaultPath);

@@ -1,3 +1,4 @@
+import { type MessageSource } from './catalog';
 /**
  * FTL AST Key & Variable Extractor for TypeScript declaration generation.
  */
@@ -10,5 +11,5 @@ export interface ExtractedMessage {
     valueVariables: string[];
     attributeVariables: Record<string, string[]>;
 }
-export declare function extractMessagesFromFtl(ftlContent: string): ExtractedMessage[];
-export declare function generateTypeDeclarations(ftlContents: string | readonly string[]): string;
+export declare function extractMessagesFromFtl(ftlContent: MessageSource): ExtractedMessage[];
+export declare function generateTypeDeclarations(ftlContents: MessageSource | readonly MessageSource[]): string;

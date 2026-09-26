@@ -9,8 +9,10 @@ import type {
   Translations,
 } from './types';
 import { buildKeyCandidates, canonicalizeLocale, withKebabKey } from './utils';
+import { toFluentSource, type MessageSource } from './catalog';
 import {
   parseRichText,
+  stripRichText,
   createReactElementToken,
   REACT_ELEMENT_TOKEN_PREFIX,
 } from './rich';
@@ -57,7 +59,7 @@ function fluentBundleLocaleDiagnostic(locale: unknown): string {
 
 export function createFluentBundle(
   locale: string,
-  ftlSource: string | readonly string[],
+  ftlSource: MessageSource,
   options: CreateFluentBundleOptions = {}
 ): FluentBundle {
   const canonicalLocale = canonicalizeLocale(locale);
@@ -67,7 +69,9 @@ export function createFluentBundle(
     );
   }
 
-  return getCachedFluentBundle(canonicalLocale, ftlSource, options);
+  // JSON catalogs are converted here so every entry point (provider, server
+  // config, explicit messages) accepts the same three shapes.
+  return getCachedFluentBundle(canonicalLocale, toFluentSource(ftlSource), options);
 }
 
 export interface CreateTranslatorOptions {
@@ -403,6 +407,148 @@ export function createTranslator(
     const formattedText = formatKey(key, built.args, built.rejected);
     return parseRichText(formattedText, mergedValues);
   };
+
+  /**
+   * Returns every attribute of a message, in declaration order.
+   *
+   * `t('id')` only ever resolves the message value, so attributes such as
+   * `aria-label` or `title` needed `t('id.aria-label')` — one lookup per
+   * attribute, with the declaration order lost. Bidi isolation marks are
+   * stripped because attribute values end up in HTML attributes.
+   */
+  tFn.attrs = ((key: string, args?: FluentArgs): Record<string, string> => {
+    const built = buildFluentArgs(args as Record<string, unknown>);
+    const mergedArgs =
+      Object.keys(defaults.args).length > 0 || Object.keys(built.args).length > 0
+        ? { ...defaults.args, ...built.args }
+        : undefined;
+    const candidates = buildKeyCandidates(namespace, key, { strictNamespace });
+
+    for (const b of allBundles) {
+      for (const candidate of candidates) {
+        const msg = b.getMessage(candidate);
+        // A message without attributes must not shadow a fallback bundle that
+        // does define them.
+        if (!msg?.attributes || Object.keys(msg.attributes).length === 0) continue;
+
+        const result: Record<string, string> = {};
+        const errors: Error[] = [];
+        for (const [attrKey, pattern] of Object.entries(msg.attributes)) {
+          result[attrKey] = stripBidiIsolates(
+            b.formatPattern(pattern, mergedArgs, errors) as string
+          );
+        }
+        if (errors.length > 0) {
+          const details: FluentErrorDetails = built.rejected.length > 0
+            ? {
+                code: FluentErrorCode.INVALID_ARGUMENT,
+                key,
+                namespace,
+                locale: bundleLocale(b),
+                cause: { unsupportedArguments: built.rejected, errors },
+              }
+            : {
+                code: FluentErrorCode.FORMATTING_ERROR,
+                key,
+                namespace,
+                locale: bundleLocale(b),
+                cause: errors,
+              };
+          report(details);
+          return {};
+        }
+        return result;
+      }
+    }
+
+    report({ code: FluentErrorCode.MISSING_MESSAGE, key, namespace });
+    return {};
+  }) as Translations['attrs'];
+
+  /**
+   * Formats a message to plain text, dropping rich-text markers instead of
+   * throwing (unlike `t()`) or returning React nodes (unlike `t.rich()`).
+   * Useful for `aria-label`, `title`, `alt` and `<meta>` content where the
+   * catalog shares one rich message with the visible UI.
+   */
+  tFn.plain = ((key: string, args?: FluentArgs): string => {
+    const built = buildFluentArgs(args as Record<string, unknown>);
+    return stripRichText(formatKey(key, built.args, built.rejected));
+  }) as Translations['plain'];
+
+  /**
+   * Every attribute of a message, in declaration order.
+   *
+   * `t('id')` resolves the message value, so attributes such as `aria-label`
+   * or `title` needed one lookup per attribute (`t('id.aria-label')`). This
+   * returns them all at once, with the catalog's own ordering intact, for the
+   * common case of spreading localized attributes onto an element.
+   *
+   * Bidi isolation marks are stripped because attribute values end up in HTML
+   * attributes, where invisible characters are a bug rather than a feature.
+   */
+  tFn.attrs = ((key: string, args?: FluentArgs): Record<string, string> => {
+    const built = buildFluentArgs(args as Record<string, unknown>);
+    const mergedArgs =
+      Object.keys(defaults.args).length > 0 || Object.keys(built.args).length > 0
+        ? { ...defaults.args, ...built.args }
+        : undefined;
+    const candidates = buildKeyCandidates(namespace, key, { strictNamespace });
+
+    for (const b of allBundles) {
+      for (const candidate of candidates) {
+        const msg =
+          b.getMessage(candidate) ?? b.getMessage(withKebabKey(candidate));
+        // A message without attributes is not a match: keep looking (a fallback
+        // bundle may define them) and report MISSING_MESSAGE if none does.
+        if (!msg?.attributes || Object.keys(msg.attributes).length === 0) continue;
+
+        const result: Record<string, string> = {};
+        const errors: Error[] = [];
+        for (const [attrKey, pattern] of Object.entries(msg.attributes)) {
+          result[attrKey] = stripBidiIsolates(
+            b.formatPattern(pattern, mergedArgs, errors) as string
+          );
+        }
+        if (errors.length > 0) {
+          report(
+            built.rejected.length > 0
+              ? {
+                  code: FluentErrorCode.INVALID_ARGUMENT,
+                  key,
+                  namespace,
+                  locale: bundleLocale(b),
+                  cause: { unsupportedArguments: built.rejected, errors },
+                }
+              : {
+                  code: FluentErrorCode.FORMATTING_ERROR,
+                  key,
+                  namespace,
+                  locale: bundleLocale(b),
+                  cause: errors,
+                }
+          );
+          return {};
+        }
+        return result;
+      }
+    }
+
+    report({ code: FluentErrorCode.MISSING_MESSAGE, key, namespace });
+    return {};
+  }) as Translations['attrs'];
+
+  /**
+   * Formats a message to plain text, dropping rich-text markers instead of
+   * throwing (unlike `t()`) or returning React nodes (unlike `t.rich()`).
+   *
+   * Useful when one catalog entry carries markup for the visible UI but the
+   * same text is also needed in `aria-label`, `title`, `alt` or `<meta>`.
+   */
+  tFn.plain = ((key: string, args?: FluentArgs): string => {
+    const built = buildFluentArgs(args as Record<string, unknown>);
+    return stripRichText(formatKey(key, built.args, built.rejected));
+  }) as Translations['plain'];
 
   tFn.has = (key: string): boolean => {
     const candidates = buildKeyCandidates(namespace, key, { strictNamespace });

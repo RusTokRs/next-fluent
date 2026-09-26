@@ -1,3 +1,5 @@
+import type { LocalePrefixConfig } from './types';
+
 const MAX_LOCALE_TAG_LENGTH = 64;
 const HTTP_QVALUE = /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/;
 
@@ -170,13 +172,69 @@ export function resolveAcceptLanguage(
 export interface BaseI18nConfig {
   locales: readonly string[];
   defaultLocale: string;
-  localePrefix?: string;
+  localePrefix?: LocalePrefixConfig;
   cookieName?: string;
   headerName?: string;
   loadMessages?: unknown;
 }
 
 const LOCALE_PREFIX_MODES = ['always', 'as-needed', 'never'] as const;
+
+/** Throws on malformed `localePrefix` maps so misconfiguration fails at boot. */
+export function validateLocalePrefix(
+  locales: readonly string[],
+  localePrefix?: LocalePrefixConfig
+): void {
+  if (localePrefix === undefined || typeof localePrefix === 'string') {
+    if (
+      localePrefix !== undefined &&
+      !LOCALE_PREFIX_MODES.includes(localePrefix as (typeof LOCALE_PREFIX_MODES)[number])
+    ) {
+      throw new Error(
+        `[next-fluent] "localePrefix" must be one of ${LOCALE_PREFIX_MODES.map((mode) => `"${mode}"`).join(', ')} (received "${localePrefix}").`
+      );
+    }
+    return;
+  }
+
+  const { mode, prefixes } = localePrefix;
+  if (mode !== undefined && !LOCALE_PREFIX_MODES.includes(mode)) {
+    throw new Error(
+      `[next-fluent] "localePrefix.mode" must be one of ${LOCALE_PREFIX_MODES.map((m) => `"${m}"`).join(', ')} (received "${mode}").`
+    );
+  }
+  if (prefixes === undefined) return;
+  if (typeof prefixes !== 'object' || prefixes === null) {
+    throw new Error('[next-fluent] "localePrefix.prefixes" must be an object.');
+  }
+
+  const seen = new Set<string>();
+  for (const [locale, prefix] of Object.entries(prefixes)) {
+    if (!matchSupportedLocale(locale, locales)) {
+      throw new Error(
+        `[next-fluent] "localePrefix.prefixes" contains an unsupported locale: "${locale}".`
+      );
+    }
+    if (
+      typeof prefix !== 'string' || !prefix.startsWith('/') || prefix.startsWith('//') ||
+      prefix.endsWith('/') || /[?#\\]/.test(prefix)
+    ) {
+      throw new Error(
+        `[next-fluent] "localePrefix.prefixes.${locale}" must be an absolute path without a trailing slash (received ${JSON.stringify(prefix)}).`
+      );
+    }
+    const identity = prefix.toLowerCase();
+    if (seen.has(identity)) {
+      throw new Error(`[next-fluent] Duplicate locale prefix: ${prefix}`);
+    }
+    for (const other of seen) {
+      if (other.startsWith(`${identity}/`) || identity.startsWith(`${other}/`)) {
+        throw new Error(`[next-fluent] Ambiguous locale prefixes: ${identity} and ${other}`);
+      }
+    }
+    seen.add(identity);
+  }
+}
 /** RFC 6265 cookie-name: token characters except `=`. */
 const VALID_COOKIE_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 /** RFC 9110 field-name: token characters. */
@@ -231,14 +289,7 @@ export function validateI18nConfig(options: BaseI18nConfig): void {
 
   // A mistyped prefix mode silently degrades to 'always' in the middleware and
   // to prefixed URLs in navigation, so reject unknown values up front.
-  if (
-    options.localePrefix !== undefined &&
-    !LOCALE_PREFIX_MODES.includes(options.localePrefix as (typeof LOCALE_PREFIX_MODES)[number])
-  ) {
-    throw new Error(
-      `[next-fluent] "localePrefix" must be one of ${LOCALE_PREFIX_MODES.map((mode) => `"${mode}"`).join(', ')} (received "${options.localePrefix}").`
-    );
-  }
+  validateLocalePrefix(options.locales, options.localePrefix);
 
   if (options.cookieName !== undefined && !VALID_COOKIE_NAME.test(options.cookieName)) {
     throw new Error(

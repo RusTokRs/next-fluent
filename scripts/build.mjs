@@ -48,11 +48,15 @@ for (const name of entryNames) {
 // Keep React's client boundary intact when importing from the package root.
 // These small facades re-export the separately built entries instead of
 // inlining them into a server or browser bundle.
-const sharedExports = `export * from './client.js';\nexport * from './navigation.js';\nexport * from './routing.js';\nexport * from './bundle.js';\nexport * from './pseudo.js';\nexport * from './typegen.js';\nexport * from './utils.js';\nexport {createDefaultFunctions, unwrapFluentValue} from './functions.js';\n`;
+// Build-time tools (`pseudo.js`, `typegen.js`) and the catalog analyzer
+// (`pick-messages.js`, `check.js`) pull in @fluent/syntax — a full FTL parser.
+// They are exposed through their own export paths instead of the app entries so
+// the browser bundle never pays for a parser it cannot use.
+const sharedExports = `export * from './client.js';\nexport * from './navigation.js';\nexport * from './routing.js';\nexport * from './bundle.js';\nexport * from './utils.js';\nexport * from './catalog.js';\nexport {createDefaultFunctions, unwrapFluentValue} from './functions.js';\n`;
 await writeFile(resolve(dist, 'index-browser.js'), sharedExports);
 await writeFile(
   resolve(dist, 'index-server.js'),
-  `export * from './server.js';\nexport * from './server-provider.js';\n${sharedExports}`
+  `export * from './server.js';\nexport * from './server-provider.js';\nexport * from './pick-messages.js';\nexport * from './check.js';\n${sharedExports}`
 );
 
 const tscBin = resolve(root, 'node_modules/typescript/bin/tsc');

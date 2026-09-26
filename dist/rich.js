@@ -12,6 +12,11 @@ function createReactElementToken(key) {
   return `${REACT_ELEMENT_TOKEN_PREFIX}${key}${REACT_ELEMENT_TOKEN_SUFFIX}`;
 }
 const TOKEN_OR_TAG_PATTERN = "(?:\\u2068)?\\uE000NF_EL_([a-zA-Z0-9_-]+)_\\uE001(?:\\u2069)?|<\\/?([a-zA-Z][a-zA-Z0-9_-]*)\\s*\\/?>";
+const STRIP_PATTERN = new RegExp(TOKEN_OR_TAG_PATTERN, "g");
+function stripRichText(text) {
+  if (!text.includes(REACT_ELEMENT_TOKEN_PREFIX) && !text.includes("<")) return text;
+  return text.replace(STRIP_PATTERN, "").replace(/[\u2068\u2069]/g, "");
+}
 function parseRichText(text, values) {
   if (!values) {
     return text;
@@ -119,5 +124,6 @@ export {
   REACT_ELEMENT_TOKEN_PREFIX,
   REACT_ELEMENT_TOKEN_SUFFIX,
   createReactElementToken,
-  parseRichText
+  parseRichText,
+  stripRichText
 };

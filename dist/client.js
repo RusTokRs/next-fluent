@@ -2,6 +2,7 @@
 import React, { createContext, forwardRef, useContext, useEffect, useMemo, useState } from "react";
 import NextLink from "next/link.js";
 import { createFluentBundle, createTranslator } from "./bundle.js";
+import { isJsonCatalog, jsonToFluent } from "./catalog.js";
 import { createFormatter } from "./formatter.js";
 import { computeSourceHash } from "./cache.js";
 import { resolveLocalizedPathname, switchLocaleHref } from "./nav-url.js";
@@ -30,30 +31,38 @@ function FluentProvider({
   getMessageFallback,
   children
 }) {
-  const messagesKey = useMemo(
-    () => typeof messages === "string" || Array.isArray(messages) ? computeSourceHash(messages) : null,
+  const normalizedMessages = useMemo(
+    () => isJsonCatalog(messages) ? jsonToFluent(messages) : messages,
     [messages]
   );
-  const fallbackMessagesKey = useMemo(
-    () => typeof fallbackMessages === "string" || Array.isArray(fallbackMessages) ? computeSourceHash(fallbackMessages) : null,
+  const normalizedFallbackMessages = useMemo(
+    () => isJsonCatalog(fallbackMessages) ? jsonToFluent(fallbackMessages) : fallbackMessages,
     [fallbackMessages]
   );
-  const bundleIdentity = messagesKey ?? messages;
-  const fallbackBundleIdentity = fallbackMessagesKey ?? fallbackMessages;
+  const messagesKey = useMemo(
+    () => typeof normalizedMessages === "string" || Array.isArray(normalizedMessages) ? computeSourceHash(normalizedMessages) : null,
+    [normalizedMessages]
+  );
+  const fallbackMessagesKey = useMemo(
+    () => typeof normalizedFallbackMessages === "string" || Array.isArray(normalizedFallbackMessages) ? computeSourceHash(normalizedFallbackMessages) : null,
+    [normalizedFallbackMessages]
+  );
+  const bundleIdentity = messagesKey ?? normalizedMessages;
+  const fallbackBundleIdentity = fallbackMessagesKey ?? normalizedFallbackMessages;
   const bundle = useMemo(() => {
-    if (!messages) return null;
-    if (typeof messages === "string" || Array.isArray(messages)) {
-      return createFluentBundle(locale, messages, { functions, useIsolating });
+    if (!normalizedMessages) return null;
+    if (typeof normalizedMessages === "string" || Array.isArray(normalizedMessages)) {
+      return createFluentBundle(locale, normalizedMessages, { functions, useIsolating });
     }
-    return messages;
+    return normalizedMessages;
   }, [locale, bundleIdentity, functions, useIsolating]);
   const fallbackBundle = useMemo(() => {
-    if (!fallbackMessages) return null;
+    if (!normalizedFallbackMessages) return null;
     const fLocale = fallbackLocale || "en";
-    if (typeof fallbackMessages === "string" || Array.isArray(fallbackMessages)) {
-      return createFluentBundle(fLocale, fallbackMessages, { functions, useIsolating });
+    if (typeof normalizedFallbackMessages === "string" || Array.isArray(normalizedFallbackMessages)) {
+      return createFluentBundle(fLocale, normalizedFallbackMessages, { functions, useIsolating });
     }
-    return fallbackMessages;
+    return normalizedFallbackMessages;
   }, [fallbackLocale, fallbackBundleIdentity, functions, useIsolating]);
   const resolvedFallbackBundles = useMemo(() => {
     if (fallbackBundles) {
@@ -68,7 +77,7 @@ function FluentProvider({
     () => ({
       locale,
       bundle,
-      messages: typeof messages === "string" || Array.isArray(messages) ? messages : void 0,
+      messages: typeof normalizedMessages === "string" || Array.isArray(normalizedMessages) ? normalizedMessages : void 0,
       fallbackLocale,
       fallbackBundle,
       fallbackBundles: resolvedFallbackBundles,
@@ -85,7 +94,7 @@ function FluentProvider({
     [
       locale,
       bundle,
-      messages,
+      normalizedMessages,
       fallbackLocale,
       fallbackBundle,
       resolvedFallbackBundles,
