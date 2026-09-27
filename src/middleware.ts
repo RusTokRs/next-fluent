@@ -216,13 +216,16 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
 
     /**
      * Writing `Set-Cookie` on every response makes pages uncacheable for
-     * browsers and CDNs, so it is limited to document requests where the
-     * stored locale would actually change.
+     * browsers and CDNs, so on a *successful* response it is limited to document
+     * requests. A locale-changing redirect is exempt: persisting the choice is
+     * the whole point of the redirect, and a `Set-Cookie` there does not make
+     * the target page uncacheable. Without it a client-side locale switch never
+     * sticks — the next prefix-less URL resolves back to the old cookie.
      */
-    const cookieValue = (effectiveLocale: string): string | null => {
+    const cookieValue = (effectiveLocale: string, isRedirect = false): string | null => {
       if (!cookieConfig) return null;
       const dest = request.headers.get('sec-fetch-dest');
-      if (dest && dest !== 'document') return null;
+      if (!isRedirect && dest && dest !== 'document') return null;
       const current = request.cookies.get(cookieConfig.name)?.value;
       if (current === effectiveLocale) return null;
       if (current === undefined && headerLocale === effectiveLocale) return null;
@@ -295,7 +298,7 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
       if (response.headers?.set) {
         response.headers.set(headerName, targetLocale);
       }
-      const cookie = cookieValue(targetLocale);
+      const cookie = cookieValue(targetLocale, true);
       if (cookie !== null && response.cookies?.set) {
         response.cookies.set(cookieConfig!.name, cookie, cookieConfig!.options);
       }
@@ -320,6 +323,24 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
      * target (and loop) consult the signal header — everywhere else the second
      * pass is already idempotent, so a spoofed header has no effect.
      */
+    // Next.js 16 hands a middleware rewrite to the client router as a redirect,
+    // where 15 kept it transparent. The rewrite target is the *internal* route
+    // (`/en/about` for the public `/about-us`), so the router requests it and is
+    // canonicalized straight back — an endless loop for every page that has a
+    // localized slug. Treating the internal target as a fixed point breaks it.
+    //
+    // Scoped to the router's own fetches: a typed-in URL is a top-level document
+    // navigation and still canonicalizes, so the internal path never becomes a
+    // public duplicate. `RSC` is no use here — Next strips it before middleware
+    // runs — so this reuses the `sec-fetch-dest` convention from `cookieValue`:
+    // browsers send `empty` for router fetches, `document` for navigations, and
+    // non-browser clients send neither and keep canonicalizing.
+    const secFetchDest = request.headers.get('sec-fetch-dest');
+    const isDocumentNavigation = secFetchDest === null || secFetchDest === 'document';
+    /** Whether `withoutPrefix` is exactly what the canonical path rewrites to. */
+    const isInternalTarget = (locale: string, withoutPrefix: string, canonical: string) =>
+      canonical !== withoutPrefix && internalPath(locale, canonical) === withoutPrefix;
+
     const isRewriteSignal =
       matchedPrefix !== undefined &&
       request.headers.get(REWRITE_SIGNAL_HEADER) === rawPathname;
@@ -357,6 +378,9 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
         }
         // Strip default locale prefix, canonicalizing the localized slug too.
         const canonical = canonicalPath(defaultLocale, pathnameWithoutPrefix);
+        if (!isDocumentNavigation && isInternalTarget(defaultLocale, pathnameWithoutPrefix, canonical)) {
+          return createSuccessResponse(defaultLocale);
+        }
         const remainingPath = `${canonical === '/' ? '/' : canonical}${search}`;
         return createRedirect(requestUrl(withBasePath(remainingPath)), defaultLocale);
       }
@@ -364,6 +388,9 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
         // Non-default locale with prefix
         if (!isRewriteSignal) {
           const canonical = canonicalPath(matchedPrefix, pathnameWithoutPrefix);
+          if (!isDocumentNavigation && isInternalTarget(matchedPrefix, pathnameWithoutPrefix, canonical)) {
+            return createSuccessResponse(matchedPrefix);
+          }
           if (canonical !== pathnameWithoutPrefix) {
             const prefix = prefixForLocale(matchedPrefix, prefixConfig);
             return createRedirect(
@@ -402,6 +429,9 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
     if (matchedPrefix) {
       if (!isRewriteSignal) {
         const canonical = canonicalPath(matchedPrefix, pathnameWithoutPrefix);
+        if (!isDocumentNavigation && isInternalTarget(matchedPrefix, pathnameWithoutPrefix, canonical)) {
+          return createSuccessResponse(matchedPrefix);
+        }
         if (canonical !== pathnameWithoutPrefix) {
           const prefix = prefixForLocale(matchedPrefix, prefixConfig);
           return createRedirect(

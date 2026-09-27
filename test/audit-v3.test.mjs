@@ -445,3 +445,38 @@ test('V3-19c: an explicit locale cookie outranks the slug', async () => {
   assert.equal(response.headers.get('x-next-locale'), 'en');
   assert.equal(new URL(response.headers.get('location')).pathname, '/about-us');
 });
+
+// Next.js 16 hands a middleware rewrite to the client router as a redirect,
+// where 15 kept it transparent. The router therefore really does request the
+// internal rewrite target (`/en/about` for the public `/about-us`), and
+// canonicalizing it straight back made every page with a localized slug loop.
+test('V3-20: a router fetch of the internal rewrite target is a fixed point', async () => {
+  const mw = createI18nMiddleware(routing);
+  const res = await mw(mockRequest('/en/about', { 'sec-fetch-dest': 'empty' }, 'en'));
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('location'), null);
+});
+
+test('V3-20b: the same internal path still canonicalizes for a document request', async () => {
+  const mw = createI18nMiddleware(routing);
+  const res = await mw(mockRequest('/en/about', { 'sec-fetch-dest': 'document' }, 'en'));
+  assert.equal(res.status, 307);
+  assert.equal(new URL(res.headers.get('location')).pathname, '/about-us');
+});
+
+// Without the cookie the next prefix-less URL resolves back to the old locale,
+// so a client-side locale switch silently undoes itself.
+test('V3-21: a locale-changing redirect persists the cookie for router fetches', async () => {
+  const mw = createI18nMiddleware(routing);
+  const res = await mw(mockRequest('/en/about-us', { 'sec-fetch-dest': 'empty' }, 'ru'));
+  assert.equal(res.status, 307);
+  assert.match(res.headers.get('set-cookie') ?? '', /NEXT_LOCALE=en/);
+});
+
+// The cacheability guard that motivated the document-only restriction.
+test('V3-22: a successful router fetch still writes no cookie', async () => {
+  const mw = createI18nMiddleware(routing);
+  const res = await mw(mockRequest('/about-us', { 'sec-fetch-dest': 'empty' }, 'en'));
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('set-cookie'), null);
+});

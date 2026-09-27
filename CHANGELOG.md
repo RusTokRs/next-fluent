@@ -125,6 +125,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Client-side navigation no longer loops forever on Next.js 16.** Next 16 hands
+  a middleware rewrite to the client router as a redirect, where 15 kept it
+  transparent. The rewrite target is the *internal* route (`/en/about` for the
+  public `/about-us`), so the router requested it and was canonicalized straight
+  back — an endless `307` loop for every page with a localized slug, in every
+  prefix mode. The internal target is now recognized as a fixed point. Scoped to
+  the router's own fetches via `sec-fetch-dest` (Next strips the `RSC` header
+  before middleware runs), so a typed-in `/en/about` is still a document
+  navigation and still canonicalizes — the internal path never becomes a public
+  duplicate.
+- **A client-side locale switch now sticks.** Restricting `Set-Cookie` to
+  document requests also suppressed it on locale-changing *redirects*, so a
+  `<Link locale="en">` navigation redirected without persisting the choice and
+  the next prefix-less URL resolved straight back to the old cookie. Redirects
+  are now exempt from that guard — persisting the locale is the point of the
+  redirect, and a cookie there does not make the target page uncacheable.
+  Successful non-document responses still write no cookie.
 - **Locale resolution no longer re-canonicalizes the configured locales on
   every request.** `Intl.getCanonicalLocales` ran once per configured locale per
   candidate, so matching the last of 184 locales cost ~113 us against ~29 us for
