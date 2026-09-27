@@ -206,6 +206,12 @@ function createI18nMiddleware(options) {
         return createSuccessResponse(matchedPrefix);
       }
       if (matchedPrefix) {
+        if (!isDocumentNavigation) {
+          const canonical2 = canonicalPath(matchedPrefix, pathnameWithoutPrefix);
+          if (isInternalTarget(matchedPrefix, pathnameWithoutPrefix, canonical2)) {
+            return createSuccessResponse(matchedPrefix);
+          }
+        }
         const remainingPath = `${pathnameWithoutPrefix === "/" ? "/" : pathnameWithoutPrefix}${search}`;
         return createRedirect(requestUrl(withBasePath(remainingPath)), matchedPrefix);
       }

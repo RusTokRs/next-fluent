@@ -480,3 +480,82 @@ test('V3-22: a successful router fetch still writes no cookie', async () => {
   assert.equal(res.status, 200);
   assert.equal(res.headers.get('set-cookie'), null);
 });
+
+/**
+ * Walks the middleware the way a client would, so a canonicalization cycle
+ * becomes a test failure instead of a hung browser.
+ *
+ * `next16` reproduces the behaviour that exposed the loop: Next.js 16 hands a
+ * middleware rewrite to the client router as a redirect, where 15 kept it
+ * transparent. Without modelling that, a cycle between a public slug and its
+ * internal rewrite target is invisible at this level.
+ */
+async function followMiddleware(mw, startPath, { cookie, dest, next16 = false, limit = 8 } = {}) {
+  const seen = [];
+  let path = startPath;
+  let currentCookie = cookie;
+  for (let hop = 1; hop <= limit; hop += 1) {
+    const res = await mw(mockRequest(path, { 'sec-fetch-dest': dest }, currentCookie));
+    const applied = /NEXT_LOCALE=([^;]+)/.exec(res.headers.get('set-cookie') ?? '');
+    if (applied) currentCookie = applied[1];
+    const rewrite =
+      next16 && dest !== 'document' ? res.headers.get('x-middleware-rewrite') : null;
+    const location = res.status >= 300 && res.status < 400 ? res.headers.get('location') : null;
+    const next = rewrite ?? location;
+    seen.push(`${path} -> ${res.status}${next ? ` ${new URL(next).pathname}` : ''}`);
+    if (!next) return { hops: hop, path, cookie: currentCookie, seen };
+    path = new URL(next).pathname;
+  }
+  throw new Error(`redirect cycle for ${startPath}: ${seen.join(' | ')}`);
+}
+
+const prefixModes = ['as-needed', 'always', 'never'];
+
+for (const mode of prefixModes) {
+  const modeRouting = { ...routing, localePrefix: mode };
+
+  // `/en/about-us` is the href a locale switch renders in every mode: a
+  // canonical prefixed URL under `as-needed`/`always`, a signal URL in `never`.
+  test(`V3-23 (${mode}): a router fetch settles instead of cycling`, async () => {
+    const mw = createI18nMiddleware(modeRouting);
+    const result = await followMiddleware(mw, '/en/about-us', {
+      cookie: 'ru',
+      dest: 'empty',
+      next16: true,
+    });
+    assert.ok(result.hops <= 4, `took ${result.hops} hops: ${result.seen.join(' | ')}`);
+    // The terminal state is the internal rewrite target, held there as a fixed
+    // point — that is what stops the cycle.
+    assert.equal(result.path, '/en/about');
+    if (mode === 'always') {
+      // `/en/about-us` is already canonical, so nothing redirects and no cookie
+      // is written. Deliberate: the only way to set one here would be on a 200,
+      // and a prefetch of a foreign-locale link would then change the locale.
+      assert.equal(result.cookie, 'ru');
+    } else {
+      assert.equal(result.cookie, 'en', 'the locale switch must persist');
+    }
+  });
+
+  test(`V3-24 (${mode}): a document navigation settles and persists`, async () => {
+    const mw = createI18nMiddleware(modeRouting);
+    const result = await followMiddleware(mw, '/en/about-us', {
+      cookie: 'ru',
+      dest: 'document',
+      next16: true,
+    });
+    assert.ok(result.hops <= 4, `took ${result.hops} hops: ${result.seen.join(' | ')}`);
+    assert.equal(result.cookie, 'en');
+    // A typed-in URL never ends on the internal path.
+    assert.notEqual(result.path, '/en/about');
+  });
+}
+
+// A prefetch must never move the visitor to another locale, which is why the
+// cookie stays restricted to redirects and document navigations.
+test('V3-25: a prefetch of a foreign-locale link does not change the cookie', async () => {
+  const mw = createI18nMiddleware({ ...routing, localePrefix: 'always' });
+  const res = await mw(mockRequest('/ru/o-nas', { 'sec-fetch-dest': 'empty' }, 'en'));
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('set-cookie'), null);
+});

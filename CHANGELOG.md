@@ -135,6 +135,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   before middleware runs), so a typed-in `/en/about` is still a document
   navigation and still canonicalizes — the internal path never becomes a public
   duplicate.
+- **The same loop also survived in `never` mode**, on a path no probe had
+  walked: stripping the prefix from the internal target `/en/about` yields
+  `/about`, which is not the canonical slug either (`/about-us` is), so the
+  router cycled `/en/about → /about → /about-us → /en/about`. Live `curl` traces
+  could not see it — curl does not follow `x-middleware-rewrite` — only a
+  simulation of Next 16's rewrite-as-redirect did. All three prefix modes are now
+  covered by tests that model that behaviour (V3-23/V3-24) plus a negative
+  control confirming they fail when the guard is removed.
 - **A client-side locale switch now sticks.** Restricting `Set-Cookie` to
   document requests also suppressed it on locale-changing *redirects*, so a
   `<Link locale="en">` navigation redirected without persisting the choice and

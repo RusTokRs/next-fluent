@@ -351,6 +351,16 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
         return createSuccessResponse(matchedPrefix!);
       }
       if (matchedPrefix) {
+        // Stripping the prefix here would send `/en/about` to `/about`, which is
+        // not the canonical slug either (`/about-us` is) — so the router, which
+        // Next 16 walks through the rewrite, cycles. The internal target has to
+        // be a fixed point in this strategy as well.
+        if (!isDocumentNavigation) {
+          const canonical = canonicalPath(matchedPrefix, pathnameWithoutPrefix);
+          if (isInternalTarget(matchedPrefix, pathnameWithoutPrefix, canonical)) {
+            return createSuccessResponse(matchedPrefix);
+          }
+        }
         const remainingPath = `${pathnameWithoutPrefix === '/' ? '/' : pathnameWithoutPrefix}${search}`;
         return createRedirect(requestUrl(withBasePath(remainingPath)), matchedPrefix);
       }
