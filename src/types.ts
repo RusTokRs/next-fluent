@@ -153,12 +153,21 @@ export type Pathnames<Locales extends readonly string[] = readonly string[]> = R
   string | Record<Locales[number] | string, string>
 >;
 
+/** Routing rules for a host (optionally including a non-default port). */
+export interface DomainConfig {
+  domain: string;
+  defaultLocale: string;
+  locales?: readonly string[];
+  /** Overrides the global localePrefix in full; omitted values inherit it. */
+  localePrefix?: LocalePrefixConfig;
+}
+
 export interface NavigationConfig<Locales extends readonly string[] = readonly string[]> {
   locales: Locales;
   defaultLocale: Locales[number] | string;
   localePrefix?: LocalePrefixConfig;
   pathnames?: Pathnames<Locales>;
-  domains?: readonly { domain: string; defaultLocale: string; locales?: readonly string[] }[];
+  domains?: readonly DomainConfig[];
   basePath?: string;
 }
 
@@ -203,6 +212,7 @@ export type NavigationHref<Routes extends string = string> = string extends Rout
 export interface GetPathnameOptions<Routes extends string = string> {
   href: NavigationHref<Routes>;
   locale?: string;
+  /** Current host, including its port. Used to select domain rules and keep same-domain URLs relative. */
   domain?: string;
   /**
    * Add the locale prefix even for the default locale, which `as-needed`
@@ -340,7 +350,7 @@ export interface I18nMiddlewareOptions {
   cookieName?: string;
   headerName?: string;
   pathnames?: Pathnames<any>;
-  domains?: readonly { domain: string; defaultLocale: string; locales?: readonly string[] }[];
+  domains?: readonly DomainConfig[];
   basePath?: string;
   /**
    * When set, requests whose Host does not match this allow-list receive `421
@@ -372,7 +382,7 @@ export interface I18nConfig {
   cookieName?: string;
   headerName?: string;
   pathnames?: Pathnames<any>;
-  domains?: readonly { domain: string; defaultLocale: string; locales?: readonly string[] }[];
+  domains?: readonly DomainConfig[];
   basePath?: string;
   trustedHosts?: readonly string[];
   localeCookie?: boolean | LocaleCookieConfig;

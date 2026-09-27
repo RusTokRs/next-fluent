@@ -1,10 +1,10 @@
 import type { NavigationConfig, Pathnames, UrlObject } from './types';
 import { matchSupportedLocale } from './utils';
 import { localizePath, rewriteLocalizedPath } from './route-engine';
+import { domainLocalePrefix, domainSupportsLocale, findDomain, findLocaleDomain } from './domain-routing';
 import {
   localeNeedsPrefix,
   matchLocalePrefix,
-  normalizeLocalePrefix,
   prefixForLocale,
 } from './locale-prefix';
 
@@ -128,7 +128,15 @@ export function resolveLocalizedPathname(
 ): string {
   const { href, locale: explicitLocale } = options;
   const { locales, defaultLocale, pathnames, domains, basePath = '' } = config;
-  const prefixConfig = normalizeLocalePrefix(locales, config.localePrefix);
+  const sourceDomain = findDomain(domains, options.domain);
+  const fallbackLocale = matchSupportedLocale(sourceDomain?.defaultLocale ?? defaultLocale, locales) ?? defaultLocale;
+  const resolvedLocale = matchSupportedLocale(explicitLocale, locales) ?? fallbackLocale;
+  const targetDomain = findLocaleDomain(domains, resolvedLocale, options.domain);
+  const resolvedDefaultLocale = targetDomain?.defaultLocale ?? defaultLocale;
+  const prefixConfig = domainLocalePrefix(locales, config.localePrefix, targetDomain);
+  const sourcePrefixConfig = sourceDomain && sourceDomain !== targetDomain
+    ? domainLocalePrefix(locales, config.localePrefix, sourceDomain)
+    : prefixConfig;
   const localePrefix = prefixConfig.mode;
 
   let rawPathname = '';
@@ -176,7 +184,7 @@ export function resolveLocalizedPathname(
   // Strip an existing locale prefix (including custom per-locale prefixes).
   let cleanPathname = rawPathname;
   let sourceLocale: string | undefined;
-  const prefixMatch = matchLocalePrefix(rawPathname, locales, prefixConfig);
+  const prefixMatch = matchLocalePrefix(rawPathname, locales, sourcePrefixConfig);
   if (prefixMatch) {
     sourceLocale = prefixMatch.locale;
     cleanPathname = prefixMatch.rest;
@@ -188,11 +196,6 @@ export function resolveLocalizedPathname(
     cleanPathname.length > 1 && cleanPathname.endsWith('/')
       ? cleanPathname.slice(0, -1)
       : cleanPathname;
-
-  const resolvedDefaultLocale = matchSupportedLocale(defaultLocale, locales) ?? defaultLocale;
-  const resolvedLocale = explicitLocale
-    ? (matchSupportedLocale(explicitLocale, locales) ?? resolvedDefaultLocale)
-    : resolvedDefaultLocale;
 
   // Localized pathname mapping (e.g. /about -> /about-us for 'en', /o-nas for 'ru')
   const localized = localizePath(
@@ -231,10 +234,6 @@ export function resolveLocalizedPathname(
     : mappedPathname;
 
   const withBasePath = `${basePath}${finalPath === '/' && basePath ? '' : finalPath}${search}${hash}`;
-  const targetDomain = domains?.find((entry) => {
-    const supported = entry.locales ?? [entry.defaultLocale];
-    return supported.some((locale) => matchSupportedLocale(resolvedLocale, [locale]));
-  });
   if (targetDomain && targetDomain.domain.toLowerCase() !== options.domain?.toLowerCase()) {
     return `https://${targetDomain.domain}${withBasePath}`;
   }
@@ -257,19 +256,20 @@ export function switchLocaleHref(
   config: NavigationConfig
 ): string {
   const { locales, basePath = '' } = config;
-  const prefixConfig = normalizeLocalePrefix(locales, config.localePrefix);
-  const localePrefix = prefixConfig.mode;
-  if (!explicitLocale || isExternalUrl(target) || target.startsWith('#')) {
-    return target;
-  }
+  if (!explicitLocale || target.startsWith('#')) return target;
   const locale = matchSupportedLocale(explicitLocale, locales);
   if (!locale) return target;
-  if (localePrefix === 'always') {
-    // Canonical hrefs already carry the target locale prefix.
-    return target;
-  }
-
+  const absolute = isExternalUrl(target);
   const url = new URL(target, 'https://next-fluent.invalid');
+  const domain = absolute ? findDomain(config.domains, url.host) : findLocaleDomain(config.domains, locale);
+  // Canonical URLs generated for a configured multi-locale domain still need
+  // a switch signal. Unrelated external links and single-locale hosts do not.
+  if (absolute && (!domain?.locales || domain.locales.length < 2 ||
+    !domainSupportsLocale(domain, locale) || !/^https?:$/.test(url.protocol))) return target;
+  const prefixConfig = domainLocalePrefix(locales, config.localePrefix, domain);
+  const localePrefix = prefixConfig.mode;
+  if (localePrefix === 'always') return target;
+
   const route =
     basePath && (url.pathname === basePath || url.pathname.startsWith(`${basePath}/`))
       ? url.pathname.slice(basePath.length) || '/'
@@ -284,7 +284,8 @@ export function switchLocaleHref(
     }
   }
 
-  return `${basePath}${prefixForLocale(locale, prefixConfig)}${route === '/' ? '' : route}${url.search}${url.hash}`;
+  const switched = `${basePath}${prefixForLocale(locale, prefixConfig)}${route === '/' ? '' : route}${url.search}${url.hash}`;
+  return absolute ? `${url.origin}${switched}` : switched;
 }
 
 /**

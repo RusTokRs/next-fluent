@@ -23,6 +23,23 @@ Useful subsets:
 | `npm run size` | minified/gzip budgets for the client entries |
 | `npm run test:next` | builds and boots the fixture app, asserts the prerender manifest and response headers |
 | `npm run test:next:browser` | the same, plus hydration in Chromium (requires `npx playwright-cli install-browser chromium`) |
+| `npm run test:next:domains` | Chromium against three HTTPS domains: prefix strategies, custom prefixes, basePath, locale cookies, route precedence, Link/router navigation and hreflang |
+
+### Multi-domain browser regression
+
+Requires OpenSSL and Chromium (on Linux: `npx playwright install --with-deps chromium`).
+Run `npm run test:next:domains`, or
+`NEXT_FLUENT_NEXT_VERSION=16 npm run test:next:domains` to install and test a
+separate Next.js major in the disposable fixture. CI runs this on Linux/Node 22
+against both Next 15 and 16. It is separate from `npm run check` so non-browser
+checks do not require downloading Chromium.
+
+The harness overlays `test/fixtures/domain-app` onto the standard fixture,
+builds a production app, and runs a local TLS reverse proxy on a random port.
+Chromium resolves `*.next-fluent.test` locally via a resolver rule; no DNS or
+`/etc/hosts` changes are needed. Temporary certificates, builds, browser contexts
+and servers are cleaned up on success or failure. `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`
+can select an already-installed compatible Chromium in restricted environments.
 
 ## `dist/` is committed
 
@@ -51,6 +68,15 @@ After changing `src/`, run `npm run build` and commit the result.
 - **One module instance per realm.** `scripts/build.mjs` transpiles each file
   separately instead of bundling, so caches and the request-config global are
   shared across entry points. Do not switch to a bundled build.
+- **Routing definitions are snapshots.** `defineRouting()` copies and freezes
+  supported nested configuration, but never freezes caller-owned containers.
+  Regression tests mutate the original data after configuration; keep that
+  isolation and the readonly return types when adding settings. The browser
+  fixture also mutates its source prefix/pathname dictionaries before use.
+- **Public prefixes are not `[locale]` values.** `/lang/ru/o-nas` must rewrite
+  to `/ru/about`, not `/lang/ru/about`. Rewrites use the original Next request
+  origin, while redirects and alternates use the public host. NextRequest keeps
+  `basePath` separately from `nextUrl.pathname`.
 - **The middleware runs twice per rewritten request.** The rewrite signal header
   is what stops the second pass from canonicalizing its own rewrite target; it
   is only honoured where a loop is otherwise possible.

@@ -1,5 +1,6 @@
 import { matchSupportedLocale, resolveAcceptLanguage, validateI18nConfig } from "./utils.js";
 import {
+  localeNeedsPrefix,
   matchLocalePrefix,
   normalizeLeadingSlashes,
   normalizeLocalePrefix,
@@ -13,6 +14,7 @@ import {
   validateRouteEnvironment
 } from "./route-engine.js";
 import { buildAlternateLinksHeader } from "./alternate-links.js";
+import { domainLocalePrefix, findLocaleDomain, replaceUrlHost } from "./domain-routing.js";
 const REWRITE_SIGNAL_HEADER = "x-next-fluent-rewrite";
 function hostMatchesTrustedList(requestHost, list) {
   const hostname = requestHost.replace(/:\d+$/, "");
@@ -57,8 +59,12 @@ function createI18nMiddleware(options) {
     alternateLinks = true
   } = options;
   const cookieConfig = resolveCookieConfig(options.localeCookie, cookieName);
-  const prefixConfig = normalizeLocalePrefix(allLocales, options.localePrefix);
-  const localePrefix = prefixConfig.mode;
+  const globalPrefixConfig = normalizeLocalePrefix(allLocales, options.localePrefix);
+  const internalPrefixConfig = normalizeLocalePrefix(allLocales);
+  const domainPrefixes = new Map(domains?.map((domain) => [
+    domain,
+    domainLocalePrefix(allLocales, options.localePrefix, domain)
+  ]));
   const configuredDefaultLocale = matchSupportedLocale(rawDefaultLocale, allLocales) ?? rawDefaultLocale;
   return async function middleware(request) {
     const { NextResponse } = await import("next/server.js").catch(() => import("next/server"));
@@ -71,7 +77,7 @@ function createI18nMiddleware(options) {
     if (rawHost && /^[^\s/?#@\\]+$/.test(rawHost)) {
       try {
         const parsedHost = new URL(`${requestOrigin.protocol}//${rawHost}`);
-        if (parsedHost.host === rawHost.toLowerCase()) requestOrigin.host = parsedHost.host;
+        if (parsedHost.host === rawHost.toLowerCase()) replaceUrlHost(requestOrigin, parsedHost.host);
       } catch {
       }
     }
@@ -84,15 +90,21 @@ function createI18nMiddleware(options) {
       return url.origin === requestOrigin.origin ? url : new URL("/", requestOrigin);
     };
     const domain = domains?.find((item) => item.domain.toLowerCase() === requestHost);
-    const locales = domain ? domain.locales ?? [domain.defaultLocale] : allLocales;
+    const locales = domain ? allLocales.filter((locale) => matchSupportedLocale(locale, domain.locales ?? [domain.defaultLocale])) : allLocales;
+    const prefixConfig = domain && domainPrefixes.get(domain) || globalPrefixConfig;
+    const localePrefix = prefixConfig.mode;
     const defaultLocale = matchSupportedLocale(
       domain?.defaultLocale ?? configuredDefaultLocale,
       locales
     ) ?? configuredDefaultLocale;
-    const hasBasePath = Boolean(basePath && (rawPathname === basePath || rawPathname.startsWith(`${basePath}/`)));
-    const pathname = hasBasePath ? rawPathname.slice(basePath.length) || "/" : rawPathname;
+    const separatedBasePath = Boolean(basePath && request.nextUrl.basePath === basePath);
+    const inlineBasePath = !separatedBasePath && Boolean(basePath && (rawPathname === basePath || rawPathname.startsWith(`${basePath}/`)));
+    const hasBasePath = inlineBasePath || separatedBasePath;
+    const pathname = inlineBasePath ? rawPathname.slice(basePath.length) || "/" : rawPathname;
     const withBasePath = (path) => hasBasePath ? `${basePath}${path}` : path;
-    const prefixMatch = matchLocalePrefix(pathname, locales, prefixConfig);
+    const publicPrefixMatch = matchLocalePrefix(pathname, locales, prefixConfig);
+    const internalPrefixMatch = matchLocalePrefix(pathname, locales, internalPrefixConfig);
+    const prefixMatch = publicPrefixMatch ?? internalPrefixMatch;
     const matchedPrefix = prefixMatch?.locale;
     const pathnameWithoutPrefix = prefixMatch ? prefixMatch.rest : pathname;
     const internalPath = (locale, externalPath) => {
@@ -141,12 +153,12 @@ function createI18nMiddleware(options) {
       if (rewritePath) {
         requestHeaders.set(
           REWRITE_SIGNAL_HEADER,
-          requestUrl(withBasePath(rewritePath)).pathname
+          requestUrl(rewritePath).pathname
         );
       } else {
         requestHeaders.delete(REWRITE_SIGNAL_HEADER);
       }
-      const response = rewritePath ? NextResponse.rewrite(requestUrl(withBasePath(rewritePath)), {
+      const response = rewritePath ? NextResponse.rewrite(new URL(normalizeLeadingSlashes(withBasePath(rewritePath)), request.url), {
         request: { headers: requestHeaders }
       }) : NextResponse.next({
         request: { headers: requestHeaders }
@@ -154,10 +166,10 @@ function createI18nMiddleware(options) {
       response.request ??= { headers: requestHeaders };
       if (response.headers?.set) {
         response.headers.set(headerName, effectiveLocale);
-        if (alternateLinks && localePrefix !== "never") {
+        if (alternateLinks) {
           const header = buildAlternateLinksHeader({
-            locales,
-            defaultLocale,
+            locales: allLocales,
+            defaultLocale: configuredDefaultLocale,
             localePrefix: options.localePrefix,
             pathname: pathnameWithoutPrefix,
             pathnames,
@@ -186,21 +198,33 @@ function createI18nMiddleware(options) {
       }
       return response;
     };
-    const globalPrefix = matchLocalePrefix(pathname, allLocales, prefixConfig)?.locale;
-    if (domain && globalPrefix && !matchSupportedLocale(globalPrefix, locales)) {
-      const targetDomain = domains?.find(
-        (item) => (item.locales ?? [item.defaultLocale]).some((locale) => matchSupportedLocale(globalPrefix, [locale]))
-      );
+    let foreignPrefix = matchLocalePrefix(pathname, allLocales, prefixConfig) ?? matchLocalePrefix(pathname, allLocales, globalPrefixConfig);
+    if (domain && !matchedPrefix && !foreignPrefix) {
+      for (const [candidate, prefixes] of domainPrefixes) {
+        const match = matchLocalePrefix(pathname, allLocales, prefixes);
+        if (candidate !== domain && match && !matchSupportedLocale(match.locale, locales)) {
+          foreignPrefix = match;
+          break;
+        }
+      }
+    }
+    if (domain && !matchedPrefix && foreignPrefix && !matchSupportedLocale(foreignPrefix.locale, locales)) {
+      const targetLocale = foreignPrefix.locale;
+      const targetDomain = findLocaleDomain(domains, targetLocale);
       if (targetDomain) {
+        const targetPrefix = domainPrefixes.get(targetDomain);
+        const prefix = localeNeedsPrefix(targetLocale, targetDomain.defaultLocale, targetPrefix.mode) ? prefixForLocale(targetLocale, targetPrefix) : "";
+        const canonical2 = canonicalPath(targetLocale, foreignPrefix.rest);
         const targetUrl = new URL(requestOrigin);
-        targetUrl.host = targetDomain.domain;
-        return createRedirect(targetUrl, globalPrefix);
+        replaceUrlHost(targetUrl, targetDomain.domain);
+        targetUrl.pathname = withBasePath(`${prefix}${canonical2 === "/" && prefix ? "" : canonical2}`);
+        return createRedirect(targetUrl, targetLocale);
       }
     }
     const secFetchDest = request.headers.get("sec-fetch-dest");
     const isDocumentNavigation = secFetchDest === null || secFetchDest === "document";
-    const isInternalTarget = (locale, withoutPrefix, canonical2) => canonical2 !== withoutPrefix && internalPath(locale, canonical2) === withoutPrefix;
-    const isRewriteSignal = matchedPrefix !== void 0 && request.headers.get(REWRITE_SIGNAL_HEADER) === rawPathname;
+    const isInternalTarget = (locale, withoutPrefix, canonical2) => internalPrefixMatch?.locale === locale && (canonical2 !== withoutPrefix || prefixForLocale(locale, prefixConfig) !== `/${locale}`) && internalPath(locale, canonical2) === withoutPrefix;
+    const isRewriteSignal = matchedPrefix !== void 0 && request.headers.get(REWRITE_SIGNAL_HEADER) === pathname;
     if (localePrefix === "never") {
       if (isRewriteSignal) {
         return createSuccessResponse(matchedPrefix);
@@ -225,7 +249,7 @@ function createI18nMiddleware(options) {
         }
       }
       const route = internalPath(preferredLocale, pathname);
-      const rewritePath = `${prefixForLocale(preferredLocale, prefixConfig)}${route === "/" ? "" : route}${search}`;
+      const rewritePath = `/${preferredLocale}${route === "/" ? "" : route}${search}`;
       return createSuccessResponse(preferredLocale, rewritePath);
     }
     if (localePrefix === "as-needed") {
@@ -246,7 +270,7 @@ function createI18nMiddleware(options) {
           if (!isDocumentNavigation && isInternalTarget(matchedPrefix, pathnameWithoutPrefix, canonical2)) {
             return createSuccessResponse(matchedPrefix);
           }
-          if (canonical2 !== pathnameWithoutPrefix) {
+          if (canonical2 !== pathnameWithoutPrefix || !publicPrefixMatch) {
             const prefix = prefixForLocale(matchedPrefix, prefixConfig);
             return createRedirect(
               requestUrl(withBasePath(`${prefix}${canonical2 === "/" ? "" : canonical2}${search}`)),
@@ -255,7 +279,8 @@ function createI18nMiddleware(options) {
           }
         }
         const route = internalPath(matchedPrefix, pathnameWithoutPrefix);
-        const rewritePath = route === pathnameWithoutPrefix ? void 0 : `${prefixForLocale(matchedPrefix, prefixConfig)}${route === "/" ? "" : route}${search}`;
+        const internal = `/${matchedPrefix}${route === "/" ? "" : route}`;
+        const rewritePath = internal === pathname ? void 0 : `${internal}${search}`;
         return createSuccessResponse(matchedPrefix, rewritePath);
       }
       if (preferredLocale === defaultLocale) {
@@ -269,7 +294,7 @@ function createI18nMiddleware(options) {
           }
         }
         const route = internalPath(defaultLocale, pathname);
-        const rewritePath = `${prefixForLocale(defaultLocale, prefixConfig)}${route === "/" ? "" : route}${search}`;
+        const rewritePath = `/${defaultLocale}${route === "/" ? "" : route}${search}`;
         return createSuccessResponse(defaultLocale, rewritePath);
       }
       const targetPath2 = `${prefixForLocale(preferredLocale, prefixConfig)}${pathname === "/" ? "" : pathname}${search}`;
@@ -281,7 +306,7 @@ function createI18nMiddleware(options) {
         if (!isDocumentNavigation && isInternalTarget(matchedPrefix, pathnameWithoutPrefix, canonical2)) {
           return createSuccessResponse(matchedPrefix);
         }
-        if (canonical2 !== pathnameWithoutPrefix) {
+        if (canonical2 !== pathnameWithoutPrefix || !publicPrefixMatch) {
           const prefix = prefixForLocale(matchedPrefix, prefixConfig);
           return createRedirect(
             requestUrl(withBasePath(`${prefix}${canonical2 === "/" ? "" : canonical2}${search}`)),
@@ -290,7 +315,8 @@ function createI18nMiddleware(options) {
         }
       }
       const route = internalPath(matchedPrefix, pathnameWithoutPrefix);
-      const rewritePath = route === pathnameWithoutPrefix ? void 0 : `${prefixForLocale(matchedPrefix, prefixConfig)}${route === "/" ? "" : route}${search}`;
+      const internal = `/${matchedPrefix}${route === "/" ? "" : route}`;
+      const rewritePath = internal === pathname ? void 0 : `${internal}${search}`;
       return createSuccessResponse(matchedPrefix, rewritePath);
     }
     const canonical = canonicalPath(preferredLocale, pathname);

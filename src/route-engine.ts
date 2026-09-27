@@ -1,5 +1,5 @@
-import type { Pathnames } from './types';
-import { matchSupportedLocale } from './utils';
+import type { DomainConfig, Pathnames } from './types';
+import { matchSupportedLocale, validateLocalePrefix } from './utils';
 
 type Params = Record<string, string | string[]>;
 interface Match { template: string; params: Params; }
@@ -45,8 +45,16 @@ function matchTemplate(template: string, pathname: string): Params | null {
   return index === actual.length ? params : null;
 }
 
-function specificity(template: string): number {
-  return segments(template).reduce((score, part) => score + (parameter(part) ? 0 : 10), 0);
+/**
+ * Lexicographic segment priority: static > single > catch-all > optional.
+ * A terminator ranks highest so /docs wins over /docs/[[...slug]] on /docs.
+ * Counting static segments alone loses precedence at the first differing slot.
+ */
+function specificity(template: string): string {
+  return segments(template).map((part) => {
+    const kind = parameter(part)?.kind;
+    return kind === 'optional' ? '1' : kind === 'many' ? '2' : kind === 'one' ? '3' : '4';
+  }).join('') + '5';
 }
 
 export function externalTemplate(
@@ -64,15 +72,27 @@ export function findInternalPath(
   pathnames?: Pathnames<any>
 ): Match | null {
   if (!pathnames) return null;
-  const entries = Object.keys(pathnames).sort((a, b) => specificity(b) - specificity(a));
-  for (const internal of entries) {
-    const external = externalTemplate(internal, locale, pathnames);
-    const params = matchTemplate(external, pathname);
-    if (params) return { template: internal, params };
+  // A parameterized internal key explicitly identifies a route, rather than a
+  // concrete public URL that a translated catch-all is allowed to capture.
+  if (Object.hasOwn(pathnames, pathname) && segments(pathname).some(parameter)) {
+    return { template: pathname, params: matchTemplate(pathname, pathname)! };
   }
-  for (const internal of entries) {
-    const params = matchTemplate(internal, pathname);
-    if (params) return { template: internal, params };
+  const entries = Object.keys(pathnames);
+  // Public templates take precedence over internal fallbacks. Rank the actual
+  // template being matched in each pass; a localized route may have a very
+  // different structure from its internal key.
+  for (const localized of [true, false]) {
+    let best: Match | null = null;
+    let bestRank = '';
+    for (const internal of entries) {
+      const template = localized ? externalTemplate(internal, locale, pathnames) : internal;
+      const params = matchTemplate(template, pathname);
+      if (!params) continue;
+      // Exact supplied templates outrank incidental parameter captures.
+      const rank = template === pathname ? '6' : specificity(template);
+      if (rank > bestRank) { best = { template: internal, params }; bestRank = rank; }
+    }
+    if (best) return best;
   }
   return null;
 }
@@ -168,7 +188,7 @@ export function validatePathnames(locales: readonly string[], pathnames?: Pathna
 
 export function validateRouteEnvironment(
   locales: readonly string[],
-  domains?: readonly { domain: string; defaultLocale: string; locales?: readonly string[] }[],
+  domains?: readonly DomainConfig[],
   basePath?: string
 ): void {
   if (basePath !== undefined && (basePath !== '' && (
@@ -192,10 +212,11 @@ export function validateRouteEnvironment(
     if (!matchSupportedLocale(entry.defaultLocale, domainLocales)) {
       throw new Error(`[next-fluent] Domain defaultLocale must be in its locales: ${entry.domain}`);
     }
-    for (const locale of domainLocales) {
-      if (!matchSupportedLocale(locale, locales)) {
-        throw new Error(`[next-fluent] Unsupported domain locale: ${locale}`);
-      }
-    }
+    const canonicalLocales = domainLocales.map((locale) => {
+      const supported = matchSupportedLocale(locale, locales);
+      if (!supported) throw new Error(`[next-fluent] Unsupported domain locale: ${locale}`);
+      return supported;
+    });
+    validateLocalePrefix(canonicalLocales, entry.localePrefix);
   }
 }

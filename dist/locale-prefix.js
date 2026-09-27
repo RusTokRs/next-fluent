@@ -4,16 +4,17 @@ function normalizeLeadingSlashes(path) {
   if (!LEADING_SLASH_RUN.test(path)) return path;
   return `/${path.replace(LEADING_SLASH_RUN, "")}`;
 }
-function canonicalKey(locales, locale) {
-  return matchSupportedLocale(locale, locales);
-}
 function normalizeLocalePrefix(locales, localePrefix) {
   const mode = typeof localePrefix === "object" && localePrefix !== null ? localePrefix.mode ?? "always" : localePrefix ?? "always";
   const raw = typeof localePrefix === "object" && localePrefix !== null ? localePrefix.prefixes : void 0;
+  const custom = /* @__PURE__ */ new Map();
+  for (const [key, prefix] of Object.entries(raw ?? {})) {
+    const locale = matchSupportedLocale(key, locales);
+    if (locale && !custom.has(locale)) custom.set(locale, prefix);
+  }
   const prefixes = {};
   for (const locale of locales) {
-    const custom = raw ? Object.entries(raw).find(([key]) => canonicalKey(locales, key) === locale) : void 0;
-    prefixes[locale] = custom?.[1] ?? `/${locale}`;
+    prefixes[locale] = custom.get(locale) ?? `/${locale}`;
   }
   return { mode, prefixes };
 }
@@ -29,7 +30,7 @@ const prefixTables = /* @__PURE__ */ new WeakMap();
 function sortedPrefixEntries(locales, config) {
   let byConfig = prefixTables.get(locales);
   if (!byConfig) {
-    byConfig = /* @__PURE__ */ new Map();
+    byConfig = /* @__PURE__ */ new WeakMap();
     prefixTables.set(locales, byConfig);
   }
   let entries = byConfig.get(config);

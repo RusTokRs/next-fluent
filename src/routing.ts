@@ -1,12 +1,8 @@
-import type { LocaleCookieConfig, LocalePrefixConfig } from './types';
+import type { DomainConfig, LocaleCookieConfig, LocalePrefixConfig } from './types';
 import { validateI18nConfig } from './utils';
 import { validatePathnames, validateRouteEnvironment } from './route-engine';
 
-export interface DomainConfig {
-  domain: string;
-  defaultLocale: string;
-  locales?: readonly string[];
-}
+export type { DomainConfig } from './types';
 
 export type Pathnames<Locales extends readonly string[] = readonly string[]> = Record<
   string,
@@ -28,42 +24,51 @@ export interface RoutingConfig<Locales extends readonly string[] = readonly stri
   trustedHosts?: readonly string[];
 }
 
+/** Readonly properties and tuples for the plain data returned by defineRouting. */
+type Immutable<T> = T extends object ? { readonly [Key in keyof T]: Immutable<T[Key]> } : T;
+
+/** Snapshot routing data without ever freezing a caller-owned object. */
+function copyAndFreeze<T>(value: T, copies = new WeakMap<object, unknown>()): Immutable<T> {
+  if (value === null || typeof value !== 'object') return value as Immutable<T>;
+  const prototype = Object.getPrototypeOf(value);
+  // Routing settings are plain records/arrays. Preserve opaque extension values
+  // (e.g. application metadata containing a Date) rather than corrupting them.
+  if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) {
+    return value as Immutable<T>;
+  }
+  const existing = copies.get(value);
+  if (existing) return existing as Immutable<T>;
+  const copy = Array.isArray(value) ? [...value] : { ...value };
+  copies.set(value, copy);
+  for (const key of Reflect.ownKeys(copy)) {
+    Object.defineProperty(copy, key, { value: copyAndFreeze(Reflect.get(copy, key), copies) });
+  }
+  return Object.freeze(copy) as Immutable<T>;
+}
+
 /**
  * Defines the central routing configuration for next-fluent.
- * Validates configuration and provides type-safe inference for locales and pathnames.
+ * Returns an independent, deeply frozen snapshot of the supported settings,
+ * preserving type-safe inference for locales and pathnames.
  */
 export function defineRouting<
   const Locales extends readonly string[],
   const Routes extends Pathnames<Locales>
->(config: Omit<RoutingConfig<Locales>, 'pathnames'> & { pathnames: Routes }): Omit<RoutingConfig<Locales>, 'pathnames'> & { pathnames: Routes };
+>(config: Omit<RoutingConfig<Locales>, 'pathnames'> & { pathnames: Routes }): Immutable<Omit<RoutingConfig<Locales>, 'pathnames'> & { pathnames: Routes }>;
 export function defineRouting<const Locales extends readonly string[]>(
   config: RoutingConfig<Locales>
-): RoutingConfig<Locales>;
+): Immutable<RoutingConfig<Locales>>;
 export function defineRouting<const Locales extends readonly string[]>(
   config: RoutingConfig<Locales>
-): RoutingConfig<Locales> {
-  validateI18nConfig({
-    locales: config.locales,
-    defaultLocale: config.defaultLocale,
-    localePrefix: config.localePrefix,
-    cookieName: config.cookieName,
-    headerName: config.headerName,
-  });
-  validatePathnames(config.locales, config.pathnames);
-  validateRouteEnvironment(config.locales, config.domains, config.basePath);
-
-  // The returned config is frozen, but a spread does not freeze the arrays
-  // inside it — and `matchLocalePrefix` memoizes its prefix table by the
-  // identity of `locales`, so a later `routing.locales.push(...)` would leave a
-  // stale table behind. Snapshotting and freezing here makes the `readonly` in
-  // the type true at runtime, and keeps routing behaviour from changing under
-  // the caller if they reuse the array elsewhere.
-  return Object.freeze({
-    ...config,
-    // Same elements, same order, so the inferred tuple type still describes it.
-    locales: Object.freeze([...config.locales]) as Locales,
-    localePrefix: config.localePrefix ?? 'always',
-    cookieName: config.cookieName ?? 'NEXT_LOCALE',
-    headerName: config.headerName ?? 'x-next-locale',
-  });
+): Immutable<RoutingConfig<Locales>> {
+  const normalized = { ...config };
+  if (normalized.localePrefix === undefined) normalized.localePrefix = 'always';
+  normalized.cookieName ??= 'NEXT_LOCALE';
+  normalized.headerName ??= 'x-next-locale';
+  const snapshot = copyAndFreeze(normalized);
+  // Validate the exact snapshot consumers will read, not the mutable input.
+  validateI18nConfig(snapshot);
+  validatePathnames(snapshot.locales, snapshot.pathnames);
+  validateRouteEnvironment(snapshot.locales, snapshot.domains, snapshot.basePath);
+  return snapshot;
 }

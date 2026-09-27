@@ -4,6 +4,8 @@ export interface NextMiddlewareRequestLike {
     nextUrl: {
         pathname: string;
         search: string;
+        /** Next.js exposes basePath separately from pathname. */
+        basePath?: string;
     };
     cookies: {
         get(name: string): {

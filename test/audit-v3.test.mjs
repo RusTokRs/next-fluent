@@ -293,7 +293,7 @@ test('V3-18: middleware emits hreflang alternates including x-default', async ()
   assert.ok(link.includes('hreflang="x-default"'), link);
 });
 
-test('V3-18: alternates can be disabled and are skipped for localePrefix "never"', async () => {
+test('V3-18: alternates can be disabled; never emits distinct localized URLs', async () => {
   const disabled = await createI18nMiddleware({ ...routing, alternateLinks: false })(
     mockRequest('/ru/o-nas')
   );
@@ -302,7 +302,11 @@ test('V3-18: alternates can be disabled and are skipped for localePrefix "never"
   const never = await createI18nMiddleware({ ...routing, localePrefix: 'never' })(
     mockRequest('/o-nas')
   );
-  assert.equal(never.headers.get('link'), null);
+  assert.match(never.headers.get('link'), /<http:\/\/localhost:3000\/o-nas>; rel="alternate"; hreflang="ru"/);
+  const ambiguous = await createI18nMiddleware({ ...routing, localePrefix: 'never', pathnames: undefined })(
+    mockRequest('/about')
+  );
+  assert.equal(ambiguous.headers.get('link'), null);
 });
 
 test('V3-18: alternates keep dynamic route parameters and honor domains', () => {

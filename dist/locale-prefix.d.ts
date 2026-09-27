@@ -21,4 +21,5 @@ export declare function normalizeLocalePrefix(locales: readonly string[], locale
 export declare function prefixForLocale(locale: string, config: NormalizedLocalePrefix): string;
 /** Whether a locale carries a prefix in generated URLs at all. */
 export declare function localeNeedsPrefix(locale: string, defaultLocale: string, mode: LocalePrefixMode): boolean;
+/** Match longest prefixes first and return the locale plus the unprefixed path. */
 export declare function matchLocalePrefix(pathname: string, locales: readonly string[], config: NormalizedLocalePrefix): LocalePrefixMatch | null;

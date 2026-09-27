@@ -1,6 +1,6 @@
 import { useTranslations, useMessages, FluentProvider } from '../../dist/client.js';
 import { getTranslations, getFormatter, setRequestConfig } from '../../dist/server.js';
-import { defineRouting } from '../../dist/routing.js';
+import { defineRouting, type DomainConfig } from '../../dist/routing.js';
 import { createNavigation } from '../../dist/navigation.js';
 import { hasLocale } from '../../dist/utils.js';
 import { FluentErrorCode } from '../../dist/errors.js';
@@ -140,3 +140,84 @@ export function JsonProviderConsumer({ children }: { children: ReactNode }) {
     children,
   });
 }
+
+// Domain overrides flow through all configuration entry points.
+import type { I18nConfig, I18nMiddlewareOptions, NavigationConfig } from '../../dist/types.js';
+const domain: DomainConfig = {
+  domain: 'example.com', defaultLocale: 'en', locales: ['en', 'ru'],
+  localePrefix: { mode: 'as-needed', prefixes: { ru: '/russian' } },
+};
+const domainRouting = defineRouting({
+  locales: ['en', 'ru'] as const, defaultLocale: 'en', domains: [domain],
+});
+const domainMiddleware: I18nMiddlewareOptions = domainRouting;
+const domainNavigation: NavigationConfig = domainRouting;
+const domainFactory: I18nConfig = domainRouting;
+createNavigation(domainNavigation);
+void domainMiddleware;
+void domainFactory;
+// @ts-expect-error Unknown domain prefix mode
+const invalidDomain: DomainConfig = { domain: 'example.com', defaultLocale: 'en', localePrefix: 'sometimes' };
+void invalidDomain;
+
+function immutableRoutingConsumer() {
+  // A mutable input (rather than `as const`) ensures readonly comes from the API.
+  const input = {
+    locales: ['en', 'ru'] as ['en', 'ru'], defaultLocale: 'en' as const,
+    localePrefix: { mode: 'always' as const, prefixes: { ru: '/rus' } },
+    pathnames: { '/products/[id]': { en: '/products/[id]', ru: '/tovary/[id]' } },
+    domains: [{ domain: 'example.com', defaultLocale: 'en', locales: ['en', 'ru'],
+      localePrefix: { mode: 'as-needed' as const, prefixes: { ru: '/russian' } } }],
+    localeCookie: { name: 'LANG', path: '/' }, trustedHosts: ['example.com'],
+  };
+  const immutable = defineRouting(input);
+  const locales: readonly ['en', 'ru'] = immutable.locales;
+  const middleware: I18nMiddlewareOptions = immutable;
+  const factory: I18nConfig = immutable;
+  const nav = createNavigation(immutable);
+  nav.getPathname({ href: { pathname: '/products/[id]', query: { id: 42 } }, locale: 'ru' });
+  // @ts-expect-error Locale inference is retained
+  nav.getPathname({ href: { pathname: '/products/[id]', query: { id: 42 } }, locale: 'de' });
+  // @ts-expect-error Route inference is retained
+  nav.getPathname({ href: '/unknown' });
+  // @ts-expect-error Required parameter inference is retained
+  nav.getPathname({ href: { pathname: '/products/[id]', query: {} } });
+  // @ts-expect-error Root settings are readonly
+  immutable.defaultLocale = 'en';
+  // @ts-expect-error Locales are a readonly tuple
+  immutable.locales.push('en');
+  if (typeof immutable.localePrefix === 'object') {
+    // @ts-expect-error Global prefix mode is readonly
+    immutable.localePrefix.mode = 'always';
+    // @ts-expect-error Global prefix entries are readonly
+    immutable.localePrefix.prefixes!.ru = '/changed';
+  }
+  // @ts-expect-error Translated pathnames are readonly
+  immutable.pathnames['/products/[id]'].ru = '/changed/[id]';
+  // @ts-expect-error Route entries are readonly
+  immutable.pathnames['/products/[id]'] = input.pathnames['/products/[id]'];
+  // @ts-expect-error Domain properties are readonly
+  immutable.domains![0].domain = 'changed.test';
+  // @ts-expect-error Domain locale arrays are readonly
+  immutable.domains![0].locales!.push('ru');
+  const prefix = immutable.domains![0].localePrefix;
+  if (typeof prefix === 'object') {
+    // @ts-expect-error Domain prefix entries are readonly
+    prefix.prefixes!.ru = '/changed';
+  }
+  if (typeof immutable.localeCookie === 'object') {
+    // @ts-expect-error Cookie options are readonly
+    immutable.localeCookie.name = 'CHANGED';
+  }
+  // @ts-expect-error Trusted hosts are readonly
+  immutable.trustedHosts![0] = 'changed.test';
+
+  // The input remains mutable, and both defineRouting overloads are readonly.
+  input.localePrefix.prefixes.ru = '/new';
+  input.domains[0].locales.push('en');
+  const withoutPathnames = defineRouting({ locales: ['en'], defaultLocale: 'en' });
+  // @ts-expect-error Readonly also applies to the overload without pathnames
+  withoutPathnames.defaultLocale = 'en';
+  void locales; void middleware; void factory;
+}
+void immutableRoutingConsumer;

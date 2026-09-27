@@ -1,6 +1,7 @@
 "use client";
 import React, { createContext, forwardRef, useContext, useEffect, useMemo, useState } from "react";
 import NextLink from "next/link.js";
+import { domainLocalePrefix, findLocaleDomain } from "./domain-routing.js";
 import { createFluentBundle, createTranslator } from "./bundle.js";
 import { isJsonCatalog, jsonToFluent } from "./catalog.js";
 import { createFormatter } from "./formatter.js";
@@ -225,7 +226,11 @@ const LocalizedLink = forwardRef(
       // on, and the middleware settles it with a redirect — prefetching that
       // would fetch a page nobody lands on. A forced prefix is already
       // unambiguous, so it prefetches like `always` does.
-      prefetch: propLocale && !forcePrefix && navConfig.localePrefix !== "always" ? false : rest.prefetch,
+      prefetch: propLocale && !forcePrefix && domainLocalePrefix(
+        navConfig.locales,
+        navConfig.localePrefix,
+        findLocaleDomain(navConfig.domains, targetLocale)
+      ).mode !== "always" ? false : rest.prefetch,
       ref
     });
   }

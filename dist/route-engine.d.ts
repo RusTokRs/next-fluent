@@ -1,4 +1,4 @@
-import type { Pathnames } from './types';
+import type { DomainConfig, Pathnames } from './types';
 type Params = Record<string, string | string[]>;
 interface Match {
     template: string;
@@ -13,9 +13,5 @@ export declare function localizePath(pathname: string, sourceLocale: string, tar
 };
 export declare function rewriteLocalizedPath(pathname: string, locale: string, pathnames?: Pathnames<any>): string;
 export declare function validatePathnames(locales: readonly string[], pathnames?: Pathnames<any>): void;
-export declare function validateRouteEnvironment(locales: readonly string[], domains?: readonly {
-    domain: string;
-    defaultLocale: string;
-    locales?: readonly string[];
-}[], basePath?: string): void;
+export declare function validateRouteEnvironment(locales: readonly string[], domains?: readonly DomainConfig[], basePath?: string): void;
 export {};

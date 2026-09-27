@@ -21,6 +21,7 @@ import {
   switchLocaleHref,
 } from './nav-url';
 import { LocalizedLink, useLocale } from './client';
+import { domainLocalePrefix, findLocaleDomain } from './domain-routing';
 
 // Pure URL helpers stay available from this entry for backwards compatibility.
 export { formatUrlObject, resolveLocalizedPathname, assertSafeHref, isExternalUrl } from './nav-url';
@@ -73,8 +74,8 @@ export function createNavigation<Locales extends readonly string[] = readonly st
     const prefixMatch = matchLocalePrefix(
       rawPathname,
       locales,
-      normalizeLocalePrefix(locales, config.localePrefix)
-    );
+      domainLocalePrefix(locales, config.localePrefix, findLocaleDomain(config.domains, currentLocale))
+    ) ?? matchLocalePrefix(rawPathname, locales, normalizeLocalePrefix(locales));
     const cleanPathname = prefixMatch ? prefixMatch.rest : rawPathname;
     if (cleanPathname === '/') return '/';
 
@@ -118,7 +119,9 @@ export function createNavigation<Locales extends readonly string[] = readonly st
           return router.replace(target, routerOptions);
         },
         prefetch(href: Href, options?: { locale?: string; forcePrefix?: boolean }) {
-          if (options?.locale && config.localePrefix !== 'always') return;
+          if (options?.locale && domainLocalePrefix(
+            locales, config.localePrefix, findLocaleDomain(config.domains, options.locale)
+          ).mode !== 'always') return;
           const targetLocale = options?.locale ?? currentLocale ?? defaultLocale;
           const target = getPathname({
             href,

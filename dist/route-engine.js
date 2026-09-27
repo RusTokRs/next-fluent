@@ -1,4 +1,4 @@
-import { matchSupportedLocale } from "./utils.js";
+import { matchSupportedLocale, validateLocalePrefix } from "./utils.js";
 function segments(path) {
   return path.split("/").filter(Boolean);
 }
@@ -41,7 +41,10 @@ function matchTemplate(template, pathname) {
   return index === actual.length ? params : null;
 }
 function specificity(template) {
-  return segments(template).reduce((score, part) => score + (parameter(part) ? 0 : 10), 0);
+  return segments(template).map((part) => {
+    const kind = parameter(part)?.kind;
+    return kind === "optional" ? "1" : kind === "many" ? "2" : kind === "one" ? "3" : "4";
+  }).join("") + "5";
 }
 function externalTemplate(internal, locale, pathnames) {
   const mapped = pathnames?.[internal];
@@ -49,15 +52,24 @@ function externalTemplate(internal, locale, pathnames) {
 }
 function findInternalPath(pathname, locale, pathnames) {
   if (!pathnames) return null;
-  const entries = Object.keys(pathnames).sort((a, b) => specificity(b) - specificity(a));
-  for (const internal of entries) {
-    const external = externalTemplate(internal, locale, pathnames);
-    const params = matchTemplate(external, pathname);
-    if (params) return { template: internal, params };
+  if (Object.hasOwn(pathnames, pathname) && segments(pathname).some(parameter)) {
+    return { template: pathname, params: matchTemplate(pathname, pathname) };
   }
-  for (const internal of entries) {
-    const params = matchTemplate(internal, pathname);
-    if (params) return { template: internal, params };
+  const entries = Object.keys(pathnames);
+  for (const localized of [true, false]) {
+    let best = null;
+    let bestRank = "";
+    for (const internal of entries) {
+      const template = localized ? externalTemplate(internal, locale, pathnames) : internal;
+      const params = matchTemplate(template, pathname);
+      if (!params) continue;
+      const rank = template === pathname ? "6" : specificity(template);
+      if (rank > bestRank) {
+        best = { template: internal, params };
+        bestRank = rank;
+      }
+    }
+    if (best) return best;
   }
   return null;
 }
@@ -158,11 +170,12 @@ function validateRouteEnvironment(locales, domains, basePath) {
     if (!matchSupportedLocale(entry.defaultLocale, domainLocales)) {
       throw new Error(`[next-fluent] Domain defaultLocale must be in its locales: ${entry.domain}`);
     }
-    for (const locale of domainLocales) {
-      if (!matchSupportedLocale(locale, locales)) {
-        throw new Error(`[next-fluent] Unsupported domain locale: ${locale}`);
-      }
-    }
+    const canonicalLocales = domainLocales.map((locale) => {
+      const supported = matchSupportedLocale(locale, locales);
+      if (!supported) throw new Error(`[next-fluent] Unsupported domain locale: ${locale}`);
+      return supported;
+    });
+    validateLocalePrefix(canonicalLocales, entry.localePrefix);
   }
 }
 export {

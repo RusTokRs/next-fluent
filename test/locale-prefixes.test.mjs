@@ -122,11 +122,11 @@ test('middleware routes custom prefixes and rewrites them internally', async () 
   const mw = createI18nMiddleware(routing);
 
   const localized = await mw(mockRequest('/rus/o-nas'));
-  assert.equal(new URL(localized.headers.get('x-middleware-rewrite')).pathname, '/rus/about');
+  assert.equal(new URL(localized.headers.get('x-middleware-rewrite')).pathname, '/ru/about');
   assert.equal(localized.headers.get('x-next-locale'), 'ru');
 
   const usa = await mw(mockRequest('/usa/about-us'));
-  assert.equal(new URL(usa.headers.get('x-middleware-rewrite')).pathname, '/usa/about');
+  assert.equal(new URL(usa.headers.get('x-middleware-rewrite')).pathname, '/en-US/about');
   assert.equal(usa.headers.get('x-next-locale'), 'en-US');
 
   const bare = await mw(mockRequest('/about-us'));
@@ -148,9 +148,9 @@ test('middleware as-needed strips a custom default-locale prefix', async () => {
   assert.equal(new URL(stripped.headers.get('location')).pathname, '/docs');
   assert.equal(stripped.headers.get('x-next-locale'), 'en');
 
-  // A non-default locale whose path needs no rewrite is left untouched.
+  // Even without localized slugs, a custom public prefix must rewrite to the locale code.
   const russian = await mw(mockRequest('/rus/docs'));
   assert.equal(russian.headers.get('x-next-locale'), 'ru');
-  assert.equal(russian.headers.get('x-middleware-rewrite'), null);
+  assert.equal(russian.headers.get('x-middleware-rewrite'), 'http://localhost:3000/ru/docs');
   assert.equal(russian.headers.get('location'), null);
 });

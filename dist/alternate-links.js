@@ -1,4 +1,4 @@
-import { matchSupportedLocale } from "./utils.js";
+import { domainLocalePrefix, findLocaleDomain } from "./domain-routing.js";
 import { findInternalPath, externalTemplate, renderTemplate } from "./route-engine.js";
 import {
   localeNeedsPrefix,
@@ -23,7 +23,7 @@ function buildAlternateLinksHeader(options) {
     origin
   } = options;
   const prefixConfig = normalizeLocalePrefix(locales, localePrefix);
-  if (prefixConfig.mode === "never" || locales.length < 2) return void 0;
+  if (locales.length < 2) return void 0;
   let match = null;
   if (pathnames) {
     for (const locale of locales) {
@@ -38,30 +38,23 @@ function buildAlternateLinksHeader(options) {
   const params = match?.params ?? {};
   const base = new URL(origin);
   const basePathname = (path) => `${basePath}${path === "/" && basePath ? "" : path}`;
-  const links = [];
-  const push = (href, hreflang) => {
-    links.push(`<${href}>; rel="alternate"; hreflang="${hreflang}"`);
-  };
+  const variants = [];
   for (const locale of locales) {
     const external = template ? externalTemplate(template, locale, pathnames) : pathname;
     const rendered = template ? renderTemplate(external, params) : pathname;
-    const path = withLocalePrefix(rendered, locale, defaultLocale, prefixConfig);
-    const domain = domains?.find(
-      (entry) => (entry.locales ?? [entry.defaultLocale]).some(
-        (item) => matchSupportedLocale(locale, [item])
-      )
-    );
-    if (domain) {
-      const needsPrefix = !(domain.defaultLocale === locale && prefixConfig.mode !== "always");
-      const domainPath = needsPrefix ? `${prefixForLocale(locale, prefixConfig)}${rendered === "/" ? "" : rendered}` : rendered;
-      push(`https://${domain.domain}${basePathname(domainPath)}${search}`, locale);
-      continue;
-    }
-    const url = new URL(base);
+    const domain = findLocaleDomain(domains, locale, base.host);
+    const targetPrefix = domain ? domainLocalePrefix(locales, localePrefix, domain) : prefixConfig;
+    const path = withLocalePrefix(rendered, locale, domain?.defaultLocale ?? defaultLocale, targetPrefix);
+    const url = domain ? new URL(`https://${domain.domain}`) : new URL(base);
     url.pathname = basePathname(path);
     url.search = search;
-    push(url.toString(), locale);
+    variants.push({ href: url.toString(), locale });
   }
+  const counts = /* @__PURE__ */ new Map();
+  for (const { href } of variants) counts.set(href, (counts.get(href) ?? 0) + 1);
+  const unique = variants.filter(({ href }) => counts.get(href) === 1);
+  if (unique.length < 2) return void 0;
+  const links = unique.map(({ href, locale }) => `<${href}>; rel="alternate"; hreflang="${locale}"`);
   if (!domains || domains.length === 0) {
     const defaultPath = withLocalePrefix(
       template ? renderTemplate(externalTemplate(template, defaultLocale, pathnames), params) : pathname,
@@ -72,7 +65,9 @@ function buildAlternateLinksHeader(options) {
     const url = new URL(base);
     url.pathname = basePathname(defaultPath);
     url.search = search;
-    push(url.toString(), "x-default");
+    if (unique.some(({ href }) => href === url.toString())) {
+      links.push(`<${url.toString()}>; rel="alternate"; hreflang="x-default"`);
+    }
   }
   return links.length > 0 ? links.join(", ") : void 0;
 }

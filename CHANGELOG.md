@@ -7,6 +7,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Multi-domain browser regression.** `npm run test:next:domains` exercises a
+  production Next app behind a TLS reverse proxy using Chromium: all prefix
+  strategies, custom prefixes, basePath, Link/router switches, cookies and
+  alternate links. Runs against Next 15 and 16 in CI.
+
+- **Per-domain `localePrefix`.** Domain entries accept the same mode or
+  `{ mode, prefixes }` configuration as the global setting, overriding it in
+  full. Middleware, navigation, locale switching and alternate links use the
+  destination domain's prefixes and default locale. Overrides are validated
+  against the domain's locales; omitted overrides inherit the global setting.
+
 - **`forcePrefix`.** `Link`, `getPathname`, `redirect`, `permanentRedirect` and
   the router methods now accept `forcePrefix`, which adds the locale prefix even
   for the default locale — the URL becomes unambiguous regardless of the
@@ -124,6 +135,54 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   harness can still fail.
 
 ### Fixed
+
+- **Deeply immutable routing definitions.** `defineRouting()` copies and freezes
+  supported nested settings instead of sharing mutable prefix maps, pathnames,
+  domain entries, cookie options and trusted hosts with the caller. The copied
+  values are validated before returning; caller-owned data stays mutable.
+  Return types are deeply readonly without losing locale/route inference.
+  Input mutations can no longer desynchronize navigation and middleware.
+
+- **Implicit locale-prefix conflicts fail at configuration time.** Validation
+  now checks the effective prefix map, including `/{locale}` defaults, instead
+  of only explicit overrides. Domain checks use the global locale spelling
+  (including aliases such as `pt_br` → `pt-BR`); separate hosts can reuse a prefix.
+- **Deterministic route specificity.** Static segments outrank single dynamic
+  segments, then required and optional catch-alls; earlier segments take
+  precedence over the total static-segment count. Localized templates are ranked
+  separately from internal fallbacks. Explicit parameterized template hrefs
+  retain their identity. Regression tests cover all 120 orders of five
+  overlapping routes, plus middleware/hreflang and Next 15/16 browser navigation.
+
+- **Prefix-table cache no longer retains temporary navigation configs.** Both
+  cache levels now use weak keys, so a long-lived locales array cannot keep all
+  previously normalized prefix maps alive. A GC regression exercises this
+  lifetime directly while verifying live cache entries still work.
+- **Custom-prefix normalization avoids repeated full-map scans.** Each custom
+  key is resolved once per normalization instead of once per configured locale;
+  alias lookup, first-match precedence and fallback prefixes remain unchanged.
+
+- **Custom-prefix rewrites now use real locale segments.** Public `/lang/ru`
+  prefixes rewrite to `/ru` for `app/[locale]`, even for roots and untranslated
+  paths. `usePathname` also recognizes the internal locale segment after a
+  rewrite; router fetches settle without redirect loops.
+- **Real NextRequest and reverse-proxy routing.** Preserve `nextUrl.basePath`
+  when Next has already stripped it from `pathname`. Internal rewrites stay on
+  Next's original request origin instead of becoming external proxy requests
+  to the public host.
+- **Absolute domain links persist explicit locale switches.** Links/router
+  methods targeting configured multi-locale domains now carry the temporary
+  switch prefix when needed. Old locale cookies no longer undo a switch to a
+  prefix-less default or a shared path in `never` mode.
+
+- **Alternate links in `never` mode.** Distinct domain/localized-path URLs now
+  produce hreflang links instead of being suppressed unconditionally. Ambiguous
+  URLs are excluded, and single-locale domains still advertise other configured
+  domains. Each destination's prefix strategy is respected.
+- **Domain matching behind non-standard ports.** Replacing a request or redirect
+  host now explicitly replaces the port too: a port-less host no longer inherits
+  `:3000` (or another old port) from the original WHATWG URL. Explicit destination
+  ports are retained, including with trusted forwarded hosts.
 
 - **Client-side navigation no longer loops forever on Next.js 16.** Next 16 hands
   a middleware rewrite to the client router as a redirect, where 15 kept it

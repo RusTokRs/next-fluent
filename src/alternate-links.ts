@@ -1,5 +1,5 @@
-import type { LocalePrefixConfig, Pathnames } from './types';
-import { matchSupportedLocale } from './utils';
+import type { DomainConfig, LocalePrefixConfig, Pathnames } from './types';
+import { domainLocalePrefix, findLocaleDomain } from './domain-routing';
 import { findInternalPath, externalTemplate, renderTemplate } from './route-engine';
 import {
   localeNeedsPrefix,
@@ -17,7 +17,7 @@ export interface AlternateLinksOptions {
   /** Internal route template matched for the current request, when known. */
   internalTemplate?: string;
   pathnames?: Pathnames<any>;
-  domains?: readonly { domain: string; defaultLocale: string; locales?: readonly string[] }[];
+  domains?: readonly DomainConfig[];
   basePath?: string;
   search?: string;
   origin: string;
@@ -54,7 +54,7 @@ export function buildAlternateLinksHeader(options: AlternateLinksOptions): strin
 
   const prefixConfig = normalizeLocalePrefix(locales, localePrefix);
 
-  if (prefixConfig.mode === 'never' || locales.length < 2) return undefined;
+  if (locales.length < 2) return undefined;
 
   // Resolve the internal template and its concrete parameters once, probing
   // every locale so a slug from another language still resolves.
@@ -74,40 +74,30 @@ export function buildAlternateLinksHeader(options: AlternateLinksOptions): strin
   const base = new URL(origin);
   const basePathname = (path: string) => `${basePath}${path === '/' && basePath ? '' : path}`;
 
-  const links: string[] = [];
-  const push = (href: string, hreflang: string) => {
-    links.push(`<${href}>; rel="alternate"; hreflang="${hreflang}"`);
-  };
+  const variants: { href: string; locale: string }[] = [];
 
   for (const locale of locales) {
     const external = template ? externalTemplate(template, locale, pathnames) : pathname;
     // Render with the parameters captured from the current request so dynamic
     // routes keep their concrete values.
     const rendered = template ? renderTemplate(external, params) : pathname;
-    const path = withLocalePrefix(rendered, locale, defaultLocale, prefixConfig);
-
-    const domain = domains?.find((entry) =>
-      (entry.locales ?? [entry.defaultLocale]).some((item) =>
-        matchSupportedLocale(locale, [item])
-      )
-    );
-
-    if (domain) {
-      const needsPrefix = !(
-        domain.defaultLocale === locale && prefixConfig.mode !== 'always'
-      );
-      const domainPath = needsPrefix
-        ? `${prefixForLocale(locale, prefixConfig)}${rendered === '/' ? '' : rendered}`
-        : rendered;
-      push(`https://${domain.domain}${basePathname(domainPath)}${search}`, locale);
-      continue;
-    }
-
-    const url = new URL(base);
+    const domain = findLocaleDomain(domains, locale, base.host);
+    const targetPrefix = domain ? domainLocalePrefix(locales, localePrefix, domain) : prefixConfig;
+    const path = withLocalePrefix(rendered, locale, domain?.defaultLocale ?? defaultLocale, targetPrefix);
+    const url = domain ? new URL(`https://${domain.domain}`) : new URL(base);
     url.pathname = basePathname(path);
     url.search = search;
-    push(url.toString(), locale);
+    variants.push({ href: url.toString(), locale });
   }
+
+  // `never` is useful with domain routing and localized slugs too. Only omit
+  // ambiguous URLs (e.g. /about serving both en and ru based on a cookie), not
+  // every configuration whose global prefix mode happens to be `never`.
+  const counts = new Map<string, number>();
+  for (const { href } of variants) counts.set(href, (counts.get(href) ?? 0) + 1);
+  const unique = variants.filter(({ href }) => counts.get(href) === 1);
+  if (unique.length < 2) return undefined;
+  const links = unique.map(({ href, locale }) => `<${href}>; rel="alternate"; hreflang="${locale}"`);
 
   if (!domains || domains.length === 0) {
     const defaultPath = withLocalePrefix(
@@ -119,7 +109,9 @@ export function buildAlternateLinksHeader(options: AlternateLinksOptions): strin
     const url = new URL(base);
     url.pathname = basePathname(defaultPath);
     url.search = search;
-    push(url.toString(), 'x-default');
+    if (unique.some(({ href }) => href === url.toString())) {
+      links.push(`<${url.toString()}>; rel="alternate"; hreflang="x-default"`);
+    }
   }
 
   return links.length > 0 ? links.join(', ') : undefined;

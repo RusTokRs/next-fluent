@@ -38,10 +38,6 @@ export function normalizeLeadingSlashes(path: string): string {
   return `/${path.replace(LEADING_SLASH_RUN, '')}`;
 }
 
-function canonicalKey(locales: readonly string[], locale: string): string | undefined {
-  return matchSupportedLocale(locale, locales);
-}
-
 export function normalizeLocalePrefix(
   locales: readonly string[],
   localePrefix?: LocalePrefixConfig
@@ -54,10 +50,17 @@ export function normalizeLocalePrefix(
   const raw =
     typeof localePrefix === 'object' && localePrefix !== null ? localePrefix.prefixes : undefined;
 
+  // Resolve each custom key once, rather than re-enumerating the entire map
+  // (and re-running locale lookup) for every configured locale. Preserve the
+  // first match when several aliases resolve to the same supported locale.
+  const custom = new Map<string, string | undefined>();
+  for (const [key, prefix] of Object.entries(raw ?? {})) {
+    const locale = matchSupportedLocale(key, locales);
+    if (locale && !custom.has(locale)) custom.set(locale, prefix);
+  }
   const prefixes: Record<string, string> = {};
   for (const locale of locales) {
-    const custom = raw ? Object.entries(raw).find(([key]) => canonicalKey(locales, key) === locale) : undefined;
-    prefixes[locale] = custom?.[1] ?? `/${locale}`;
+    prefixes[locale] = custom.get(locale) ?? `/${locale}`;
   }
   return { mode, prefixes };
 }
@@ -79,22 +82,17 @@ export function localeNeedsPrefix(
 }
 
 /**
- * Matches a pathname against the configured prefixes, longest first so that
- * `/en-us` wins over `/en`. Returns the locale and the remaining path.
- */
-/**
- * The sorted prefix table depends only on the `locales` array and the prefix
- * config, both of which are created once per routing definition, yet this ran
- * on every request — and several times per request, since the middleware,
- * `nav-url` and `alternate-links` all match prefixes. With 200 locales that is
- * an O(n log n) allocation on a hot path.
+ * Cache the sorted prefix table per live locales/config pair. Middleware reuses
+ * normalized configs across requests, so it can avoid sorting and allocating
+ * an O(n log n) table on every prefix match.
  *
- * A WeakMap keyed by identity is the right lifetime: the table dies with the
- * config that produced it, so nothing can grow without bound.
+ * Both levels must be weak: navigation creates temporary normalized configs
+ * while reusing a long-lived locales array. An ordinary inner Map would retain
+ * every one of those configs and its sorted table for the array's lifetime.
  */
 const prefixTables = new WeakMap<
   readonly string[],
-  Map<NormalizedLocalePrefix, { locale: string; prefix: string }[]>
+  WeakMap<NormalizedLocalePrefix, { locale: string; prefix: string }[]>
 >();
 
 function sortedPrefixEntries(
@@ -103,7 +101,7 @@ function sortedPrefixEntries(
 ): { locale: string; prefix: string }[] {
   let byConfig = prefixTables.get(locales);
   if (!byConfig) {
-    byConfig = new Map();
+    byConfig = new WeakMap();
     prefixTables.set(locales, byConfig);
   }
   let entries = byConfig.get(config);
@@ -116,6 +114,7 @@ function sortedPrefixEntries(
   return entries;
 }
 
+/** Match longest prefixes first and return the locale plus the unprefixed path. */
 export function matchLocalePrefix(
   pathname: string,
   locales: readonly string[],

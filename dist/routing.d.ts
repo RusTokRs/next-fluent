@@ -1,9 +1,5 @@
-import type { LocaleCookieConfig, LocalePrefixConfig } from './types';
-export interface DomainConfig {
-    domain: string;
-    defaultLocale: string;
-    locales?: readonly string[];
-}
+import type { DomainConfig, LocaleCookieConfig, LocalePrefixConfig } from './types';
+export type { DomainConfig } from './types';
 export type Pathnames<Locales extends readonly string[] = readonly string[]> = Record<string, string | Record<Locales[number], string>>;
 export interface RoutingConfig<Locales extends readonly string[] = readonly string[]> {
     locales: Locales;
@@ -19,13 +15,18 @@ export interface RoutingConfig<Locales extends readonly string[] = readonly stri
     alternateLinks?: boolean;
     trustedHosts?: readonly string[];
 }
+/** Readonly properties and tuples for the plain data returned by defineRouting. */
+type Immutable<T> = T extends object ? {
+    readonly [Key in keyof T]: Immutable<T[Key]>;
+} : T;
 /**
  * Defines the central routing configuration for next-fluent.
- * Validates configuration and provides type-safe inference for locales and pathnames.
+ * Returns an independent, deeply frozen snapshot of the supported settings,
+ * preserving type-safe inference for locales and pathnames.
  */
 export declare function defineRouting<const Locales extends readonly string[], const Routes extends Pathnames<Locales>>(config: Omit<RoutingConfig<Locales>, 'pathnames'> & {
     pathnames: Routes;
-}): Omit<RoutingConfig<Locales>, 'pathnames'> & {
+}): Immutable<Omit<RoutingConfig<Locales>, 'pathnames'> & {
     pathnames: Routes;
-};
-export declare function defineRouting<const Locales extends readonly string[]>(config: RoutingConfig<Locales>): RoutingConfig<Locales>;
+}>;
+export declare function defineRouting<const Locales extends readonly string[]>(config: RoutingConfig<Locales>): Immutable<RoutingConfig<Locales>>;
