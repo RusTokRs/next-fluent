@@ -78,3 +78,28 @@ test('t.plain() drops markup and element tokens', () => {
   // Plain text keeps ordinary interpolation and bidi isolates from t().
   assert.equal(strip(t.plain('login-button')), 'Sign in');
 });
+
+test('t.plain strips bidi isolation marks even without markup', () => {
+  // t.plain is documented for aria-label/title/alt/<meta>. Bidi marks are
+  // invisible characters that must not end up in an HTML attribute, and they
+  // survive formatting around every placeable — a message with no markup is
+  // the common case, so the strip cannot depend on markup being present.
+  const bundle = createFluentBundle('en', 'hello = Hello { $name }\nrich = Click <b>here</b>\n');
+  const t = createTranslator(bundle);
+
+  const plain = t.plain('hello', { name: 'John' });
+  assert.equal(plain, 'Hello John');
+  assert.equal(/[\u2068\u2069]/.test(plain), false);
+
+  // The markup path keeps working too.
+  assert.equal(t.plain('rich'), 'Click here');
+});
+
+test('t.attrs keeps stripping marks, matching t.plain', () => {
+  const bundle = createFluentBundle(
+    'en',
+    'field = Value\n    .aria-label = Label { $name }\n'
+  );
+  const attrs = createTranslator(bundle).attrs('field', { name: 'John' });
+  assert.deepEqual(attrs, { 'aria-label': 'Label John' });
+});

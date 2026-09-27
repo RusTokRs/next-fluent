@@ -22,14 +22,22 @@ function clearFormatterCache() {
   nfCache.clear();
   rtfCache.clear();
   lfCache.clear();
+  warnedFormats.clear();
 }
+const warnedFormats = /* @__PURE__ */ new Set();
+const MAX_WARNED_FORMATS = 200;
 function resolveFormat(presets, options, kind) {
   if (options === void 0 || typeof options !== "string") return options;
   const preset = presets?.[options];
   if (!preset) {
-    console.warn(
-      `[next-fluent] Unknown ${kind} format "${options}". Configure it in the request config "formats" option.`
-    );
+    const warnKey = `${kind}::${options}`;
+    if (!warnedFormats.has(warnKey)) {
+      if (warnedFormats.size >= MAX_WARNED_FORMATS) warnedFormats.clear();
+      warnedFormats.add(warnKey);
+      console.warn(
+        `[next-fluent] Unknown ${kind} format "${options}". Configure it in the request config "formats" option.`
+      );
+    }
     return void 0;
   }
   return preset;

@@ -30,7 +30,12 @@ export function clearFormatterCache(): void {
   nfCache.clear();
   rtfCache.clear();
   lfCache.clear();
+  warnedFormats.clear();
 }
+
+/** Unknown format names already reported, so a list render cannot spam logs. */
+const warnedFormats = new Set<string>();
+const MAX_WARNED_FORMATS = 200;
 
 /**
  * Resolves a named format (`'short'`) against the configured presets, or passes
@@ -45,9 +50,16 @@ function resolveFormat<T>(
   if (options === undefined || typeof options !== 'string') return options;
   const preset = presets?.[options];
   if (!preset) {
-    console.warn(
-      `[next-fluent] Unknown ${kind} format "${options}". Configure it in the request config "formats" option.`
-    );
+    const warnKey = `${kind}::${options}`;
+    if (!warnedFormats.has(warnKey)) {
+      // Bounded: a runaway key set is cleared rather than grown without limit,
+      // at the cost of a repeated warning.
+      if (warnedFormats.size >= MAX_WARNED_FORMATS) warnedFormats.clear();
+      warnedFormats.add(warnKey);
+      console.warn(
+        `[next-fluent] Unknown ${kind} format "${options}". Configure it in the request config "formats" option.`
+      );
+    }
     return undefined;
   }
   return preset;

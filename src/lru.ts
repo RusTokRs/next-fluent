@@ -12,12 +12,13 @@ export class LRUCache<V> {
   }
 
   get(key: string): V | undefined {
-    const val = this.map.get(key);
-    if (val !== undefined) {
-      // Re-insert to move to MRU (most recently used)
-      this.map.delete(key);
-      this.map.set(key, val);
-    }
+    // Presence, not the value, decides whether the entry exists: a stored
+    // `undefined` must still count as a hit and still move to MRU.
+    if (!this.map.has(key)) return undefined;
+    const val = this.map.get(key) as V;
+    // Re-insert to move to MRU (most recently used)
+    this.map.delete(key);
+    this.map.set(key, val);
     return val;
   }
 

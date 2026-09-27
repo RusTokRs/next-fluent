@@ -10,11 +10,10 @@ class LRUCache {
     this.maxSize = maxSize;
   }
   get(key) {
+    if (!this.map.has(key)) return void 0;
     const val = this.map.get(key);
-    if (val !== void 0) {
-      this.map.delete(key);
-      this.map.set(key, val);
-    }
+    this.map.delete(key);
+    this.map.set(key, val);
     return val;
   }
   set(key, value) {

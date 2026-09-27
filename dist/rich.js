@@ -14,8 +14,13 @@ function createReactElementToken(key) {
 const TOKEN_OR_TAG_PATTERN = "(?:\\u2068)?\\uE000NF_EL_([a-zA-Z0-9_-]+)_\\uE001(?:\\u2069)?|<\\/?([a-zA-Z][a-zA-Z0-9_-]*)\\s*\\/?>";
 const STRIP_PATTERN = new RegExp(TOKEN_OR_TAG_PATTERN, "g");
 function stripRichText(text) {
-  if (!text.includes(REACT_ELEMENT_TOKEN_PREFIX) && !text.includes("<")) return text;
-  return text.replace(STRIP_PATTERN, "").replace(/[\u2068\u2069]/g, "");
+  const hasMarkup = text.includes(REACT_ELEMENT_TOKEN_PREFIX) || text.includes("<");
+  const hasIsolates = text.includes("\u2068") || text.includes("\u2069");
+  if (!hasMarkup && !hasIsolates) return text;
+  return (hasMarkup ? text.replace(STRIP_PATTERN, "") : text).replace(
+    /[\u2068\u2069]/g,
+    ""
+  );
 }
 function parseRichText(text, values) {
   if (!values) {

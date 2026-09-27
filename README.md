@@ -227,9 +227,9 @@ const content = t.rich('welcome-banner', {
 ### `t()` / `raw()` contract
 
 - `t(key, args?)` returns a **string**. If the formatted result still contains a React-element placeholder (e.g. `defaultTranslationValues` injected JSX), it throws and directs you to `t.rich()` / `<FormattedMessage>`. Fluent formatting errors fall back to `namespace.key`.
-- `t.rich(key, args?)` and `<FormattedMessage />` are the only APIs that produce React nodes.
+- `t.rich(key, args?)` and `<FormattedMessage />` are the only APIs that produce React nodes. Tags in messages are **attribute-free** (`<link>docs</link>`, `<br/>`); attributes belong on the component you pass in. Unsupported markup such as `<a href="…">` is left as escaped text rather than turned into HTML.
 - `t.attrs(key, args?)` returns **every attribute of a message in declaration order** — `{ label, 'aria-label', title }` — for spreading onto an element. Bidi isolation marks are stripped, since attribute values belong in HTML attributes.
-- `t.plain(key, args?)` returns the message as **plain text**: rich-text markers (`<link>…</link>`, React element tokens) are removed instead of throwing. Use it for `aria-label`, `title`, `alt` and `<meta>` content that shares a message with the visible UI.
+- `t.plain(key, args?)` returns the message as **plain text**: rich-text markers (`<link>…</link>`, React element tokens) and bidi isolation marks are removed instead of throwing. Use it for `aria-label`, `title`, `alt` and `<meta>` content that shares a message with the visible UI — the marks are invisible but they do end up in the rendered attribute.
 - `raw('title')` → `string`, `raw('title', { $name: 'Ada' })` → interpolated `string`, `raw('list')` → ordered `string[]` (both Fluent `[]`-lists and JSON arrays). Missing messages fall back to the key; formatting errors are ignored and the literal `{$placeholders}` remain.
 - Message arguments accept strings, numbers, booleans (`true` → `"true"`, Fluent has no boolean type), `Date`, `bigint` and `FluentType` values. `null`/`undefined` and non-Fluent objects are reported through `onError` as `INVALID_ARGUMENT` instead of being silently dropped.
 

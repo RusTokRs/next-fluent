@@ -71,6 +71,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`t.plain()` leaked bidi isolation marks into HTML attributes.** The marks
+  Fluent puts around every placeable are invisible, and `t.plain()` is meant for
+  `aria-label`, `title`, `alt` and `<meta>` content. They were only removed when
+  the message also contained markup, so the common markup-free case passed them
+  straight through. They are now stripped on every path, matching `t.attrs()`.
+- **An unknown named format warned on every call.** The documentation promised
+  the warning was reported once, but a list render of a thousand rows logged it a
+  thousand times. Each unknown name is now reported once per process, bounded.
+- **`LRUCache.get()` did not refresh recency for an entry holding `undefined`.**
+  No current caller stores `undefined`, but the entry silently stopped being
+  treated as recently used and was evicted early.
 - **Localized pathnames are now canonicalized.** With `pathnames` configured,
   `/ru/about` and `/ru/o-nas` both served the same page, and a slug belonging to
   another locale (`/en/o-nas`) was served under the wrong locale. Requests are
