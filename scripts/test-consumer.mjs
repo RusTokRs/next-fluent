@@ -226,7 +226,7 @@ console.log(JSON.stringify(Object.keys(c)));`],
   // -------------------------------------------------------------------------
   // 5. Types, under NodeNext, for both module systems
   // -------------------------------------------------------------------------
-  console.log('\n[next-fluent] shipped types (module: nodenext)');
+  console.log('\n[next-fluent] shipped types (bundler and nodenext resolution)');
   {
     await writeFile(
       path.join(consumer, 'app.mts'),
@@ -254,27 +254,52 @@ console.log(JSON.stringify(Object.keys(c)));`],
         `});\n\n` +
         `module.exports = withNextFluent({ reactStrictMode: true });\n`
     );
-    const tsconfig = {
-      compilerOptions: {
-        strict: true,
-        module: 'nodenext',
-        moduleResolution: 'nodenext',
-        target: 'es2022',
-        jsx: 'preserve',
-        noEmit: true,
-        skipLibCheck: true,
-        types: ['node'],
-      },
-      include: ['app.mts', 'config.cts'],
-    };
-    await writeFile(path.join(consumer, 'tsconfig.json'), JSON.stringify(tsconfig, null, 2));
     const tsc = path.join(root, 'node_modules/typescript/bin/tsc');
-    const result = spawnSync(process.execPath, [tsc, '-p', 'tsconfig.json'], {
-      cwd: consumer,
-      encoding: 'utf8',
-    });
-    if (result.status === 0) ok('ESM .mts and CJS .cts both typecheck');
-    else bad('consumer typecheck', (result.stdout + result.stderr).trim().split('\n').slice(0, 6).join('\n      '));
+    // Both resolution modes real consumers use. `bundler` is what
+    // create-next-app generates and what this repository's own tsconfig uses;
+    // `nodenext` is what a plain Node package uses and the only mode in which
+    // the `.cts` config is meaningful. Checking one and not the other would
+    // leave the published `exports` map half verified.
+    const modes = [
+      {
+        name: 'moduleResolution: bundler',
+        file: 'tsconfig.bundler.json',
+        compilerOptions: { module: 'preserve', moduleResolution: 'bundler' },
+        // `.cts` is not valid under bundler resolution — CJS needs node16/nodenext.
+        include: ['app.mts'],
+      },
+      {
+        name: 'moduleResolution: nodenext',
+        file: 'tsconfig.nodenext.json',
+        compilerOptions: { module: 'nodenext', moduleResolution: 'nodenext' },
+        include: ['app.mts', 'config.cts'],
+      },
+    ];
+    for (const mode of modes) {
+      const tsconfig = {
+        compilerOptions: {
+          strict: true,
+          target: 'es2022',
+          jsx: 'preserve',
+          noEmit: true,
+          skipLibCheck: true,
+          types: ['node'],
+          ...mode.compilerOptions,
+        },
+        include: mode.include,
+      };
+      await writeFile(path.join(consumer, mode.file), JSON.stringify(tsconfig, null, 2));
+      const result = spawnSync(process.execPath, [tsc, '-p', mode.file], {
+        cwd: consumer,
+        encoding: 'utf8',
+      });
+      if (result.status === 0) ok(`types resolve under ${mode.name}`, mode.include.join(' + '));
+      else
+        bad(
+          `consumer typecheck (${mode.name})`,
+          (result.stdout + result.stderr).trim().split('\n').slice(0, 6).join('\n      ')
+        );
+    }
 
     // Negative control: the harness above must actually be able to fail, or a
     // green run proves nothing.

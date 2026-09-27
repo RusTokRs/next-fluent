@@ -28,6 +28,34 @@ The high-performance Project Fluent alternative to `next-intl`.
 npm install next-fluent
 ```
 
+### Cache Components (Next.js 16)
+
+`cacheComponents: true` is supported. Verified on Next.js 16.3.6: localized
+routes that call `getTranslations()` prerender as **Static**, and a route that
+reads request data inside `<Suspense>` prerenders as **Partial Prerender**:
+
+```tsx
+import { Suspense } from 'react';
+import { headers } from 'next/headers';
+import { getTranslations } from 'next-fluent/server';
+
+async function Greeting() {
+  const ua = (await headers()).get('user-agent');   // dynamic
+  const t = await getTranslations();                // safe inside the boundary
+  return <p data-ua={ua}>{t('hello')}</p>;
+}
+
+export default function Page() {
+  return <Suspense fallback={<p>loading</p>}><Greeting /></Suspense>;
+}
+```
+
+The one thing that will fail is unrelated to this library: under
+`cacheComponents`, a route that reads `cookies()`, `headers()`, `params` or
+`searchParams` **outside** a `<Suspense>` boundary is a build error in any app.
+Wrap the access, cache it with `"use cache"`, or set `export const instant =
+false` for that route.
+
 ### Supported versions
 
 | | |

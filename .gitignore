@@ -15,3 +15,7 @@ deep-research-report.md
 
 # Scratch apps used for manual probing; never commit.
 .probe-*
+
+# The integration harness copies the fixture here and removes it afterwards, but
+# a crash leaves it behind — and it contains a symlinked node_modules.
+.next-integration-*/
