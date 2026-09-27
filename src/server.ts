@@ -403,8 +403,12 @@ export async function forLocale(
     ...customFunctions,
   };
   // Request-scoped bundles are only reusable when they were built with the
-  // same isolating mode, so keep it part of the cache identity.
-  const bundleSlot = `${effectiveLocale}|iso=${useIsolating ?? true}`;
+  // same isolating mode, so keep it part of the cache identity. The messages
+  // come from the *requested* locale, so it belongs in the key too: a config may
+  // normalize several requested locales onto one effective locale, and keying by
+  // the effective locale alone would serve the first one's messages to the rest.
+  // (The fallback slot below is already keyed by the requested locale.)
+  const bundleSlot = `${locale}>${effectiveLocale}|iso=${useIsolating ?? true}`;
   const bundleOptions = { functions: mergedFunctions, useIsolating };
 
   let bundle: FluentBundle;

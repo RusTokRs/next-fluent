@@ -71,6 +71,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **The request-scoped bundle cache key omitted the requested locale.** The
+  slot was keyed by the effective locale, while the messages are loaded for the
+  requested one. A request config that normalizes several requested locales onto
+  one effective locale (for example `en-GB` and `en` both resolving to `en`)
+  could therefore serve the first locale's messages to the others within a
+  single request. The key now carries both. This was found by inspection and is
+  not covered by a test: it needs a live React request scope, which the unit
+  harness does not provide, and the fix only narrows a cache key.
 - **`assertSafeHref()` could be bypassed with control characters.** Browsers
   remove ASCII tab, LF and CR anywhere in a URL, and strip C0 controls at the
   edges, before they resolve the scheme — so `java\tscript:alert(1)` executes

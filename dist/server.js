@@ -247,7 +247,7 @@ async function forLocale(locale, options) {
     ...config?.functions,
     ...customFunctions
   };
-  const bundleSlot = `${effectiveLocale}|iso=${useIsolating ?? true}`;
+  const bundleSlot = `${locale}>${effectiveLocale}|iso=${useIsolating ?? true}`;
   const bundleOptions = { functions: mergedFunctions, useIsolating };
   let bundle;
   if (explicitMessages !== void 0) {
