@@ -123,7 +123,7 @@ export function formatUrlObject(urlObj: UrlObject): {
 }
 
 export function resolveLocalizedPathname(
-  options: { href: string | UrlObject; locale?: string; domain?: string },
+  options: { href: string | UrlObject; locale?: string; domain?: string; forcePrefix?: boolean },
   config: NavigationConfig
 ): string {
   const { href, locale: explicitLocale } = options;
@@ -215,9 +215,14 @@ export function resolveLocalizedPathname(
     mappedPathname = `${mappedPathname}/`;
   }
 
-  const prefix = localeNeedsPrefix(resolvedLocale, resolvedDefaultLocale, localePrefix)
-    ? prefixForLocale(resolvedLocale, prefixConfig)
-    : '';
+  // `forcePrefix` opts the caller into an explicit prefix for the default
+  // locale too. It is ignored in `never` mode: prefixed URLs do not exist
+  // there, so emitting one would only be stripped again by the middleware.
+  const wantsPrefix =
+    localePrefix !== 'never' &&
+    (options.forcePrefix === true ||
+      localeNeedsPrefix(resolvedLocale, resolvedDefaultLocale, localePrefix));
+  const prefix = wantsPrefix ? prefixForLocale(resolvedLocale, prefixConfig) : '';
 
   const finalPath = prefix
     ? mappedPathname === '/'

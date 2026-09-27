@@ -334,18 +334,25 @@ export function FormattedMessage<
  * can expose a hook-free wrapper that Server Components may render.
  */
 export const LocalizedLink = forwardRef<HTMLAnchorElement, any>(
-  function LocalizedLink({ navConfig, href, locale: propLocale, ...rest }, ref) {
+  function LocalizedLink({ navConfig, href, locale: propLocale, forcePrefix, ...rest }, ref) {
     const currentLocale = useLocale();
     const targetLocale = propLocale ?? currentLocale ?? (navConfig as NavigationConfig).defaultLocale;
     const localizedHref = switchLocaleHref(
-      resolveLocalizedPathname({ href, locale: targetLocale }, navConfig),
+      resolveLocalizedPathname({ href, locale: targetLocale, forcePrefix }, navConfig),
       propLocale,
       navConfig
     );
     return React.createElement(NextLink, {
       ...rest,
       href: localizedHref,
-      prefetch: propLocale && navConfig.localePrefix !== 'always' ? false : rest.prefetch,
+      // With an explicit locale the href can differ from the one the visitor is
+      // on, and the middleware settles it with a redirect — prefetching that
+      // would fetch a page nobody lands on. A forced prefix is already
+      // unambiguous, so it prefetches like `always` does.
+      prefetch:
+        propLocale && !forcePrefix && navConfig.localePrefix !== 'always'
+          ? false
+          : rest.prefetch,
       ref,
     });
   }

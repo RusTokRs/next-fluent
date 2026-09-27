@@ -31,11 +31,14 @@ const BUDGETS = [
   },
   {
     // The library's own code, without the Fluent runtime it depends on.
+    // gzip raised 11.5 -> 11.75 kB for `forcePrefix` on Link/getPathname/
+    // redirect and the router methods (~28 B). Deliberate feature cost, not
+    // drift: the guard still fails on anything beyond ~2% growth here.
     name: 'next-fluent own code (bundle external)',
     entry: path.join(root, 'src/index-browser.ts'),
     extraExternal: ['@fluent/bundle'],
     maxMinified: 35 * 1024,
-    maxGzip: 11.5 * 1024,
+    maxGzip: 11.75 * 1024,
   },
   {
     name: '@fluent/bundle (runtime dependency)',

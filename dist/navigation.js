@@ -59,7 +59,7 @@ function createNavigation(config) {
         push(href, options) {
           const targetLocale = options?.locale ?? currentLocale ?? defaultLocale;
           const target = switchLocaleHref(
-            getPathname({ href, locale: targetLocale }),
+            getPathname({ href, locale: targetLocale, forcePrefix: options?.forcePrefix }),
             options?.locale,
             config
           );
@@ -69,7 +69,7 @@ function createNavigation(config) {
         replace(href, options) {
           const targetLocale = options?.locale ?? currentLocale ?? defaultLocale;
           const target = switchLocaleHref(
-            getPathname({ href, locale: targetLocale }),
+            getPathname({ href, locale: targetLocale, forcePrefix: options?.forcePrefix }),
             options?.locale,
             config
           );
@@ -79,7 +79,11 @@ function createNavigation(config) {
         prefetch(href, options) {
           if (options?.locale && config.localePrefix !== "always") return;
           const targetLocale = options?.locale ?? currentLocale ?? defaultLocale;
-          const target = getPathname({ href, locale: targetLocale });
+          const target = getPathname({
+            href,
+            locale: targetLocale,
+            forcePrefix: options?.forcePrefix
+          });
           return router.prefetch(target);
         },
         back() {
@@ -95,15 +99,21 @@ function createNavigation(config) {
       [router, currentLocale]
     );
   }
+  function redirectArgs(url, more) {
+    const extra = typeof more === "string" ? { type: more } : more ?? {};
+    if (typeof url === "string") return [url, extra];
+    const { href, ...rest } = url;
+    return [href, { ...rest, ...extra }];
+  }
   function redirect(url, options) {
-    const targetLocale = options?.locale ?? defaultLocale;
-    const target = getPathname({ href: url, locale: targetLocale });
-    return nextRedirect(target, options?.type);
+    const [href, opts] = redirectArgs(url, options);
+    const target = getPathname({ href, locale: opts.locale ?? defaultLocale, forcePrefix: opts.forcePrefix });
+    return nextRedirect(target, opts.type);
   }
   function permanentRedirect(url, options) {
-    const targetLocale = options?.locale ?? defaultLocale;
-    const target = getPathname({ href: url, locale: targetLocale });
-    return nextPermanentRedirect(target, options?.type);
+    const [href, opts] = redirectArgs(url, options);
+    const target = getPathname({ href, locale: opts.locale ?? defaultLocale, forcePrefix: opts.forcePrefix });
+    return nextPermanentRedirect(target, opts.type);
   }
   return {
     Link,
@@ -111,7 +121,8 @@ function createNavigation(config) {
     useRouter,
     redirect,
     permanentRedirect,
-    getPathname
+    getPathname,
+    config
   };
 }
 export {

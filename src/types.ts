@@ -204,6 +204,13 @@ export interface GetPathnameOptions<Routes extends string = string> {
   href: NavigationHref<Routes>;
   locale?: string;
   domain?: string;
+  /**
+   * Add the locale prefix even for the default locale, which `as-needed`
+   * otherwise omits. Useful when a URL must be unambiguous regardless of the
+   * visitor's stored locale. A no-op in `never`, where prefixed URLs do not
+   * exist and the middleware would strip one immediately.
+   */
+  forcePrefix?: boolean;
 }
 
 export interface Navigation<
@@ -214,6 +221,8 @@ export interface Navigation<
     Omit<React.AnchorHTMLAttributes<HTMLAnchorElement>, 'href'> & {
       href: NavigationHref<Routes>;
       locale?: Locales[number];
+      /** Force the locale prefix even for the default locale. */
+      forcePrefix?: boolean;
       replace?: boolean;
       scroll?: boolean;
       prefetch?: boolean;
@@ -223,16 +232,41 @@ export interface Navigation<
   >;
   usePathname: () => string;
   useRouter: () => {
-    push(href: NavigationHref<Routes>, options?: { locale?: Locales[number]; scroll?: boolean }): void;
-    replace(href: NavigationHref<Routes>, options?: { locale?: Locales[number]; scroll?: boolean }): void;
-    prefetch(href: NavigationHref<Routes>, options?: { locale?: Locales[number] }): void;
+    push(
+      href: NavigationHref<Routes>,
+      options?: { locale?: Locales[number]; scroll?: boolean; forcePrefix?: boolean }
+    ): void;
+    replace(
+      href: NavigationHref<Routes>,
+      options?: { locale?: Locales[number]; scroll?: boolean; forcePrefix?: boolean }
+    ): void;
+    prefetch(
+      href: NavigationHref<Routes>,
+      options?: { locale?: Locales[number]; forcePrefix?: boolean }
+    ): void;
     back(): void;
     forward(): void;
     refresh(): void;
   };
-  redirect(url: Extract<NavigationHref<Routes>, string>, options?: { locale?: Locales[number]; type?: 'push' | 'replace' }): never;
-  permanentRedirect(url: Extract<NavigationHref<Routes>, string>, options?: { locale?: Locales[number]; type?: 'push' | 'replace' }): never;
-  getPathname(options: Omit<GetPathnameOptions<Routes>, 'locale'> & { locale?: Locales[number] }): string;
+  redirect(
+    url: Extract<NavigationHref<Routes>, string> | ({ href: string } & NavigationRedirectOptions<Locales>),
+    options?: NavigationRedirectOptions<Locales> | 'push' | 'replace'
+  ): never;
+  permanentRedirect(
+    url: Extract<NavigationHref<Routes>, string> | ({ href: string } & NavigationRedirectOptions<Locales>),
+    options?: NavigationRedirectOptions<Locales> | 'push' | 'replace'
+  ): never;
+  getPathname(
+    options: Omit<GetPathnameOptions<Routes>, 'locale'> & { locale?: Locales[number] }
+  ): string;
+  /** The routing configuration this navigation was created from. */
+  config: NavigationConfig;
+}
+
+export interface NavigationRedirectOptions<Locales extends readonly string[] = readonly string[]> {
+  locale?: Locales[number] | string;
+  type?: 'push' | 'replace';
+  forcePrefix?: boolean;
 }
 
 export interface RequestConfigParams {

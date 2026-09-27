@@ -15,6 +15,7 @@ export declare function resolveLocalizedPathname(options: {
     href: string | UrlObject;
     locale?: string;
     domain?: string;
+    forcePrefix?: boolean;
 }, config: NavigationConfig): string;
 /**
  * Builds the href for an explicit locale switch.

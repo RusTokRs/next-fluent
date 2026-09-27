@@ -151,7 +151,8 @@ function resolveLocalizedPathname(options, config) {
   if (hasTrailingSlash && mappedPathname !== "/" && !mappedPathname.endsWith("/")) {
     mappedPathname = `${mappedPathname}/`;
   }
-  const prefix = localeNeedsPrefix(resolvedLocale, resolvedDefaultLocale, localePrefix) ? prefixForLocale(resolvedLocale, prefixConfig) : "";
+  const wantsPrefix = localePrefix !== "never" && (options.forcePrefix === true || localeNeedsPrefix(resolvedLocale, resolvedDefaultLocale, localePrefix));
+  const prefix = wantsPrefix ? prefixForLocale(resolvedLocale, prefixConfig) : "";
   const finalPath = prefix ? mappedPathname === "/" ? prefix : `${prefix}${mappedPathname.startsWith("/") ? mappedPathname : `/${mappedPathname}`}` : mappedPathname;
   const withBasePath = `${basePath}${finalPath === "/" && basePath ? "" : finalPath}${search}${hash}`;
   const targetDomain = domains?.find((entry) => {

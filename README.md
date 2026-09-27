@@ -159,9 +159,23 @@ Create type-safe, locale-aware navigation components and hooks:
 import { createNavigation } from 'next-fluent/navigation';
 import { routing } from './routing';
 
-export const { Link, redirect, usePathname, useRouter, getPathname } =
+export const { Link, redirect, usePathname, useRouter, getPathname, config } =
   createNavigation(routing);
 ```
+
+Every URL builder takes `forcePrefix`, which adds the locale prefix even for the
+default locale — useful when a link must be unambiguous regardless of the
+visitor's stored locale:
+
+```tsx
+<Link href="/about" locale="en" forcePrefix>…</Link>  {/* /en/about in as-needed */}
+getPathname({ href: '/about', locale: 'en', forcePrefix: true }); // '/en/about'
+```
+
+It is a no-op in `localePrefix: 'never'`, where prefixed URLs do not exist.
+`redirect()` accepts both `redirect(url, { locale })` and next-intl's
+`redirect({ href, locale, forcePrefix }, type)`, so migrating call sites does not
+require rewriting them.
 
 ---
 
@@ -455,7 +469,7 @@ The analyzer never writes to a catalog. It is also available programmatically as
 | `defineRouting` (`pathnames`, `domains`, `basePath`, `localePrefix`) | ✅ | |
 | `localeCookie`, `localeDetection`, `alternateLinks` | ✅ | |
 | `localePrefix.prefixes` (per-locale prefix map) | ✅ | validated: absolute, unique, non-shadowing |
-| `createNavigation` (`Link`, `redirect`, `permanentRedirect`, `useRouter`, `usePathname`, `getPathname`) | ✅ | |
+| `createNavigation` (`Link`, `redirect`, `permanentRedirect`, `useRouter`, `usePathname`, `getPathname`, `config`) | ✅ | `forcePrefix` supported on `Link`, `getPathname`, `redirect` and the router methods; `redirect` also takes next-intl's object form |
 | Type-safe messages | ✅ `next-fluent typegen` | AST-based, declaration merging, `--watch` |
 | `createMessagesDeclaration` | ✅ plugin `typegen` option | regenerates during `next dev` |
 | JSON catalogs | ✅ | accepted wherever FTL text is, plus in the CLI |

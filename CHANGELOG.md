@@ -7,6 +7,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`forcePrefix`.** `Link`, `getPathname`, `redirect`, `permanentRedirect` and
+  the router methods now accept `forcePrefix`, which adds the locale prefix even
+  for the default locale — the URL becomes unambiguous regardless of the
+  visitor's stored locale. It is a no-op in `localePrefix: 'never'`, where
+  prefixed URLs do not exist. Closes the last navigation gap against next-intl.
+- **`redirect()` accepts next-intl's call shape.** Both `redirect(url, { locale })`
+  and `redirect({ href, locale, forcePrefix }, type)` work, so migrating does not
+  mean rewriting every call site. `createNavigation` also returns `config`.
 - **Per-locale URL prefixes.** `localePrefix` now accepts the next-intl shape
   `{ mode, prefixes: { 'en-US': '/usa' } }` in addition to the bare
   `'always' | 'as-needed' | 'never'` mode. Prefixes are validated at

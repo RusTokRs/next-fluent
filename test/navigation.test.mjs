@@ -144,3 +144,80 @@ test('createNavigation returns expected navigation instance and throws on invali
   assert.equal(nav.getPathname({ href: '/dashboard', locale: 'ru' }), '/ru/dashboard');
   assert.equal(nav.getPathname({ href: '/dashboard', locale: 'en' }), '/dashboard');
 });
+
+test('forcePrefix adds the prefix for the default locale in as-needed mode', () => {
+  const config = {
+    locales: ['en', 'ru'],
+    defaultLocale: 'en',
+    localePrefix: 'as-needed',
+  };
+  assert.equal(resolveLocalizedPathname({ href: '/about', locale: 'en' }, config), '/about');
+  assert.equal(
+    resolveLocalizedPathname({ href: '/about', locale: 'en', forcePrefix: true }, config),
+    '/en/about'
+  );
+  // A non-default locale is already prefixed, so the flag changes nothing.
+  assert.equal(
+    resolveLocalizedPathname({ href: '/about', locale: 'ru', forcePrefix: true }, config),
+    '/ru/about'
+  );
+});
+
+test('forcePrefix is a no-op in never mode and redundant in always mode', () => {
+  // `never` has no prefixed URLs at all; emitting one would only be stripped
+  // again by the middleware.
+  const never = { locales: ['en', 'ru'], defaultLocale: 'en', localePrefix: 'never' };
+  assert.equal(
+    resolveLocalizedPathname({ href: '/about', locale: 'en', forcePrefix: true }, never),
+    '/about'
+  );
+
+  const always = { locales: ['en', 'ru'], defaultLocale: 'en', localePrefix: 'always' };
+  assert.equal(
+    resolveLocalizedPathname({ href: '/about', locale: 'en', forcePrefix: true }, always),
+    '/en/about'
+  );
+  assert.equal(
+    resolveLocalizedPathname({ href: '/about', locale: 'en', forcePrefix: true }, always),
+    resolveLocalizedPathname({ href: '/about', locale: 'en' }, always)
+  );
+});
+
+test('forcePrefix survives query, hash and basePath', () => {
+  const config = {
+    locales: ['en', 'ru'],
+    defaultLocale: 'en',
+    localePrefix: 'as-needed',
+    basePath: '/shop',
+  };
+  assert.equal(
+    resolveLocalizedPathname({ href: '/about?x=1#frag', locale: 'en', forcePrefix: true }, config),
+    '/shop/en/about?x=1#frag'
+  );
+});
+
+test('getPathname and redirect accept forcePrefix', () => {
+  const routing = { locales: ['en', 'ru'], defaultLocale: 'en', localePrefix: 'as-needed' };
+  const { getPathname, config } = createNavigation(routing);
+  assert.equal(getPathname({ href: '/about', locale: 'en', forcePrefix: true }), '/en/about');
+  // The routing config is exposed for callers that compose navigations.
+  assert.equal(config.defaultLocale, 'en');
+});
+
+test('redirect accepts both the url form and next-intl object form', () => {
+  const routing = { locales: ['en', 'ru'], defaultLocale: 'en', localePrefix: 'as-needed' };
+  const { redirect } = createNavigation(routing);
+
+  const target = (fn) => {
+    try {
+      fn();
+    } catch (error) {
+      return error.message;
+    }
+    return null;
+  };
+  // Both forms must produce a redirect rather than throwing a type error.
+  assert.equal(target(() => redirect('/about', { locale: 'en', forcePrefix: true })), 'NEXT_REDIRECT');
+  assert.equal(target(() => redirect({ href: '/about', locale: 'en', forcePrefix: true })), 'NEXT_REDIRECT');
+  assert.equal(target(() => redirect({ href: '/about', locale: 'ru' }, 'replace')), 'NEXT_REDIRECT');
+});

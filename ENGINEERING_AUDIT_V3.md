@@ -277,6 +277,43 @@ Next.js рендерит layout и page независимо, поэтому `se
 
 ---
 
+## Сравнение API с next-intl 4.14.7
+
+Поверхность next-intl снята с его же деклараций типов (`dist/types/**`), а не из
+документации, поэтому сравнение точное.
+
+| next-intl | next-fluent | Вывод |
+| --- | --- | --- |
+| `server`: `getRequestConfig`, `getFormatter`, `getNow`, `getTimeZone`, `getTranslations`, `getMessages`, `getLocale`, `setRequestLocale` | все присутствуют | паритет |
+| `server`: `getExtracted` | нет | **осознанно**: у next-fluent каталог — источник истины, `t('unknown')` и так ошибка типов; вместо этого поставляется `check --usage` |
+| `navigation`: `Link`, `usePathname`, `useRouter`, `getPathname`, `redirect`, `permanentRedirect` | все присутствуют | паритет |
+| `navigation`: `config` | **добавлено** | раньше не возвращался |
+| `forcePrefix` на `Link`/`getPathname`/`redirect`/`useRouter` | **добавлено** | был единственный содержательный пробел |
+| `redirect({href, locale, forcePrefix}, type)` | **добавлено** наряду с формой `(url, options)` | перенос вызовов не требует переписывания |
+| `useRouter.bfcacheId`, `experimental_gesturePush` (Next 16) | проходят через `...router` структурно | паритет без явного кода |
+| `localePrefix` как `Mode \| {mode, prefixes}` | есть | паритет |
+| `localeCookie`, `localeDetection`, `alternateLinks`, `domains`, `pathnames`, `basePath` | есть | паритет |
+| `./extractor` (extract, PO/JSON-кодеки) | нет | осознанно, см. выше |
+
+Итого содержательный пробел был один — `forcePrefix`. Реализован во всех точках:
+`Link`, `getPathname`, `redirect`, `permanentRedirect`, `useRouter.push/replace/prefetch`.
+
+| режим | `getPathname('/about', 'en')` | с `forcePrefix` |
+| --- | --- | --- |
+| `always` | `/en/about` | `/en/about` (уже есть) |
+| `as-needed` | `/about` | `/en/about` |
+| `never` | `/about` | `/about` (no-op: префиксных URL там не существует) |
+
+Проверено, что выданный URL каноничен для middleware во всех трёх режимах и что
+разрешённая локаль совпадает с запрошенной (в `never` — через сигнальный URL
+`switchLocaleHref`, как это делает `Link`).
+
+Цена: ~28 B gzip собственного кода. Сначала реализация была сжата (экономия 2 B),
+затем бюджет поднят `11.5 → 11.75 kB` с комментарием о причине — это стоимость
+фичи, а не дрейф: защита по-прежнему срабатывает на росте свыше ~2%.
+
+---
+
 ## Десятый проход: домены и round-trip typegen
 
 Зона проверки — две последние крупные комбинации, которые матрица девятого
@@ -550,7 +587,7 @@ URL дефолтной локали, — корректная практика h
 | Линт | `npm run lint` (ESLint 9 + react-hooks) | 0 ошибок, 0 предупреждений |
 | Типы | `npm run typecheck` (TS 6.0.3) | ok |
 | Типы потребителя | `npm run test:types` (позитивные + `@ts-expect-error` негативы, включая новые API) | ok |
-| Unit-тесты | `npm test` | **245/245** (157 → 178 → +13 hardening → +12 usage → +10 CLI usage → +12 третий → +4 четвёртый → +4 пятый → +6 шестой → +3 восьмой → +3 девятый проход) |
+| Unit-тесты | `npm test` | **250/250** (157 → … → +3 девятый → +5 forcePrefix) |
 | Edge-совместимость | `npm run test:edge` | ok |
 | Бюджет размера | `npm run size` | ok (middleware 28.3 kB, edge-таргет) |
 | Полный прогон | `npm run check` | ok (ci + типы потребителя + production Next) |
