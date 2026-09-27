@@ -71,6 +71,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A localized slug no longer loses its own locale.** With `pathnames`, a slug
+  belongs to exactly one locale, but the middleware resolved the locale only
+  from the prefix, the cookie and `Accept-Language` — never from the URL. So in
+  `never` mode (no prefixes) a first visit to `/o-nas` with no cookie resolved
+  to the default locale and was redirected to `/about-us`: a shared link to the
+  Russian page landed on the English one. A slug owned by exactly one
+  *non-default* locale now identifies that locale. The cookie still wins, since
+  it records an explicit choice, and the default locale's slug is deliberately
+  excluded because it is the generic form an ordinary visit lands on — letting
+  it win would pin an `Accept-Language: ru` visitor to English.
 - **A `bigint` argument was silently rounded.** It was converted with
   `Number(v)`, so a 64-bit id such as `9007199254740993n` rendered as
   `9,007,199,254,740,992` — the last digit wrong — and anything past the double

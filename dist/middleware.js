@@ -6,6 +6,7 @@ import {
   prefixForLocale
 } from "./locale-prefix.js";
 import {
+  findInternalPath,
   localizePath,
   rewriteLocalizedPath,
   validatePathnames,
@@ -110,7 +111,12 @@ function createI18nMiddleware(options) {
       locales
     ) : void 0;
     const headerLocale = localeDetection ? resolveAcceptLanguage(request.headers.get("accept-language"), locales, defaultLocale) : void 0;
-    const preferredLocale = cookieLocale || headerLocale || defaultLocale;
+    let slugLocale;
+    if (pathnames && matchedPrefix === void 0) {
+      const owners = locales.filter((candidate) => findInternalPath(pathname, candidate, pathnames));
+      if (owners.length === 1 && owners[0] !== defaultLocale) slugLocale = owners[0];
+    }
+    const preferredLocale = cookieLocale || slugLocale || headerLocale || defaultLocale;
     const cookieValue = (effectiveLocale) => {
       if (!cookieConfig) return null;
       const dest = request.headers.get("sec-fetch-dest");

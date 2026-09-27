@@ -7,6 +7,7 @@ import {
   prefixForLocale,
 } from './locale-prefix';
 import {
+  findInternalPath,
   localizePath,
   rewriteLocalizedPath,
   validatePathnames,
@@ -191,7 +192,27 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
       ? resolveAcceptLanguage(request.headers.get('accept-language'), locales, defaultLocale)
       : undefined;
 
-    const preferredLocale = cookieLocale || headerLocale || defaultLocale;
+    /**
+     * A slug that belongs to exactly one configured locale is evidence of that
+     * locale: with `pathnames` mapping `/about` to `en: '/about'` and
+     * `ru: '/o-nas'`, only Russian defines `/o-nas`. Ignoring it made a first
+     * visit with no cookie resolve to the default locale, so the localized slug
+     * was redirected away and a shared link to `/o-nas` landed on the English
+     * page. The cookie still wins, since it records an explicit choice, and an
+     * ambiguous slug (the internal route, or one several locales share) infers
+     * nothing.
+     */
+    let slugLocale: string | undefined;
+    if (pathnames && matchedPrefix === undefined) {
+      const owners = locales.filter((candidate) => findInternalPath(pathname, candidate, pathnames));
+      // Only a slug owned by exactly one locale is evidence, and only when that
+      // locale is not the default: the default locale's slug is the generic
+      // form every request can land on, so letting it win would override
+      // Accept-Language for an ordinary visit.
+      if (owners.length === 1 && owners[0] !== defaultLocale) slugLocale = owners[0];
+    }
+
+    const preferredLocale = cookieLocale || slugLocale || headerLocale || defaultLocale;
 
     /**
      * Writing `Set-Cookie` on every response makes pages uncacheable for

@@ -408,3 +408,40 @@ test('V3-07: createI18n().getFormatter respects the request timeZone', async () 
   );
   server.setRequestConfig(() => ({ locale: 'en', messages: '' }));
 });
+
+// ---------------------------------------------------------------------------
+// V3-19: a slug owned by one locale identifies that locale
+// ---------------------------------------------------------------------------
+
+test('V3-19: a localized slug serves its own locale without a cookie', async () => {
+  // `never` mode carries no locale prefix, so the slug is the only evidence in
+  // the URL. Before this, a first visit with no cookie resolved to the default
+  // locale and /ru's slug was redirected away — a shared link to /o-nas landed
+  // on the English page.
+  const mw = createI18nMiddleware({ ...routing, localePrefix: 'never' });
+
+  const russian = await mw(mockRequest('/o-nas'));
+  assert.equal(russian.headers.get('x-next-locale'), 'ru');
+  assert.equal(russian.headers.get('location'), null);
+
+  // The default locale's own slug is unaffected.
+  const english = await mw(mockRequest('/about-us'));
+  assert.equal(english.headers.get('x-next-locale'), 'en');
+  assert.equal(english.headers.get('location'), null);
+});
+
+test('V3-19b: the default locale slug does not override Accept-Language', async () => {
+  // The default locale's slug is the generic form every visit can land on, so
+  // it must not outrank detection — otherwise an ordinary Russian visitor
+  // asking for /about-us would be pinned to English.
+  const mw = createI18nMiddleware(routing);
+  const response = await mw(mockRequest('/about-us', { 'accept-language': 'ru' }));
+  assert.equal(new URL(response.headers.get('location')).pathname, '/ru/about-us');
+});
+
+test('V3-19c: an explicit locale cookie outranks the slug', async () => {
+  const mw = createI18nMiddleware({ ...routing, localePrefix: 'never' });
+  const response = await mw(mockRequest('/o-nas', {}, 'en'));
+  assert.equal(response.headers.get('x-next-locale'), 'en');
+  assert.equal(new URL(response.headers.get('location')).pathname, '/about-us');
+});
