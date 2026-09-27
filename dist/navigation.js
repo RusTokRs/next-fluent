@@ -14,6 +14,7 @@ import {
   switchLocaleHref
 } from "./nav-url.js";
 import { LocalizedLink, useLocale } from "./client.js";
+import { domainLocalePrefix, findLocaleDomain } from "./domain-routing.js";
 import { formatUrlObject, resolveLocalizedPathname as resolveLocalizedPathname2, assertSafeHref, isExternalUrl } from "./nav-url.js";
 function createNavigation(config) {
   validateI18nConfig({
@@ -42,8 +43,8 @@ function createNavigation(config) {
     const prefixMatch = matchLocalePrefix(
       rawPathname,
       locales,
-      normalizeLocalePrefix(locales, config.localePrefix)
-    );
+      domainLocalePrefix(locales, config.localePrefix, findLocaleDomain(config.domains, currentLocale))
+    ) ?? matchLocalePrefix(rawPathname, locales, normalizeLocalePrefix(locales));
     const cleanPathname = prefixMatch ? prefixMatch.rest : rawPathname;
     if (cleanPathname === "/") return "/";
     const lookupKey = cleanPathname.length > 1 && cleanPathname.endsWith("/") ? cleanPathname.slice(0, -1) : cleanPathname;
@@ -77,7 +78,11 @@ function createNavigation(config) {
           return router.replace(target, routerOptions);
         },
         prefetch(href, options) {
-          if (options?.locale && config.localePrefix !== "always") return;
+          if (options?.locale && domainLocalePrefix(
+            locales,
+            config.localePrefix,
+            findLocaleDomain(config.domains, options.locale)
+          ).mode !== "always") return;
           const targetLocale = options?.locale ?? currentLocale ?? defaultLocale;
           const target = getPathname({
             href,

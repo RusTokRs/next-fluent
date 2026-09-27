@@ -135,6 +135,74 @@ export const routing = defineRouting({
 });
 ```
 
+`defineRouting()` returns an independent, deeply frozen snapshot of the supported
+plain-object/array settings: locales, prefix maps, localized pathnames, domain
+entries, cookie options and trusted hosts. The result is deeply `readonly` in
+TypeScript; locale and route inference are preserved. Input objects are **not**
+frozen, and changing them later does not change an existing routing definition.
+To change routing, create a new definition instead of mutating the returned one.
+Pass the same snapshot to `createNavigation`, `createI18nMiddleware` or `createI18n`
+to keep their rules in sync; raw mutable configs passed directly to these
+factories do not gain this snapshot guarantee.
+
+Prefix validation checks the **effective** map, including implicit `/{locale}`
+defaults. For `locales: ['en', 'ru']`, `{ prefixes: { ru: '/en' } }` is rejected
+because English already uses `/en`; `{ prefixes: { en: '/english', ru: '/en' } }`
+is valid. Equal prefixes and nested prefixes such as `/en` and `/en/region` are
+rejected at configuration time, including in `as-needed` and `never` (where
+prefixes can still signal a locale switch).
+
+For overlapping `pathnames`, precedence is determined segment by segment:
+**static → `[id]` → `[...slug]` → `[[...slug]]`**. For example, `/docs/new` wins
+over `/docs/[id]`, and `/docs/[id]` wins over `/docs/[...slug]` for `/docs/42`,
+regardless of declaration order. A concrete parent wins over an optional empty
+tail. Public URLs are ranked using the locale's translated templates; internal
+fallbacks use the internal templates. Explicit parameterized internal templates
+in URL objects retain their identity before query parameters are substituted.
+
+#### Per-domain locale prefixes
+
+Each `domains[]` entry can override `localePrefix`, using the same mode or
+`{ mode, prefixes }` shape as the global setting:
+
+```ts
+const routing = defineRouting({
+  locales: ['en', 'de', 'ru'] as const,
+  defaultLocale: 'en',
+  localePrefix: 'always',
+  domains: [
+    { domain: 'example.com', defaultLocale: 'en', localePrefix: 'never' },
+    {
+      domain: 'example.eu', defaultLocale: 'de', locales: ['de', 'ru'],
+      localePrefix: { mode: 'as-needed', prefixes: { ru: '/russian' } },
+    },
+  ],
+});
+// en: https://example.com/about
+// de: https://example.eu/about
+// ru: https://example.eu/russian/about
+```
+
+An omitted domain setting inherits the global `localePrefix`. An explicit
+setting replaces it **in full** (prefix maps are not merged); an object without
+`mode` defaults to `always`. Prefix-map keys must belong to that domain's
+locales. Omitted `locales` means only the domain's `defaultLocale` is served.
+`as-needed` uses the **target domain's** default locale, and `forcePrefix` is a
+no-op on a domain using `never`. Domain prefix conflicts are checked within that
+domain's locales, using their spelling from the global `locales` array. Separate
+domains can reuse the same prefix.
+
+Middleware selects rules by request host. Navigation selects the first domain
+supporting the target locale; `getPathname({ href, locale, domain })` can supply
+the current host (including a port), which is preferred when it supports the
+locale and keeps same-domain results relative. Without `locale`, its domain's
+default locale is used. Cross-domain links use HTTPS. Explicit locale switches through `Link` or router
+methods may temporarily include a prefix on multi-locale domains to update the
+locale cookie before redirecting to the canonical URL. Public custom prefixes
+always rewrite to the actual locale code in `app/[locale]` (for example,
+`/russian/about` → `/ru/about`). Domain names may include
+non-default ports, such as `example.com:8443`.
+
 ### 3. Server Configuration (`src/i18n/request.ts`)
 
 Configure message catalogs and request-level settings:
@@ -413,6 +481,13 @@ createI18nMiddleware({
   alternateLinks: true,   // Link: <url>; rel="alternate"; hreflang="…" (+ x-default)
 });
 ```
+
+Alternate links use each destination domain's prefix rules and include locales
+served on other domains. They also work in `never` mode when domains or localized
+pathnames give the languages distinct URLs. URLs shared by multiple locales are
+omitted; no header is emitted with fewer than two unambiguous variants, on
+redirects, or with `alternateLinks: false`. `x-default` is included only without
+domain routing and when the default URL is unambiguous.
 
 The cookie is only written for `Sec-Fetch-Dest: document` requests and only when the stored value changes, so prerendered pages keep `Cache-Control: s-maxage=…` instead of being invalidated on every hit.
 

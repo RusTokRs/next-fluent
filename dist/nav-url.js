@@ -1,9 +1,9 @@
 import { matchSupportedLocale } from "./utils.js";
 import { localizePath, rewriteLocalizedPath } from "./route-engine.js";
+import { domainLocalePrefix, domainSupportsLocale, findDomain, findLocaleDomain } from "./domain-routing.js";
 import {
   localeNeedsPrefix,
   matchLocalePrefix,
-  normalizeLocalePrefix,
   prefixForLocale
 } from "./locale-prefix.js";
 const UNSAFE_HREF_SCHEME = /^(?:javascript|data|vbscript|file):/i;
@@ -85,7 +85,13 @@ function formatUrlObject(urlObj) {
 function resolveLocalizedPathname(options, config) {
   const { href, locale: explicitLocale } = options;
   const { locales, defaultLocale, pathnames, domains, basePath = "" } = config;
-  const prefixConfig = normalizeLocalePrefix(locales, config.localePrefix);
+  const sourceDomain = findDomain(domains, options.domain);
+  const fallbackLocale = matchSupportedLocale(sourceDomain?.defaultLocale ?? defaultLocale, locales) ?? defaultLocale;
+  const resolvedLocale = matchSupportedLocale(explicitLocale, locales) ?? fallbackLocale;
+  const targetDomain = findLocaleDomain(domains, resolvedLocale, options.domain);
+  const resolvedDefaultLocale = targetDomain?.defaultLocale ?? defaultLocale;
+  const prefixConfig = domainLocalePrefix(locales, config.localePrefix, targetDomain);
+  const sourcePrefixConfig = sourceDomain && sourceDomain !== targetDomain ? domainLocalePrefix(locales, config.localePrefix, sourceDomain) : prefixConfig;
   const localePrefix = prefixConfig.mode;
   let rawPathname = "";
   let search = "";
@@ -124,15 +130,13 @@ function resolveLocalizedPathname(options, config) {
   }
   let cleanPathname = rawPathname;
   let sourceLocale;
-  const prefixMatch = matchLocalePrefix(rawPathname, locales, prefixConfig);
+  const prefixMatch = matchLocalePrefix(rawPathname, locales, sourcePrefixConfig);
   if (prefixMatch) {
     sourceLocale = prefixMatch.locale;
     cleanPathname = prefixMatch.rest;
   }
   const hasTrailingSlash = rawPathname.length > 1 && rawPathname.endsWith("/") && cleanPathname !== "/";
   const lookupKey = cleanPathname.length > 1 && cleanPathname.endsWith("/") ? cleanPathname.slice(0, -1) : cleanPathname;
-  const resolvedDefaultLocale = matchSupportedLocale(defaultLocale, locales) ?? defaultLocale;
-  const resolvedLocale = explicitLocale ? matchSupportedLocale(explicitLocale, locales) ?? resolvedDefaultLocale : resolvedDefaultLocale;
   const localized = localizePath(
     lookupKey,
     sourceLocale ?? resolvedLocale,
@@ -155,10 +159,6 @@ function resolveLocalizedPathname(options, config) {
   const prefix = wantsPrefix ? prefixForLocale(resolvedLocale, prefixConfig) : "";
   const finalPath = prefix ? mappedPathname === "/" ? prefix : `${prefix}${mappedPathname.startsWith("/") ? mappedPathname : `/${mappedPathname}`}` : mappedPathname;
   const withBasePath = `${basePath}${finalPath === "/" && basePath ? "" : finalPath}${search}${hash}`;
-  const targetDomain = domains?.find((entry) => {
-    const supported = entry.locales ?? [entry.defaultLocale];
-    return supported.some((locale) => matchSupportedLocale(resolvedLocale, [locale]));
-  });
   if (targetDomain && targetDomain.domain.toLowerCase() !== options.domain?.toLowerCase()) {
     return `https://${targetDomain.domain}${withBasePath}`;
   }
@@ -166,24 +166,24 @@ function resolveLocalizedPathname(options, config) {
 }
 function switchLocaleHref(target, explicitLocale, config) {
   const { locales, basePath = "" } = config;
-  const prefixConfig = normalizeLocalePrefix(locales, config.localePrefix);
-  const localePrefix = prefixConfig.mode;
-  if (!explicitLocale || isExternalUrl(target) || target.startsWith("#")) {
-    return target;
-  }
+  if (!explicitLocale || target.startsWith("#")) return target;
   const locale = matchSupportedLocale(explicitLocale, locales);
   if (!locale) return target;
-  if (localePrefix === "always") {
-    return target;
-  }
+  const absolute = isExternalUrl(target);
   const url = new URL(target, "https://next-fluent.invalid");
+  const domain = absolute ? findDomain(config.domains, url.host) : findLocaleDomain(config.domains, locale);
+  if (absolute && (!domain?.locales || domain.locales.length < 2 || !domainSupportsLocale(domain, locale) || !/^https?:$/.test(url.protocol))) return target;
+  const prefixConfig = domainLocalePrefix(locales, config.localePrefix, domain);
+  const localePrefix = prefixConfig.mode;
+  if (localePrefix === "always") return target;
   const route = basePath && (url.pathname === basePath || url.pathname.startsWith(`${basePath}/`)) ? url.pathname.slice(basePath.length) || "/" : url.pathname;
   if (localePrefix === "as-needed") {
     if (matchLocalePrefix(route, locales, prefixConfig)) {
       return target;
     }
   }
-  return `${basePath}${prefixForLocale(locale, prefixConfig)}${route === "/" ? "" : route}${url.search}${url.hash}`;
+  const switched = `${basePath}${prefixForLocale(locale, prefixConfig)}${route === "/" ? "" : route}${url.search}${url.hash}`;
+  return absolute ? `${url.origin}${switched}` : switched;
 }
 function rewriteToInternalPath(pathname, locale, locales, pathnames) {
   if (!pathnames) return pathname;

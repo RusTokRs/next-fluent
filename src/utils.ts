@@ -229,9 +229,10 @@ export function validateLocalePrefix(
     throw new Error('[next-fluent] "localePrefix.prefixes" must be an object.');
   }
 
-  const seen = new Set<string>();
+  const effective = new Map<string, string>();
   for (const [locale, prefix] of Object.entries(prefixes)) {
-    if (!matchSupportedLocale(locale, locales)) {
+    const supported = matchSupportedLocale(locale, locales);
+    if (!supported) {
       throw new Error(
         `[next-fluent] "localePrefix.prefixes" contains an unsupported locale: "${locale}".`
       );
@@ -249,6 +250,15 @@ export function validateLocalePrefix(
         `[next-fluent] "localePrefix.prefixes.${locale}" must not contain "." or ".." path segments (received ${JSON.stringify(prefix)}).`
       );
     }
+    // Match normalizeLocalePrefix: the first alias of a supported locale wins.
+    if (!effective.has(supported)) effective.set(supported, prefix);
+  }
+
+  // Validate what routing will actually use, not just the explicitly supplied
+  // entries: e.g. ru: '/en' collides with en's implicit default prefix.
+  const seen = new Set<string>();
+  for (const locale of locales) {
+    const prefix = effective.get(locale) ?? `/${locale}`;
     const identity = prefix.toLowerCase();
     if (seen.has(identity)) {
       throw new Error(`[next-fluent] Duplicate locale prefix: ${prefix}`);

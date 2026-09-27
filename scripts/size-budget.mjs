@@ -21,24 +21,32 @@ const BUDGETS = [
     name: 'next-fluent (root, client)',
     entry: path.join(root, 'src/index-browser.ts'),
     maxMinified: 47 * 1024,
-    maxGzip: 15.5 * 1024,
+    // +128 B gzip for effective-prefix validation and segment-wise route priority.
+    // A further +128 B permits deeply copied/frozen routing definitions.
+    maxGzip: 15.75 * 1024,
   },
   {
     name: 'next-fluent/client',
     entry: path.join(root, 'src/client.ts'),
     maxMinified: 39 * 1024,
-    maxGzip: 13 * 1024,
+    // Absolute domain locale switches must carry a cookie-update signal too.
+    // +128 B allowance for the browser-verified fix (measured gzip ~13.04 kB).
+    maxGzip: 13.125 * 1024,
   },
   {
     // The library's own code, without the Fluent runtime it depends on.
-    // gzip raised 11.5 -> 11.75 kB for `forcePrefix` on Link/getPathname/
-    // redirect and the router methods (~28 B). Deliberate feature cost, not
-    // drift: the guard still fails on anything beyond ~2% growth here.
+    // Per-domain localePrefix adds shared domain resolution to navigation,
+    // Link and locale switching. Budgets raised 35 -> 35.5 kB minified and
+    // 11.75 -> 12 kB gzip for that deliberate feature cost. Including the
+    // browser-verified switch fixes, measured size is ~35.5/11.9 kB.
+    // Effective-prefix validation and route priority need a further +256 B
+    // minified allowance (measured ~35.7 kB); gzip stays within 12 kB.
     name: 'next-fluent own code (bundle external)',
     entry: path.join(root, 'src/index-browser.ts'),
     extraExternal: ['@fluent/bundle'],
-    maxMinified: 35 * 1024,
-    maxGzip: 11.75 * 1024,
+    // Deep routing snapshots add ~0.2 kB minified / ~0.1 kB gzip.
+    maxMinified: 36 * 1024,
+    maxGzip: 12.125 * 1024,
   },
   {
     name: '@fluent/bundle (runtime dependency)',

@@ -142,9 +142,10 @@ function validateLocalePrefix(locales, localePrefix) {
   if (typeof prefixes !== "object" || prefixes === null) {
     throw new Error('[next-fluent] "localePrefix.prefixes" must be an object.');
   }
-  const seen = /* @__PURE__ */ new Set();
+  const effective = /* @__PURE__ */ new Map();
   for (const [locale, prefix] of Object.entries(prefixes)) {
-    if (!matchSupportedLocale(locale, locales)) {
+    const supported = matchSupportedLocale(locale, locales);
+    if (!supported) {
       throw new Error(
         `[next-fluent] "localePrefix.prefixes" contains an unsupported locale: "${locale}".`
       );
@@ -159,6 +160,11 @@ function validateLocalePrefix(locales, localePrefix) {
         `[next-fluent] "localePrefix.prefixes.${locale}" must not contain "." or ".." path segments (received ${JSON.stringify(prefix)}).`
       );
     }
+    if (!effective.has(supported)) effective.set(supported, prefix);
+  }
+  const seen = /* @__PURE__ */ new Set();
+  for (const locale of locales) {
+    const prefix = effective.get(locale) ?? `/${locale}`;
     const identity = prefix.toLowerCase();
     if (seen.has(identity)) {
       throw new Error(`[next-fluent] Duplicate locale prefix: ${prefix}`);

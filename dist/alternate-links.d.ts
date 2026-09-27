@@ -1,4 +1,4 @@
-import type { LocalePrefixConfig, Pathnames } from './types';
+import type { DomainConfig, LocalePrefixConfig, Pathnames } from './types';
 export interface AlternateLinksOptions {
     locales: readonly string[];
     defaultLocale: string;
@@ -8,11 +8,7 @@ export interface AlternateLinksOptions {
     /** Internal route template matched for the current request, when known. */
     internalTemplate?: string;
     pathnames?: Pathnames<any>;
-    domains?: readonly {
-        domain: string;
-        defaultLocale: string;
-        locales?: readonly string[];
-    }[];
+    domains?: readonly DomainConfig[];
     basePath?: string;
     search?: string;
     origin: string;

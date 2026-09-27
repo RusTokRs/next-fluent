@@ -1,6 +1,7 @@
 import type { I18nMiddlewareOptions, LocaleCookieConfig } from './types';
 import { matchSupportedLocale, resolveAcceptLanguage, validateI18nConfig } from './utils';
 import {
+  localeNeedsPrefix,
   matchLocalePrefix,
   normalizeLeadingSlashes,
   normalizeLocalePrefix,
@@ -14,6 +15,7 @@ import {
   validateRouteEnvironment,
 } from './route-engine';
 import { buildAlternateLinksHeader } from './alternate-links';
+import { domainLocalePrefix, findLocaleDomain, replaceUrlHost } from './domain-routing';
 
 /**
  * Internal request header used to recognize the second middleware pass that
@@ -40,6 +42,8 @@ export interface NextMiddlewareRequestLike {
   nextUrl: {
     pathname: string;
     search: string;
+    /** Next.js exposes basePath separately from pathname. */
+    basePath?: string;
   };
   cookies: {
     get(name: string): { value: string } | undefined;
@@ -94,8 +98,11 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
   } = options;
 
   const cookieConfig = resolveCookieConfig(options.localeCookie, cookieName);
-  const prefixConfig = normalizeLocalePrefix(allLocales, options.localePrefix);
-  const localePrefix = prefixConfig.mode;
+  const globalPrefixConfig = normalizeLocalePrefix(allLocales, options.localePrefix);
+  const internalPrefixConfig = normalizeLocalePrefix(allLocales);
+  const domainPrefixes = new Map(domains?.map((domain) => [
+    domain, domainLocalePrefix(allLocales, options.localePrefix, domain),
+  ]));
 
   // Resolve defaultLocale to its exact spelling in `locales` so that string
   // comparisons (e.g. `matchedPrefix === defaultLocale` in as-needed mode)
@@ -119,7 +126,7 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
     if (rawHost && /^[^\s/?#@\\]+$/.test(rawHost)) {
       try {
         const parsedHost = new URL(`${requestOrigin.protocol}//${rawHost}`);
-        if (parsedHost.host === rawHost.toLowerCase()) requestOrigin.host = parsedHost.host;
+        if (parsedHost.host === rawHost.toLowerCase()) replaceUrlHost(requestOrigin, parsedHost.host);
       } catch { /* Keep NextRequest's origin for an invalid Host header. */ }
     }
     const requestHost = requestOrigin.host.toLowerCase();
@@ -138,17 +145,25 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
       return url.origin === requestOrigin.origin ? url : new URL('/', requestOrigin);
     };
     const domain = domains?.find((item) => item.domain.toLowerCase() === requestHost);
-    const locales = domain ? domain.locales ?? [domain.defaultLocale] : allLocales;
+    const locales = domain
+      ? allLocales.filter((locale) => matchSupportedLocale(locale, domain.locales ?? [domain.defaultLocale]))
+      : allLocales;
+    const prefixConfig = (domain && domainPrefixes.get(domain)) || globalPrefixConfig;
+    const localePrefix = prefixConfig.mode;
     const defaultLocale = matchSupportedLocale(
       domain?.defaultLocale ?? configuredDefaultLocale,
       locales
     ) ?? configuredDefaultLocale;
-    const hasBasePath = Boolean(basePath && (
+    const separatedBasePath = Boolean(basePath && request.nextUrl.basePath === basePath);
+    const inlineBasePath = !separatedBasePath && Boolean(basePath && (
       rawPathname === basePath || rawPathname.startsWith(`${basePath}/`)
     ));
-    const pathname = hasBasePath ? rawPathname.slice(basePath.length) || '/' : rawPathname;
+    const hasBasePath = inlineBasePath || separatedBasePath;
+    const pathname = inlineBasePath ? rawPathname.slice(basePath.length) || '/' : rawPathname;
     const withBasePath = (path: string) => hasBasePath ? `${basePath}${path}` : path;
-    const prefixMatch = matchLocalePrefix(pathname, locales, prefixConfig);
+    const publicPrefixMatch = matchLocalePrefix(pathname, locales, prefixConfig);
+    const internalPrefixMatch = matchLocalePrefix(pathname, locales, internalPrefixConfig);
+    const prefixMatch = publicPrefixMatch ?? internalPrefixMatch;
     const matchedPrefix = prefixMatch?.locale;
     const pathnameWithoutPrefix = prefixMatch ? prefixMatch.rest : pathname;
 
@@ -247,7 +262,7 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
       if (rewritePath) {
         requestHeaders.set(
           REWRITE_SIGNAL_HEADER,
-          requestUrl(withBasePath(rewritePath)).pathname
+          requestUrl(rewritePath).pathname
         );
       } else {
         // Never forward a client-supplied signal to the application.
@@ -255,7 +270,9 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
       }
 
       const response = rewritePath
-        ? NextResponse.rewrite(requestUrl(withBasePath(rewritePath)), {
+        // Keep rewrites on Next's own origin. Using the public forwarded host
+        // makes Next treat a local rewrite as an external proxy request.
+        ? NextResponse.rewrite(new URL(normalizeLeadingSlashes(withBasePath(rewritePath)), request.url), {
             request: { headers: requestHeaders },
           })
         : NextResponse.next({
@@ -267,10 +284,10 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
 
       if (response.headers?.set) {
         response.headers.set(headerName, effectiveLocale);
-        if (alternateLinks && localePrefix !== 'never') {
+        if (alternateLinks) {
           const header = buildAlternateLinksHeader({
-            locales,
-            defaultLocale,
+            locales: allLocales,
+            defaultLocale: configuredDefaultLocale,
             localePrefix: options.localePrefix,
             pathname: pathnameWithoutPrefix,
             pathnames,
@@ -305,15 +322,32 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
       return response;
     };
 
-    const globalPrefix = matchLocalePrefix(pathname, allLocales, prefixConfig)?.locale;
-    if (domain && globalPrefix && !matchSupportedLocale(globalPrefix, locales)) {
-      const targetDomain = domains?.find((item) =>
-        (item.locales ?? [item.defaultLocale]).some((locale) => matchSupportedLocale(globalPrefix, [locale]))
-      );
+    // A locale not served on this host belongs on its configured domain. Match
+    // the current/global prefixes and then foreign domain prefixes, but never
+    // let a foreign prefix override a valid prefix on the current host.
+    let foreignPrefix = matchLocalePrefix(pathname, allLocales, prefixConfig)
+      ?? matchLocalePrefix(pathname, allLocales, globalPrefixConfig);
+    if (domain && !matchedPrefix && !foreignPrefix) {
+      for (const [candidate, prefixes] of domainPrefixes) {
+        const match = matchLocalePrefix(pathname, allLocales, prefixes);
+        if (candidate !== domain && match && !matchSupportedLocale(match.locale, locales)) {
+          foreignPrefix = match;
+          break;
+        }
+      }
+    }
+    if (domain && !matchedPrefix && foreignPrefix && !matchSupportedLocale(foreignPrefix.locale, locales)) {
+      const targetLocale = foreignPrefix.locale;
+      const targetDomain = findLocaleDomain(domains, targetLocale);
       if (targetDomain) {
+        const targetPrefix = domainPrefixes.get(targetDomain)!;
+        const prefix = localeNeedsPrefix(targetLocale, targetDomain.defaultLocale, targetPrefix.mode)
+          ? prefixForLocale(targetLocale, targetPrefix) : '';
+        const canonical = canonicalPath(targetLocale, foreignPrefix.rest);
         const targetUrl = new URL(requestOrigin);
-        targetUrl.host = targetDomain.domain;
-        return createRedirect(targetUrl, globalPrefix);
+        replaceUrlHost(targetUrl, targetDomain.domain);
+        targetUrl.pathname = withBasePath(`${prefix}${canonical === '/' && prefix ? '' : canonical}`);
+        return createRedirect(targetUrl, targetLocale);
       }
     }
 
@@ -339,11 +373,13 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
     const isDocumentNavigation = secFetchDest === null || secFetchDest === 'document';
     /** Whether `withoutPrefix` is exactly what the canonical path rewrites to. */
     const isInternalTarget = (locale: string, withoutPrefix: string, canonical: string) =>
-      canonical !== withoutPrefix && internalPath(locale, canonical) === withoutPrefix;
+      internalPrefixMatch?.locale === locale &&
+      (canonical !== withoutPrefix || prefixForLocale(locale, prefixConfig) !== `/${locale}`) &&
+      internalPath(locale, canonical) === withoutPrefix;
 
     const isRewriteSignal =
       matchedPrefix !== undefined &&
-      request.headers.get(REWRITE_SIGNAL_HEADER) === rawPathname;
+      request.headers.get(REWRITE_SIGNAL_HEADER) === pathname;
 
     // Strategy 1: 'never' (no prefixes in URL, internal rewrite to /[locale]/... )
     if (localePrefix === 'never') {
@@ -374,7 +410,7 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
         }
       }
       const route = internalPath(preferredLocale, pathname);
-      const rewritePath = `${prefixForLocale(preferredLocale, prefixConfig)}${route === '/' ? '' : route}${search}`;
+      const rewritePath = `/${preferredLocale}${route === '/' ? '' : route}${search}`;
       return createSuccessResponse(preferredLocale, rewritePath);
     }
 
@@ -401,7 +437,7 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
           if (!isDocumentNavigation && isInternalTarget(matchedPrefix, pathnameWithoutPrefix, canonical)) {
             return createSuccessResponse(matchedPrefix);
           }
-          if (canonical !== pathnameWithoutPrefix) {
+          if (canonical !== pathnameWithoutPrefix || !publicPrefixMatch) {
             const prefix = prefixForLocale(matchedPrefix, prefixConfig);
             return createRedirect(
               requestUrl(withBasePath(`${prefix}${canonical === '/' ? '' : canonical}${search}`)),
@@ -410,9 +446,8 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
           }
         }
         const route = internalPath(matchedPrefix, pathnameWithoutPrefix);
-        const rewritePath = route === pathnameWithoutPrefix
-          ? undefined
-          : `${prefixForLocale(matchedPrefix, prefixConfig)}${route === '/' ? '' : route}${search}`;
+        const internal = `/${matchedPrefix}${route === '/' ? '' : route}`;
+        const rewritePath = internal === pathname ? undefined : `${internal}${search}`;
         return createSuccessResponse(matchedPrefix, rewritePath);
       }
       // No prefix in URL:
@@ -427,7 +462,7 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
           }
         }
         const route = internalPath(defaultLocale, pathname);
-        const rewritePath = `${prefixForLocale(defaultLocale, prefixConfig)}${route === '/' ? '' : route}${search}`;
+        const rewritePath = `/${defaultLocale}${route === '/' ? '' : route}${search}`;
         return createSuccessResponse(defaultLocale, rewritePath);
       }
       // Preferred locale is non-default: redirect to /{preferredLocale}/path
@@ -442,7 +477,7 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
         if (!isDocumentNavigation && isInternalTarget(matchedPrefix, pathnameWithoutPrefix, canonical)) {
           return createSuccessResponse(matchedPrefix);
         }
-        if (canonical !== pathnameWithoutPrefix) {
+        if (canonical !== pathnameWithoutPrefix || !publicPrefixMatch) {
           const prefix = prefixForLocale(matchedPrefix, prefixConfig);
           return createRedirect(
             requestUrl(withBasePath(`${prefix}${canonical === '/' ? '' : canonical}${search}`)),
@@ -451,9 +486,8 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
         }
       }
       const route = internalPath(matchedPrefix, pathnameWithoutPrefix);
-      const rewritePath = route === pathnameWithoutPrefix
-        ? undefined
-        : `${prefixForLocale(matchedPrefix, prefixConfig)}${route === '/' ? '' : route}${search}`;
+      const internal = `/${matchedPrefix}${route === '/' ? '' : route}`;
+      const rewritePath = internal === pathname ? undefined : `${internal}${search}`;
       return createSuccessResponse(matchedPrefix, rewritePath);
     }
 

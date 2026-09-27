@@ -1,23 +1,30 @@
 import { validateI18nConfig } from "./utils.js";
 import { validatePathnames, validateRouteEnvironment } from "./route-engine.js";
+function copyAndFreeze(value, copies = /* @__PURE__ */ new WeakMap()) {
+  if (value === null || typeof value !== "object") return value;
+  const prototype = Object.getPrototypeOf(value);
+  if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) {
+    return value;
+  }
+  const existing = copies.get(value);
+  if (existing) return existing;
+  const copy = Array.isArray(value) ? [...value] : { ...value };
+  copies.set(value, copy);
+  for (const key of Reflect.ownKeys(copy)) {
+    Object.defineProperty(copy, key, { value: copyAndFreeze(Reflect.get(copy, key), copies) });
+  }
+  return Object.freeze(copy);
+}
 function defineRouting(config) {
-  validateI18nConfig({
-    locales: config.locales,
-    defaultLocale: config.defaultLocale,
-    localePrefix: config.localePrefix,
-    cookieName: config.cookieName,
-    headerName: config.headerName
-  });
-  validatePathnames(config.locales, config.pathnames);
-  validateRouteEnvironment(config.locales, config.domains, config.basePath);
-  return Object.freeze({
-    ...config,
-    // Same elements, same order, so the inferred tuple type still describes it.
-    locales: Object.freeze([...config.locales]),
-    localePrefix: config.localePrefix ?? "always",
-    cookieName: config.cookieName ?? "NEXT_LOCALE",
-    headerName: config.headerName ?? "x-next-locale"
-  });
+  const normalized = { ...config };
+  if (normalized.localePrefix === void 0) normalized.localePrefix = "always";
+  normalized.cookieName ??= "NEXT_LOCALE";
+  normalized.headerName ??= "x-next-locale";
+  const snapshot = copyAndFreeze(normalized);
+  validateI18nConfig(snapshot);
+  validatePathnames(snapshot.locales, snapshot.pathnames);
+  validateRouteEnvironment(snapshot.locales, snapshot.domains, snapshot.basePath);
+  return snapshot;
 }
 export {
   defineRouting

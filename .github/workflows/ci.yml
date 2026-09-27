@@ -88,3 +88,11 @@ jobs:
             echo "::error title=next-fluent integration failed::${MSG}"
             exit 1
           }
+
+      - name: Install Chromium for multi-domain regression
+        if: matrix.os == 'ubuntu-latest' && matrix.profile.node == '22.x'
+        run: npx playwright install --with-deps chromium
+
+      - name: Verify multi-domain browser routing
+        if: matrix.os == 'ubuntu-latest' && matrix.profile.node == '22.x'
+        run: npm run test:next:domains

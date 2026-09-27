@@ -82,12 +82,12 @@ export const routing = defineRouting({
 | `localePrefix: 'always' \| 'as-needed' \| 'never'` | ✅ | ✅ identical |
 | `localePrefix: { mode, prefixes }` | ✅ | ✅ identical shape; prefixes are validated (absolute, unique, non-shadowing) |
 | `pathnames` (translated routes) | ✅ | ✅ identical shape |
-| `domains` | ✅ | ✅ identical shape |
+| `domains` | ✅ | ✅ also supports per-domain `localePrefix` overrides (mode or `{ mode, prefixes }`) |
 | `localeCookie` | `boolean \| CookieAttributes`, default `{ name: 'NEXT_LOCALE', sameSite: 'lax' }` (session cookie) | `false \| LocaleCookieConfig`, default `{ name: 'NEXT_LOCALE', path: '/', maxAge: 31536000, sameSite: 'lax' }` |
 | `localeDetection` | default `true` | default `true` |
-| `alternateLinks` | default `true`, emits `Link: <…>; rel="alternate"; hreflang="…"` incl. `x-default` | identical, including the redirect / `never` / single-locale skips |
+| `alternateLinks` | default `true`, emits `Link: <…>; rel="alternate"; hreflang="…"` incl. `x-default` | default `true`; skips redirects and ambiguous URLs, but supports `never` when domains or localized paths produce distinct URLs |
 
-The cookie default is the one behavioural difference to check: next-intl writes a
+The cookie default is another behavioural difference to check: next-intl writes a
 **session** cookie, next-fluent writes a **one-year** cookie. Pass
 `localeCookie: { maxAge: undefined }` for session behaviour.
 
