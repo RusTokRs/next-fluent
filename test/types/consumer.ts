@@ -7,6 +7,7 @@ import { FluentErrorCode } from '../../dist/errors.js';
 import { pickMessages } from '../../dist/pick-messages.js';
 import { jsonToFluent } from '../../dist/catalog.js';
 import { checkCatalogs } from '../../dist/check.js';
+import { analyzeUsage, formatUsageReport, type UsageReport } from '../../dist/usage.js';
 import { createElement, type ReactNode } from 'react';
 
 const t = useTranslations('app');
@@ -118,6 +119,19 @@ async function jsonCatalogConsumer() {
   void json;
 }
 void jsonCatalogConsumer;
+
+async function usageAnalysisConsumer() {
+  const report: UsageReport = analyzeUsage(
+    { en: 'app-hello = Hi' },
+    [{ path: 'app/page.tsx', content: "const t = useTranslations();\nt('app-hello');" }],
+    { referenceLocale: 'en', reportUnused: true, ignore: ['legacy'] }
+  );
+  const unused = report.issues.filter((issue) => issue.kind === 'unused');
+  const text: string = formatUsageReport(report);
+  void unused;
+  void text;
+}
+void usageAnalysisConsumer;
 
 export function JsonProviderConsumer({ children }: { children: ReactNode }) {
   return createElement(FluentProvider, {

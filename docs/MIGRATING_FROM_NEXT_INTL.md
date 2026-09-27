@@ -200,5 +200,10 @@ next-fluent check --input messages --reference en   # exits non-zero on gaps
   date shorthands are Fluent selectors instead. Fluent has no `#`-style
   "offset" arithmetic — use `{ NUMBER($n, minimumFractionDigits: 2) }`.
 - **Extraction from source** (`next-intl/extractor`). next-fluent goes the other
-  way: the FTL catalog is the source of truth and types are generated from it.
+  way: the FTL catalog is the source of truth and types are generated from it, so
+  a message that does not exist is a compile error rather than something a scan
+  has to discover. The direction that *is* useful is the inverse one —
+  `next-fluent check --usage` reports catalog messages no call site references,
+  call sites too dynamic to verify, and `t.attrs()` calls on messages without
+  attributes. See "Finding dead messages" in the README.
 - **`getExtracted()`** — there is no extracted-message store to read.

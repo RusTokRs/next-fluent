@@ -51,6 +51,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   <prefix>` a namespace. `missing`/`missing-attributes` fail the command;
   advisories only do with `--strict-usage`. The analyzer never writes to a
   catalog.
+- `next-fluent check --usage` now works with a single locale. Cross-locale
+  comparison still needs a second catalog, but usage analysis does not, so a
+  project that ships one locale can already hunt dead messages.
 
 ### Changed
 

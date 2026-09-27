@@ -179,7 +179,16 @@ if (command === 'check') {
   const catalogs = runGuarded(() => readCatalogsByLocale(inputPath));
 
   const locales = Object.keys(catalogs);
-  if (locales.length < 2) {
+  // Cross-locale comparison needs a second catalog to compare against, but
+  // usage analysis does not: a project that ships one locale so far should
+  // still be able to find dead messages.
+  if (locales.length < 1) {
+    console.error(
+      'Error: "check" found no catalogs. Expected e.g. messages/en.ftl, or messages/en/.'
+    );
+    process.exit(1);
+  }
+  if (locales.length < 2 && !options.usage) {
     console.error(
       `Error: "check" needs at least two locales, found ${locales.length}. ` +
         'Expected e.g. messages/en.ftl and messages/ru.ftl, or messages/en/ and messages/ru/.'
