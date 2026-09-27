@@ -1,4 +1,4 @@
-import type { FluentBundle } from '@fluent/bundle';
+import { FluentNumber, FluentType, type FluentBundle } from '@fluent/bundle';
 import React from 'react';
 import type {
   FluentArgs,
@@ -132,11 +132,32 @@ function buildFluentArgs(values: Record<string, unknown> | undefined): BuiltArgs
       continue;
     }
     if (typeof v === 'bigint') {
-      args[k] = Number(v);
+      // `Number(v)` rounds past 2^53, so a 64-bit id lost its last digit, and
+      // it overflows to Infinity for anything larger — both silently. Keep the
+      // exact digits instead: Intl.NumberFormat formats numeric strings
+      // exactly. Past the double range even Intl cannot represent the value,
+      // and the raw digits beat rendering "∞".
+      const digits = v.toString();
+      // The typings declare `FluentNumber(number)`, but it forwards the value
+      // to Intl.NumberFormat, which formats numeric strings exactly (ES2023
+      // Intl.NumberFormat v3). A test pins the exact digits, so a change
+      // upstream cannot silently reintroduce the rounding.
+      args[k] = Number.isFinite(Number(digits))
+        ? new FluentNumber(digits as unknown as number)
+        : digits;
       continue;
     }
-    if (typeof v === 'object' && 'type' in v) {
-      // FluentType instance (FluentNumber/FluentDateTime/…) or Temporal object.
+    if (
+      v instanceof FluentType ||
+      (typeof v === 'object' &&
+        'value' in v &&
+        typeof (v as { valueOf?: unknown }).valueOf === 'function')
+    ) {
+      // FluentType instances (FluentNumber/FluentDateTime/…) carry `value` and
+      // `valueOf`, not `type`, so the previous `'type' in v` test never matched
+      // and every one was rejected as an invalid argument. `instanceof` covers
+      // the common case; the shape check keeps working when a project ends up
+      // with two copies of @fluent/bundle.
       args[k] = v as FluentVariable;
       continue;
     }

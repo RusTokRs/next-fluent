@@ -71,6 +71,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A `bigint` argument was silently rounded.** It was converted with
+  `Number(v)`, so a 64-bit id such as `9007199254740993n` rendered as
+  `9,007,199,254,740,992` — the last digit wrong — and anything past the double
+  range rendered as `∞`. Bigints now keep their exact digits (`NUMBER()` formats
+  them exactly too), and only fall back to the raw digits when the value is
+  beyond what `Intl` can represent at all.
+- **`FluentNumber` and `FluentDateTime` passed by the caller were rejected.**
+  The argument check looked for a `type` property, but `FluentType` instances
+  carry `value` and `valueOf`, so every one of them was reported as
+  `INVALID_ARGUMENT` and the message fell back to its key. Detection is now
+  `instanceof FluentType`, with a shape check as a fallback for projects that
+  end up with two copies of `@fluent/bundle`.
 - **The request-scoped bundle cache key omitted the requested locale.** The
   slot was keyed by the effective locale, while the messages are loaded for the
   requested one. A request config that normalizes several requested locales onto

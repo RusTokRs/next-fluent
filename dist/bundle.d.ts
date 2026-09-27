@@ -1,4 +1,4 @@
-import type { FluentBundle } from '@fluent/bundle';
+import { type FluentBundle } from '@fluent/bundle';
 import type { GetMessageFallbackFn, OnErrorFn, RichTranslationValues, Translations } from './types';
 import { type MessageSource } from './catalog';
 import { getCachedFluentBundle, getBundleCacheStats, LRUCache, type CreateFluentBundleOptions } from './cache';

@@ -1,3 +1,4 @@
+import { FluentNumber, FluentType } from "@fluent/bundle";
 import React from "react";
 import { buildKeyCandidates, canonicalizeLocale, withKebabKey } from "./utils.js";
 import { toFluentSource } from "./catalog.js";
@@ -67,10 +68,11 @@ function buildFluentArgs(values) {
       continue;
     }
     if (typeof v === "bigint") {
-      args[k] = Number(v);
+      const digits = v.toString();
+      args[k] = Number.isFinite(Number(digits)) ? new FluentNumber(digits) : digits;
       continue;
     }
-    if (typeof v === "object" && "type" in v) {
+    if (v instanceof FluentType || typeof v === "object" && "value" in v && typeof v.valueOf === "function") {
       args[k] = v;
       continue;
     }

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import React from 'react';
 
 import { createFluentBundle, createTranslator } from '../dist/bundle.js';
+import { FluentNumber, FluentDateTime } from '@fluent/bundle';
 import { FluentErrorCode } from '../dist/errors.js';
 
 const silent = { onError: () => {} };
@@ -102,4 +103,41 @@ test('t.attrs keeps stripping marks, matching t.plain', () => {
   );
   const attrs = createTranslator(bundle).attrs('field', { name: 'John' });
   assert.deepEqual(attrs, { 'aria-label': 'Label John' });
+});
+
+test('a bigint argument keeps every digit', () => {
+  // Number(v) rounds past 2^53, so a 64-bit id lost its last digit, and it
+  // overflowed to Infinity beyond the double range. Both were silent.
+  const bundle = createFluentBundle('en', 'id = Order { $id }\nfmt = Total { NUMBER($n) }\n');
+  const t = createTranslator(bundle, silent);
+
+  assert.equal(t('id', { id: 9007199254740993n }), 'Order \u20689,007,199,254,740,993\u2069');
+  // Small bigints still format as numbers.
+  assert.equal(t('id', { id: 42n }), 'Order \u206842\u2069');
+  // NUMBER() sees the exact value too.
+  assert.equal(t('fmt', { n: 9007199254740993n }), 'Total \u20689,007,199,254,740,993\u2069');
+});
+
+test('a bigint beyond the double range renders digits, not infinity', () => {
+  const bundle = createFluentBundle('en', 'id = Order { $id }\n');
+  const out = createTranslator(bundle, silent)('id', { id: 10n ** 400n });
+  assert.equal(out.includes('∞'), false, `rendered ${JSON.stringify(out.slice(0, 24))}`);
+  assert.ok(out.includes('1' + '0'.repeat(400)), 'exact digits expected');
+});
+
+test('FluentType instances passed by the caller are accepted', () => {
+  // FluentNumber/FluentDateTime carry `value` and `valueOf`, not `type`, so the
+  // previous `'type' in v` test rejected every one of them as invalid.
+  const bundle = createFluentBundle('en', 'id = Order { $id }\nwhen = On { $at }\n');
+  const t = createTranslator(bundle, silent);
+
+  assert.equal(t('id', { id: new FluentNumber(5) }), 'Order \u20685\u2069');
+  // The formatting options are the reason to pass one in the first place.
+  assert.equal(
+    t('id', { id: new FluentNumber(1234.5, { style: 'currency', currency: 'EUR' }) }),
+    'Order \u2068€1,234.50\u2069'
+  );
+  const at = t('when', { at: new FluentDateTime(new Date('2024-03-01T12:00:00Z').getTime()) });
+  assert.notEqual(at, 'when');
+  assert.ok(at.startsWith('On '), at);
 });
