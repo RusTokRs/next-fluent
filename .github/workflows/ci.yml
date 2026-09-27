@@ -77,4 +77,14 @@ jobs:
       - name: Build a real Next.js consumer app
         env:
           NEXT_FLUENT_BROWSER: ${{ matrix.os == 'ubuntu-latest' && matrix.profile.node == '22.x' && matrix.profile.next == '16' && '1' || '0' }}
-        run: npm run test:next
+        # On failure the tail is re-emitted as an error annotation, so the reason
+        # is readable from the check run itself instead of requiring the raw log
+        # archive (which is awkward to reach from restricted networks).
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run test:next 2>&1 | tee /tmp/next-integration.log || {
+            MSG=$(tail -n 40 /tmp/next-integration.log | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=next-fluent integration failed::${MSG}"
+            exit 1
+          }
