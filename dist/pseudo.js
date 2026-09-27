@@ -1,9 +1,9 @@
 import {
-  parse,
   serialize,
   Visitor,
   TextElement
 } from "@fluent/syntax";
+import { parseFtl } from "./ftl-parse.js";
 const CHAR_MAP = {
   a: "\xE5",
   b: "\u0180",
@@ -63,17 +63,12 @@ function pseudoLocalizeText(text, options = {}) {
   const prefix = options.prefix ?? "[";
   const suffix = options.suffix ?? "]";
   const elongate = options.elongate ?? true;
-  const tokenRegex = /(\{[^}]*\}|<\/?[a-zA-Z][a-zA-Z0-9_-]*\s*\/?>)/g;
-  const parts = text.split(tokenRegex);
-  const transformedParts = parts.map((part) => {
-    if (part.startsWith("{") && part.endsWith("}")) {
-      return part;
-    }
-    if (part.startsWith("<") && part.endsWith(">")) {
-      return part;
+  const transformedParts = splitPreservedTokens(text).map((part) => {
+    if (part.kind !== "text") {
+      return part.value;
     }
     let res = "";
-    for (const ch of part) {
+    for (const ch of part.value) {
       const mapped = CHAR_MAP[ch] || ch;
       res += mapped;
       if (elongate && "aeiouAEIOU".includes(ch)) {
@@ -83,6 +78,65 @@ function pseudoLocalizeText(text, options = {}) {
     return res;
   });
   return `${prefix}${transformedParts.join("")}${suffix}`;
+}
+function splitPreservedTokens(text) {
+  const tokens = [];
+  let buffer = "";
+  let index = 0;
+  const flush = () => {
+    if (buffer !== "") {
+      tokens.push({ kind: "text", value: buffer });
+      buffer = "";
+    }
+  };
+  while (index < text.length) {
+    const ch = text[index];
+    if (ch === "{") {
+      let depth = 0;
+      let cursor = index;
+      let inString = false;
+      while (cursor < text.length) {
+        const current = text[cursor];
+        if (inString) {
+          if (current === "\\") cursor++;
+          else if (current === '"') inString = false;
+        } else if (current === '"') {
+          inString = true;
+        } else if (current === "{") {
+          depth++;
+        } else if (current === "}") {
+          depth--;
+          if (depth === 0) {
+            cursor++;
+            break;
+          }
+        }
+        cursor++;
+      }
+      if (depth !== 0) {
+        buffer += ch;
+        index++;
+        continue;
+      }
+      flush();
+      tokens.push({ kind: "expr", value: text.slice(index, cursor) });
+      index = cursor;
+      continue;
+    }
+    if (ch === "<") {
+      const tag = /^<\/?[a-zA-Z][a-zA-Z0-9_-]*(?:\s[^<>]*)?\/?>/.exec(text.slice(index));
+      if (tag) {
+        flush();
+        tokens.push({ kind: "tag", value: tag[0] });
+        index += tag[0].length;
+        continue;
+      }
+    }
+    buffer += ch;
+    index++;
+  }
+  flush();
+  return tokens;
 }
 function wrapPatternEdges(pattern, options) {
   const prefix = options.prefix ?? "[";
@@ -105,7 +159,7 @@ function wrapPatternEdges(pattern, options) {
   }
 }
 function pseudoLocalizeFtl(ftlContent, options = {}) {
-  const resource = parse(ftlContent, { withSpans: false });
+  const resource = parseFtl(ftlContent, "The catalog");
   const textOptions = { ...options, prefix: "", suffix: "" };
   class PseudoVisitor extends Visitor {
     visitTextElement(node) {
@@ -121,5 +175,6 @@ function pseudoLocalizeFtl(ftlContent, options = {}) {
 }
 export {
   pseudoLocalizeFtl,
-  pseudoLocalizeText
+  pseudoLocalizeText,
+  splitPreservedTokens
 };

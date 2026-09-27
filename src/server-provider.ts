@@ -23,6 +23,11 @@ export async function FluentServerProvider({ children, locale }: FluentServerPro
     defaultTranslationValues,
     timeZone: config.timeZone,
     now: config.now,
+    // Only serializable config crosses the RSC boundary; `onError` /
+    // `getMessageFallback` must be defined in a client component.
+    formats: config.formats,
+    useIsolating: config.useIsolating,
+    strictNamespace: config.strictNamespace,
     children,
   });
 }

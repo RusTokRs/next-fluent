@@ -7,12 +7,16 @@ import type {
   DefaultKey,
   FormattedMessageProps,
   Formatter,
+  Formats,
+  GetMessageFallbackFn,
   NamespaceArgs,
   NamespaceKeys,
+  OnErrorFn,
   RichTranslationValues,
   Translations,
 } from './types';
 import { createFluentBundle, createTranslator } from './bundle';
+import { isJsonCatalog, jsonToFluent, type MessageSource } from './catalog';
 import { createFormatter } from './formatter';
 import { computeSourceHash } from './cache';
 import { resolveLocalizedPathname, switchLocaleHref } from './nav-url';
@@ -24,6 +28,7 @@ export { createFormatter };
 interface FluentContextValue {
   locale: string;
   bundle: FluentBundle | null;
+  messages?: MessageSource;
   fallbackLocale?: string;
   fallbackBundle: FluentBundle | null;
   fallbackBundles?: readonly FluentBundle[];
@@ -32,6 +37,10 @@ interface FluentContextValue {
   functions?: Record<string, FluentFunction>;
   defaultTranslationValues?: RichTranslationValues;
   debug?: boolean;
+  strictNamespace?: boolean;
+  formats?: Formats;
+  onError?: OnErrorFn;
+  getMessageFallback?: GetMessageFallbackFn;
 }
 
 const FluentContext = createContext<FluentContextValue>({
@@ -46,15 +55,26 @@ const STATIC_NOW = new Date(0);
 
 export interface FluentProviderProps {
   locale: string;
-  messages: string | readonly string[] | FluentBundle;
+  /** FTL text, an array of FTL sources, a JSON catalog, or a `FluentBundle`. */
+  messages: MessageSource | FluentBundle;
   fallbackLocale?: string;
-  fallbackMessages?: string | readonly string[] | FluentBundle;
+  fallbackMessages?: MessageSource | FluentBundle;
   fallbackBundles?: FluentBundle | readonly FluentBundle[];
   timeZone?: string;
   now?: Date;
   functions?: Record<string, FluentFunction>;
   defaultTranslationValues?: RichTranslationValues;
   debug?: boolean;
+  /** Only resolve `namespace.key` candidates (mirrors the server option). */
+  strictNamespace?: boolean;
+  /** Named `Intl` presets used by `useFormatter()`. */
+  formats?: Formats;
+  /** Disable Fluent's bidi isolates so `t()` is safe in non-HTML sinks. */
+  useIsolating?: boolean;
+  /** Client-side error reporting (define inside a `'use client'` wrapper). */
+  onError?: OnErrorFn;
+  /** Client-side fallback rendering (define inside a `'use client'` wrapper). */
+  getMessageFallback?: GetMessageFallbackFn;
   children: React.ReactNode;
 }
 
@@ -69,40 +89,65 @@ export function FluentProvider({
   functions,
   defaultTranslationValues,
   debug,
+  strictNamespace,
+  formats,
+  useIsolating,
+  onError,
+  getMessageFallback,
   children,
 }: FluentProviderProps) {
+  // JSON catalogs are converted once per payload change; everything else passes
+  // through untouched (including pre-built bundles).
+  const normalizedMessages = useMemo(
+    () => (isJsonCatalog(messages) ? jsonToFluent(messages) : messages),
+    [messages]
+  );
+  const normalizedFallbackMessages = useMemo(
+    () => (isJsonCatalog(fallbackMessages) ? jsonToFluent(fallbackMessages) : fallbackMessages),
+    [fallbackMessages]
+  );
+
+  // The hash is derived from `normalizedMessages`; the raw prop is only checked
+  // for its shape, which cannot change without the normalized value changing.
   const messagesKey = useMemo(
     () =>
-      typeof messages === 'string' || Array.isArray(messages)
-        ? computeSourceHash(messages)
+      typeof normalizedMessages === 'string' || Array.isArray(normalizedMessages)
+        ? computeSourceHash(normalizedMessages as string | readonly string[])
         : null,
-    [messages]
+    [normalizedMessages]
   );
 
   const fallbackMessagesKey = useMemo(
     () =>
-      typeof fallbackMessages === 'string' || Array.isArray(fallbackMessages)
-        ? computeSourceHash(fallbackMessages)
+      typeof normalizedFallbackMessages === 'string' || Array.isArray(normalizedFallbackMessages)
+        ? computeSourceHash(normalizedFallbackMessages as string | readonly string[])
         : null,
-    [fallbackMessages]
+    [normalizedFallbackMessages]
   );
 
+  // Bundles are keyed by a content hash, so an equal-but-new string reference
+  // does not rebuild the catalog on every render.
+  const bundleIdentity = messagesKey ?? normalizedMessages;
+  const fallbackBundleIdentity = fallbackMessagesKey ?? normalizedFallbackMessages;
+
   const bundle = useMemo<FluentBundle | null>(() => {
-    if (!messages) return null;
-    if (typeof messages === 'string' || Array.isArray(messages)) {
-      return createFluentBundle(locale, messages, { functions });
+    if (!normalizedMessages) return null;
+    if (typeof normalizedMessages === 'string' || Array.isArray(normalizedMessages)) {
+      return createFluentBundle(locale, normalizedMessages as string | readonly string[], { functions, useIsolating });
     }
-    return messages as FluentBundle;
-  }, [locale, messagesKey ?? messages, functions]);
+    return normalizedMessages as FluentBundle;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locale, bundleIdentity, functions, useIsolating]);
 
   const fallbackBundle = useMemo<FluentBundle | null>(() => {
-    if (!fallbackMessages) return null;
+    if (!normalizedFallbackMessages) return null;
     const fLocale = fallbackLocale || 'en';
-    if (typeof fallbackMessages === 'string' || Array.isArray(fallbackMessages)) {
-      return createFluentBundle(fLocale, fallbackMessages, { functions });
+    if (typeof normalizedFallbackMessages === 'string' || Array.isArray(normalizedFallbackMessages)) {
+      return createFluentBundle(fLocale, normalizedFallbackMessages as string | readonly string[], { functions, useIsolating });
     }
-    return fallbackMessages as FluentBundle;
-  }, [fallbackLocale, fallbackMessagesKey ?? fallbackMessages, functions]);
+    return normalizedFallbackMessages as FluentBundle;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fallbackLocale, fallbackBundleIdentity, functions, useIsolating]);
 
   const resolvedFallbackBundles = useMemo<readonly FluentBundle[] | undefined>(() => {
     if (fallbackBundles) {
@@ -118,6 +163,10 @@ export function FluentProvider({
     () => ({
       locale,
       bundle,
+      messages:
+        typeof normalizedMessages === 'string' || Array.isArray(normalizedMessages)
+          ? (normalizedMessages as string | readonly string[])
+          : undefined,
       fallbackLocale,
       fallbackBundle,
       fallbackBundles: resolvedFallbackBundles,
@@ -126,10 +175,15 @@ export function FluentProvider({
       functions,
       defaultTranslationValues,
       debug,
+      strictNamespace,
+      formats,
+      onError,
+      getMessageFallback,
     }),
     [
       locale,
       bundle,
+      normalizedMessages,
       fallbackLocale,
       fallbackBundle,
       resolvedFallbackBundles,
@@ -138,6 +192,10 @@ export function FluentProvider({
       functions,
       defaultTranslationValues,
       debug,
+      strictNamespace,
+      formats,
+      onError,
+      getMessageFallback,
     ]
   );
 
@@ -161,10 +219,21 @@ export function useTimeZone(): string {
   }
 }
 
+/** Raw catalog (FTL text) provided to the current `FluentProvider`. */
+export function useMessages(): MessageSource | undefined {
+  const context = useContext(FluentContext);
+  return context.messages;
+}
+
 export function useFormatter(): Formatter {
   const locale = useLocale();
   const timeZone = useTimeZone();
-  return useMemo(() => createFormatter({ locale, timeZone }), [locale, timeZone]);
+  const context = useContext(FluentContext);
+  const formats = context.formats;
+  return useMemo(
+    () => createFormatter({ locale, timeZone, formats }),
+    [locale, timeZone, formats]
+  );
 }
 
 export function useNow(options?: { updateInterval?: number }): Date {
@@ -207,6 +276,9 @@ export function useTranslations(namespace?: string): Translations {
         namespace,
         debug: context.debug,
         defaultTranslationValues: context.defaultTranslationValues,
+        strictNamespace: context.strictNamespace,
+        onError: context.onError,
+        getMessageFallback: context.getMessageFallback,
       }) as Translations,
     [
       context.bundle,
@@ -215,6 +287,9 @@ export function useTranslations(namespace?: string): Translations {
       namespace,
       context.debug,
       context.defaultTranslationValues,
+      context.strictNamespace,
+      context.onError,
+      context.getMessageFallback,
     ]
   );
 }
@@ -259,18 +334,25 @@ export function FormattedMessage<
  * can expose a hook-free wrapper that Server Components may render.
  */
 export const LocalizedLink = forwardRef<HTMLAnchorElement, any>(
-  function LocalizedLink({ navConfig, href, locale: propLocale, ...rest }, ref) {
+  function LocalizedLink({ navConfig, href, locale: propLocale, forcePrefix, ...rest }, ref) {
     const currentLocale = useLocale();
     const targetLocale = propLocale ?? currentLocale ?? (navConfig as NavigationConfig).defaultLocale;
     const localizedHref = switchLocaleHref(
-      resolveLocalizedPathname({ href, locale: targetLocale }, navConfig),
+      resolveLocalizedPathname({ href, locale: targetLocale, forcePrefix }, navConfig),
       propLocale,
       navConfig
     );
     return React.createElement(NextLink, {
       ...rest,
       href: localizedHref,
-      prefetch: propLocale && navConfig.localePrefix !== 'always' ? false : rest.prefetch,
+      // With an explicit locale the href can differ from the one the visitor is
+      // on, and the middleware settles it with a redirect — prefetching that
+      // would fetch a page nobody lands on. A forced prefix is already
+      // unambiguous, so it prefetches like `always` does.
+      prefetch:
+        propLocale && !forcePrefix && navConfig.localePrefix !== 'always'
+          ? false
+          : rest.prefetch,
       ref,
     });
   }

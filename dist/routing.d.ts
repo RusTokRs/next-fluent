@@ -1,4 +1,4 @@
-import type { LocalePrefixMode } from './types';
+import type { LocaleCookieConfig, LocalePrefixConfig } from './types';
 export interface DomainConfig {
     domain: string;
     defaultLocale: string;
@@ -8,12 +8,16 @@ export type Pathnames<Locales extends readonly string[] = readonly string[]> = R
 export interface RoutingConfig<Locales extends readonly string[] = readonly string[]> {
     locales: Locales;
     defaultLocale: Locales[number];
-    localePrefix?: LocalePrefixMode;
+    localePrefix?: LocalePrefixConfig;
     pathnames?: Pathnames<Locales>;
     domains?: readonly DomainConfig[];
     cookieName?: string;
     headerName?: string;
     basePath?: string;
+    localeCookie?: boolean | LocaleCookieConfig;
+    localeDetection?: boolean;
+    alternateLinks?: boolean;
+    trustedHosts?: readonly string[];
 }
 /**
  * Defines the central routing configuration for next-fluent.

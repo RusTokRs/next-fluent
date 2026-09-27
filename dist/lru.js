@@ -1,15 +1,19 @@
 class LRUCache {
+  map = /* @__PURE__ */ new Map();
+  maxSize;
   constructor(maxSize) {
+    if (!Number.isInteger(maxSize) || maxSize <= 0) {
+      throw new Error(
+        `[next-fluent] LRUCache size must be a positive integer (received ${maxSize}).`
+      );
+    }
     this.maxSize = maxSize;
   }
-  maxSize;
-  map = /* @__PURE__ */ new Map();
   get(key) {
+    if (!this.map.has(key)) return void 0;
     const val = this.map.get(key);
-    if (val !== void 0) {
-      this.map.delete(key);
-      this.map.set(key, val);
-    }
+    this.map.delete(key);
+    this.map.set(key, val);
     return val;
   }
   set(key, value) {

@@ -19,10 +19,12 @@ export {
   forLocale,
   getLocale,
   getTranslations,
+  getMessages,
   configureServerI18n,
   setRequestConfig,
   setRequestLocale,
   getFormatter,
+  getFormats,
   getTimeZone,
   getNow,
   getRequestConfigSnapshot,
@@ -58,6 +60,7 @@ export {
   useFormatter,
   useTimeZone,
   useNow,
+  useMessages,
   type FluentProviderProps,
   type FormattedMessageProps,
 } from './client';
@@ -72,6 +75,17 @@ export {
   type CreateFluentBundleOptions,
   type CreateTranslatorOptions,
 } from './bundle';
+
+export {
+  FluentError,
+  FluentErrorCode,
+  createErrorReporter,
+  defaultMessageFallback,
+  type FluentErrorDetails,
+  type MessageFallbackArgs,
+  type OnErrorFn,
+  type GetMessageFallbackFn,
+} from './errors';
 
 export {
   createDefaultFunctions,
@@ -97,6 +111,7 @@ export {
 
 export {
   canonicalizeLocale,
+  hasLocale,
   normalizeLocaleTag,
   matchSupportedLocale,
   localeLookupCandidates,
@@ -127,6 +142,8 @@ export type {
   I18nConfig,
   Formatter,
   FormatterOptions,
+  Formats,
+  LocaleCookieConfig,
   Navigation,
   NavigationConfig,
   LocalePrefixMode,

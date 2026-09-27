@@ -30,6 +30,39 @@ export function clearFormatterCache(): void {
   nfCache.clear();
   rtfCache.clear();
   lfCache.clear();
+  warnedFormats.clear();
+}
+
+/** Unknown format names already reported, so a list render cannot spam logs. */
+const warnedFormats = new Set<string>();
+const MAX_WARNED_FORMATS = 200;
+
+/**
+ * Resolves a named format (`'short'`) against the configured presets, or passes
+ * `Intl` options through unchanged. Unknown names are reported once and fall
+ * back to default formatting instead of throwing during render.
+ */
+function resolveFormat<T>(
+  presets: Record<string, T> | undefined,
+  options: T | string | undefined,
+  kind: string
+): T | undefined {
+  if (options === undefined || typeof options !== 'string') return options;
+  const preset = presets?.[options];
+  if (!preset) {
+    const warnKey = `${kind}::${options}`;
+    if (!warnedFormats.has(warnKey)) {
+      // Bounded: a runaway key set is cleared rather than grown without limit,
+      // at the cost of a repeated warning.
+      if (warnedFormats.size >= MAX_WARNED_FORMATS) warnedFormats.clear();
+      warnedFormats.add(warnKey);
+      console.warn(
+        `[next-fluent] Unknown ${kind} format "${options}". Configure it in the request config "formats" option.`
+      );
+    }
+    return undefined;
+  }
+  return preset;
 }
 
 export function createFormatter(optionsOrLocale: string | FormatterOptions): Formatter {
@@ -39,12 +72,17 @@ export function createFormatter(optionsOrLocale: string | FormatterOptions): For
   const rawLocale = options.locale || 'en';
   const locale = canonicalizeLocale(rawLocale) || rawLocale;
   const timeZone = options.timeZone;
+  const formats = options.formats;
 
   return {
     locale,
     timeZone,
 
-    dateTime(value: Date | number | string, dtfOptions?: Intl.DateTimeFormatOptions): string {
+    dateTime(
+      value: Date | number | string,
+      dtfOptionsOrName?: Intl.DateTimeFormatOptions | string
+    ): string {
+      const dtfOptions = resolveFormat(formats?.dateTime, dtfOptionsOrName, 'dateTime');
       const date =
         value instanceof Date
           ? value
@@ -77,7 +115,11 @@ export function createFormatter(optionsOrLocale: string | FormatterOptions): For
       }
     },
 
-    number(value: number | bigint, nfOptions?: Intl.NumberFormatOptions): string {
+    number(
+      value: number | bigint,
+      nfOptionsOrName?: Intl.NumberFormatOptions | string
+    ): string {
+      const nfOptions = resolveFormat(formats?.number, nfOptionsOrName, 'number');
       const cacheKey = `${locale}::${stringifySorted(nfOptions ?? {})}`;
       let formatter = nfCache.get(cacheKey);
       if (!formatter) {
@@ -99,8 +141,9 @@ export function createFormatter(optionsOrLocale: string | FormatterOptions): For
     relativeTime(
       value: number,
       unit: Intl.RelativeTimeFormatUnit,
-      rtfOptions?: Intl.RelativeTimeFormatOptions
+      rtfOptionsOrName?: Intl.RelativeTimeFormatOptions | string
     ): string {
+      const rtfOptions = resolveFormat(formats?.relativeTime, rtfOptionsOrName, 'relativeTime');
       const cacheKey = `${locale}::${stringifySorted(rtfOptions ?? {})}`;
       let formatter = rtfCache.get(cacheKey);
       if (!formatter) {
@@ -119,12 +162,13 @@ export function createFormatter(optionsOrLocale: string | FormatterOptions): For
       }
     },
 
-    list(value: Iterable<string>, lfOptions?: Intl.ListFormatOptions): string {
+    list(value: Iterable<string>, lfOptionsOrName?: Intl.ListFormatOptions | string): string {
       if (!value || typeof (value as any)[Symbol.iterator] !== 'function') {
         return String(value ?? '');
       }
 
       const items = typeof value === 'string' ? [value] : value;
+      const lfOptions = resolveFormat(formats?.list, lfOptionsOrName, 'list');
       const cacheKey = `${locale}::${stringifySorted(lfOptions ?? {})}`;
       let formatter = lfCache.get(cacheKey);
       if (!formatter) {

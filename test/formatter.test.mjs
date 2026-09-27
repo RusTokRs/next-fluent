@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createFormatter, clearFormatterCache } from '../dist/formatter.js';
+import { LRUCache } from '../dist/lru.js';
 
 test('createFormatter formats dateTime across locales and options', () => {
   const enFormatter = createFormatter({ locale: 'en', timeZone: 'UTC' });
@@ -89,4 +90,43 @@ test('formatter cache operates boundedly and clearFormatterCache resets it', () 
   // Formatting still functions after clear
   const after = formatter.number(42);
   assert.equal(after, '42');
+});
+
+test('an unknown named format warns once, not on every render', () => {
+  clearFormatterCache();
+  const formatter = createFormatter({ locale: 'en' });
+  let warnings = 0;
+  const original = console.warn;
+  console.warn = () => {
+    warnings += 1;
+  };
+  try {
+    for (let i = 0; i < 5; i++) formatter.number(1234.5, 'nope');
+  } finally {
+    console.warn = original;
+  }
+  assert.equal(warnings, 1, `expected one warning, got ${warnings}`);
+
+  // A different kind is reported on its own.
+  console.warn = () => {
+    warnings += 1;
+  };
+  try {
+    formatter.dateTime(new Date(0), 'nope');
+  } finally {
+    console.warn = original;
+  }
+  assert.equal(warnings, 2);
+});
+
+test('LRU get refreshes recency for an entry holding undefined', () => {
+  const cache = new LRUCache(2);
+  cache.set('a', undefined);
+  cache.set('b', 2);
+  cache.get('a');
+  cache.set('c', 3);
+
+  assert.equal(cache.has('a'), true, 'the touched entry must survive');
+  assert.equal(cache.has('b'), false, 'the untouched entry must be evicted');
+  assert.equal(cache.size, 2);
 });

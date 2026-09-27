@@ -12,10 +12,10 @@ import type {
   NavigationConfig,
   UrlObject,
 } from './types';
-import { matchSupportedLocale, validateI18nConfig } from './utils';
+import { validateI18nConfig } from './utils';
+import { matchLocalePrefix, normalizeLocalePrefix } from './locale-prefix';
 import { validatePathnames, validateRouteEnvironment } from './route-engine';
 import {
-  formatUrlObject,
   resolveLocalizedPathname,
   rewriteToInternalPath,
   switchLocaleHref,
@@ -24,15 +24,6 @@ import { LocalizedLink, useLocale } from './client';
 
 // Pure URL helpers stay available from this entry for backwards compatibility.
 export { formatUrlObject, resolveLocalizedPathname, assertSafeHref, isExternalUrl } from './nav-url';
-
-const STUB_ROUTER = {
-  push: () => {},
-  replace: () => {},
-  prefetch: () => {},
-  back: () => {},
-  forward: () => {},
-  refresh: () => {},
-} as unknown as ReturnType<typeof useNextRouter>;
 
 export function createNavigation<
   const Locales extends readonly string[],
@@ -79,15 +70,13 @@ export function createNavigation<Locales extends readonly string[] = readonly st
       rawPathname = rawPathname.slice(basePath.length) || '/';
     }
 
-    const segments = rawPathname.split('/').filter(Boolean);
-    if (segments.length === 0) return '/';
-
-    let cleanPathname = rawPathname;
-    const first = segments[0];
-    if (matchSupportedLocale(first, locales)) {
-      const rest = segments.slice(1).join('/');
-      cleanPathname = rest ? `/${rest}` : '/';
-    }
+    const prefixMatch = matchLocalePrefix(
+      rawPathname,
+      locales,
+      normalizeLocalePrefix(locales, config.localePrefix)
+    );
+    const cleanPathname = prefixMatch ? prefixMatch.rest : rawPathname;
+    if (cleanPathname === '/') return '/';
 
     const lookupKey =
       cleanPathname.length > 1 && cleanPathname.endsWith('/')
@@ -99,44 +88,43 @@ export function createNavigation<Locales extends readonly string[] = readonly st
   }
 
   function useRouter() {
-    // `useRouter` from next/navigation throws outside the App Router. The hook
-    // registers its context read before the invariant, so the hook order stays
-    // stable even when the throw is caught here.
-    let router: ReturnType<typeof useNextRouter>;
-    try {
-      router = useNextRouter();
-    } catch {
-      router = STUB_ROUTER;
-    }
+    // Called unconditionally so the hook order never depends on control flow.
+    // `next/navigation` throws outside the App Router, which is the expected
+    // contract for this hook (a silent no-op stub hides real wiring bugs).
+    const router = useNextRouter();
     const currentLocale = useLocale();
 
     return useMemo(
       () => ({
         ...router,
-        push(href: Href, options?: { locale?: string; scroll?: boolean }) {
+        push(href: Href, options?: { locale?: string; scroll?: boolean; forcePrefix?: boolean }) {
           const targetLocale = options?.locale ?? currentLocale ?? defaultLocale;
           const target = switchLocaleHref(
-            getPathname({ href, locale: targetLocale }),
+            getPathname({ href, locale: targetLocale, forcePrefix: options?.forcePrefix }),
             options?.locale,
             config
           );
           const routerOptions = options?.scroll !== undefined ? { scroll: options.scroll } : undefined;
           return router.push(target, routerOptions);
         },
-        replace(href: Href, options?: { locale?: string; scroll?: boolean }) {
+        replace(href: Href, options?: { locale?: string; scroll?: boolean; forcePrefix?: boolean }) {
           const targetLocale = options?.locale ?? currentLocale ?? defaultLocale;
           const target = switchLocaleHref(
-            getPathname({ href, locale: targetLocale }),
+            getPathname({ href, locale: targetLocale, forcePrefix: options?.forcePrefix }),
             options?.locale,
             config
           );
           const routerOptions = options?.scroll !== undefined ? { scroll: options.scroll } : undefined;
           return router.replace(target, routerOptions);
         },
-        prefetch(href: Href, options?: { locale?: string }) {
+        prefetch(href: Href, options?: { locale?: string; forcePrefix?: boolean }) {
           if (options?.locale && config.localePrefix !== 'always') return;
           const targetLocale = options?.locale ?? currentLocale ?? defaultLocale;
-          const target = getPathname({ href, locale: targetLocale });
+          const target = getPathname({
+            href,
+            locale: targetLocale,
+            forcePrefix: options?.forcePrefix,
+          });
           return router.prefetch(target);
         },
         back() {
@@ -153,22 +141,41 @@ export function createNavigation<Locales extends readonly string[] = readonly st
     );
   }
 
+  type RedirectOptions = {
+    locale?: Locales[number] | string;
+    type?: 'push' | 'replace';
+    forcePrefix?: boolean;
+  };
+
+  // Accepts this library's `(url, options)` shape and next-intl's
+  // `({ href, locale, forcePrefix }, type)` shape, so migrating does not mean
+  // rewriting every call site.
+  function redirectArgs(
+    url: string | ({ href: string } & RedirectOptions),
+    more?: RedirectOptions | 'push' | 'replace'
+  ): [string, RedirectOptions] {
+    const extra = typeof more === 'string' ? { type: more } : (more ?? {});
+    if (typeof url === 'string') return [url, extra];
+    const { href, ...rest } = url;
+    return [href, { ...rest, ...extra }];
+  }
+
   function redirect(
-    url: string,
-    options?: { locale?: Locales[number] | string; type?: 'push' | 'replace' }
+    url: string | ({ href: string } & RedirectOptions),
+    options?: RedirectOptions | 'push' | 'replace'
   ): never {
-    const targetLocale = options?.locale ?? defaultLocale;
-    const target = getPathname({ href: url, locale: targetLocale });
-    return nextRedirect(target, options?.type as any) as never;
+    const [href, opts] = redirectArgs(url, options);
+    const target = getPathname({ href, locale: opts.locale ?? defaultLocale, forcePrefix: opts.forcePrefix });
+    return nextRedirect(target, opts.type as any) as never;
   }
 
   function permanentRedirect(
-    url: string,
-    options?: { locale?: Locales[number] | string; type?: 'push' | 'replace' }
+    url: string | ({ href: string } & RedirectOptions),
+    options?: RedirectOptions | 'push' | 'replace'
   ): never {
-    const targetLocale = options?.locale ?? defaultLocale;
-    const target = getPathname({ href: url, locale: targetLocale });
-    return nextPermanentRedirect(target, options?.type as any) as never;
+    const [href, opts] = redirectArgs(url, options);
+    const target = getPathname({ href, locale: opts.locale ?? defaultLocale, forcePrefix: opts.forcePrefix });
+    return nextPermanentRedirect(target, opts.type as any) as never;
   }
 
   return {
@@ -178,6 +185,7 @@ export function createNavigation<Locales extends readonly string[] = readonly st
     redirect,
     permanentRedirect,
     getPathname,
+    config,
   };
 }
 

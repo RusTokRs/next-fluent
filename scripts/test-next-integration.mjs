@@ -47,20 +47,45 @@ function checkBrowser(base) {
     if (beforeErrors.length) throw new Error(`Browser errors before navigation:\n${beforeErrors.join('\n')}`);
     run('click', link[1]);
     const after = run('snapshot');
-    if (!after.includes('Page URL:') || !after.includes('/about-us') || !after.includes('About route')) {
-      throw new Error(`Browser locale switch failed.\n${after}`);
-    }
-    if (!run('cookie-get', 'NEXT_LOCALE').includes('NEXT_LOCALE=en')) {
-      throw new Error('Browser locale switch did not update the cookie.');
-    }
     const afterErrors = run('console', 'error').split('\n').filter((line) =>
       line.startsWith('[ERROR]') && !line.includes('/favicon.ico')
     );
+    // The console text is part of every failure here: the snapshot alone shows
+    // where the browser ended up, but not why.
+    const consoleReport = `Console errors (${afterErrors.length}):\n${afterErrors.join('\n') || '(none)'}`;
+    if (!after.includes('Page URL:') || !after.includes('/about-us') || !after.includes('About route')) {
+      throw new Error(`Browser locale switch failed.\n${after}\n${consoleReport}`);
+    }
+    if (!run('cookie-get', 'NEXT_LOCALE').includes('NEXT_LOCALE=en')) {
+      throw new Error(`Browser locale switch did not update the cookie.\n${consoleReport}`);
+    }
     if (afterErrors.length) throw new Error(`Browser errors after navigation:\n${afterErrors.join('\n')}`);
     console.log('[next-fluent] Browser hydration and locale switch checks passed.');
   } finally {
     try { run('close'); } catch { /* Preserve the original check error. */ }
   }
+}
+
+/**
+ * Static rendering is a headline requirement: with `setRequestLocale` in every
+ * page and layout, the localized routes must be prerendered at build time.
+ * The route table is decorative, so read the prerender manifest instead.
+ */
+function checkPrerenderedRoutes(target) {
+  const manifestPath = join(target, '.next', 'prerender-manifest.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  const routes = Object.keys(manifest.routes ?? {});
+  const expected = ['/en', '/ru', '/en/about', '/ru/about'];
+  const missing = expected.filter((route) => !routes.includes(route));
+  if (missing.length > 0) {
+    throw new Error(
+      `Static rendering regression: ${missing.join(', ')} were not prerendered. Prerendered routes: ${routes.join(', ') || '<none>'}`
+    );
+  }
+  if (routes.some((route) => route.endsWith('/live'))) {
+    throw new Error('The intentionally dynamic /live route was prerendered.');
+  }
+  console.log(`[next-fluent] Static rendering verified for: ${expected.join(', ')}`);
 }
 
 async function checkRuntime(nextCli) {
@@ -94,14 +119,32 @@ async function checkRuntime(nextCli) {
     const russian = await fetch(`${base}/ru`, { redirect: 'manual' });
     const russianHtml = await russian.text();
     if (russian.status !== 200 || russianHtml.split('Привет').length < 3 ||
-        !russianHtml.includes('data-server-locale="ru"') ||
-        !russianHtml.includes('data-header-locale="ru"')) {
+        !russianHtml.includes('data-server-locale="ru"')) {
       throw new Error(`Russian RSC/client locale mismatch (${russian.status}).\n${russianHtml.slice(0, 1500)}\n${output}`);
+    }
+    // The middleware must still forward the resolved locale to the app.
+    const live = await fetch(`${base}/ru/live`, { redirect: 'manual' });
+    const liveHtml = await live.text();
+    if (live.status !== 200 || !liveHtml.includes('data-header-locale="ru"')) {
+      throw new Error(`Locale request header was not forwarded (${live.status}).\n${liveHtml.slice(0, 500)}\n${output}`);
     }
     const localized = await fetch(`${base}/ru/o-nas`, { redirect: 'manual' });
     const localizedHtml = await localized.text();
     if (localized.status !== 200 || !localizedHtml.includes('About route') || !localizedHtml.includes('lang="ru"')) {
       throw new Error(`Localized route failed (${localized.status}).\n${localizedHtml.slice(0, 500)}\n${output}`);
+    }
+    // hreflang alternates for search engines.
+    const link = localized.headers.get('link') ?? '';
+    if (!link.includes('hreflang="en"') || !link.includes('hreflang="ru"') || !link.includes('hreflang="x-default"')) {
+      throw new Error(`Missing hreflang alternates on the localized route.\n${link}\n${output}`);
+    }
+    // A request that already carries the effective locale must stay cacheable.
+    const cached = await fetch(`${base}/ru/o-nas`, {
+      redirect: 'manual',
+      headers: { cookie: 'NEXT_LOCALE=ru', 'sec-fetch-dest': 'document' },
+    });
+    if (cached.headers.get('set-cookie')) {
+      throw new Error(`Unchanged locale still wrote a cookie.\n${cached.headers.get('set-cookie')}\n${output}`);
     }
     const switched = await fetch(`${base}/en/about-us`, {
       redirect: 'manual',
@@ -124,17 +167,50 @@ async function checkRuntime(nextCli) {
   }
 }
 
+// `NEXT_FLUENT_NEXT_VERSION` installs a different Next major into the throwaway
+// app, so the very same fixture can be exercised against Next 16 without the
+// repository giving up its own Next 15 install. That matters because the two
+// majors differ in ways this fixture touches: `middleware.ts` becomes
+// `proxy.ts`, and Turbopack is the default bundler for `next build`.
+const nextOverride = process.env.NEXT_FLUENT_NEXT_VERSION;
+
+/** Absolute path of the `next` package the target app will build with. */
+function nextRoot() {
+  return nextOverride
+    ? join(target, 'node_modules', 'next')
+    : join(root, 'node_modules', 'next');
+}
+
 try {
   await cp(fixture, target, { recursive: true });
-  const nextPackage = JSON.parse(readFileSync(join(root, 'node_modules', 'next', 'package.json'), 'utf8'));
-  if (Number.parseInt(nextPackage.version, 10) >= 16) {
-    await rename(join(target, 'middleware.ts'), join(target, 'proxy.ts'));
-  }
   await mkdir(join(target, 'node_modules'), { recursive: true });
+
+  if (nextOverride) {
+    const install = spawnSync(
+      process.env.npm_execpath ? process.execPath : 'npm',
+      process.env.npm_execpath
+        ? [process.env.npm_execpath, 'install', '--no-save', '--no-audit', '--no-fund',
+           `next@${nextOverride}`, 'react@19', 'react-dom@19']
+        : ['install', '--no-save', '--no-audit', '--no-fund',
+           `next@${nextOverride}`, 'react@19', 'react-dom@19'],
+      { cwd: target, stdio: 'inherit', env: { ...process.env, NEXT_TELEMETRY_DISABLED: '1' } }
+    );
+    if (install.status !== 0) throw new Error(`Installing next@${nextOverride} failed.`);
+  }
+
+  // Linked after any install: npm prunes packages it does not know about, which
+  // would silently drop this symlink.
   await symlink(root, join(target, 'node_modules', 'next-fluent'),
     process.platform === 'win32' ? 'junction' : 'dir');
   linked = true;
-  const nextCli = join(root, 'node_modules', 'next', 'dist', 'bin', 'next');
+
+  const nextPackage = JSON.parse(readFileSync(join(nextRoot(), 'package.json'), 'utf8'));
+  console.log(`[next-fluent] Integration fixture against Next ${nextPackage.version}.`);
+  if (Number.parseInt(nextPackage.version, 10) >= 16) {
+    // Next 16 renamed the network-boundary file and runs it on Node, not edge.
+    await rename(join(target, 'middleware.ts'), join(target, 'proxy.ts'));
+  }
+  const nextCli = join(nextRoot(), 'dist', 'bin', 'next');
   const result = spawnSync(process.execPath, [nextCli, 'build'], {
     cwd: target,
     stdio: 'inherit',
@@ -142,13 +218,16 @@ try {
   });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`Next integration build failed (${result.status}).`);
+  checkPrerenderedRoutes(target);
   await checkRuntime(nextCli);
 } finally {
   const resolvedRoot = realpathSync(root);
   const resolvedTarget = existsSync(target) ? realpathSync(target) : target;
-  if (!resolvedTarget.toLowerCase().startsWith((resolvedRoot + sep).toLowerCase())) {
-    throw new Error('Unsafe integration fixture cleanup path.');
+  const isInsideRepo = resolvedTarget.toLowerCase().startsWith((resolvedRoot + sep).toLowerCase());
+  if (isInsideRepo) {
+    if (linked) await unlink(join(resolvedTarget, 'node_modules', 'next-fluent')).catch(() => {});
+    await rm(resolvedTarget, { recursive: true, force: true });
+  } else {
+    console.error(`[next-fluent] Refusing to clean up an unexpected path: ${resolvedTarget}`);
   }
-  if (linked) await unlink(join(resolvedTarget, 'node_modules', 'next-fluent'));
-  await rm(resolvedTarget, { recursive: true, force: true });
 }

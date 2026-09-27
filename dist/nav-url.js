@@ -1,12 +1,23 @@
 import { matchSupportedLocale } from "./utils.js";
 import { localizePath, rewriteLocalizedPath } from "./route-engine.js";
+import {
+  localeNeedsPrefix,
+  matchLocalePrefix,
+  normalizeLocalePrefix,
+  prefixForLocale
+} from "./locale-prefix.js";
 const UNSAFE_HREF_SCHEME = /^(?:javascript|data|vbscript|file):/i;
 const WINDOWS_UNC_PREFIX = /^\\\\/;
 function hrefDiagnostic(href) {
-  return href.length > 64 ? `<oversized href: ${href.length} code units>` : href;
+  if (href.length > 64) return `<oversized href: ${href.length} code units>`;
+  return href.replace(/[\u0000-\u001f\u007f]/g, (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+function browserNormalizedHref(href) {
+  const withoutDiscarded = href.replace(/[\u0009\u000a\u000d]/g, "");
+  return withoutDiscarded.replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, "");
 }
 function assertSafeHref(href) {
-  const trimmed = href.trim();
+  const trimmed = browserNormalizedHref(href);
   if (UNSAFE_HREF_SCHEME.test(trimmed) || WINDOWS_UNC_PREFIX.test(trimmed)) {
     throw new Error(`[next-fluent] Unsafe href rejected: "${hrefDiagnostic(href)}"`);
   }
@@ -73,7 +84,9 @@ function formatUrlObject(urlObj) {
 }
 function resolveLocalizedPathname(options, config) {
   const { href, locale: explicitLocale } = options;
-  const { locales, defaultLocale, localePrefix = "always", pathnames, domains, basePath = "" } = config;
+  const { locales, defaultLocale, pathnames, domains, basePath = "" } = config;
+  const prefixConfig = normalizeLocalePrefix(locales, config.localePrefix);
+  const localePrefix = prefixConfig.mode;
   let rawPathname = "";
   let search = "";
   let hash = "";
@@ -109,16 +122,12 @@ function resolveLocalizedPathname(options, config) {
   if (basePath && (rawPathname === basePath || rawPathname.startsWith(`${basePath}/`))) {
     rawPathname = rawPathname.slice(basePath.length) || "/";
   }
-  const segments = rawPathname.split("/").filter(Boolean);
   let cleanPathname = rawPathname;
   let sourceLocale;
-  if (segments.length > 0) {
-    const first = segments[0];
-    sourceLocale = matchSupportedLocale(first, locales);
-    if (sourceLocale) {
-      const rest = segments.slice(1).join("/");
-      cleanPathname = rest ? `/${rest}` : "/";
-    }
+  const prefixMatch = matchLocalePrefix(rawPathname, locales, prefixConfig);
+  if (prefixMatch) {
+    sourceLocale = prefixMatch.locale;
+    cleanPathname = prefixMatch.rest;
   }
   const hasTrailingSlash = rawPathname.length > 1 && rawPathname.endsWith("/") && cleanPathname !== "/";
   const lookupKey = cleanPathname.length > 1 && cleanPathname.endsWith("/") ? cleanPathname.slice(0, -1) : cleanPathname;
@@ -142,16 +151,8 @@ function resolveLocalizedPathname(options, config) {
   if (hasTrailingSlash && mappedPathname !== "/" && !mappedPathname.endsWith("/")) {
     mappedPathname = `${mappedPathname}/`;
   }
-  let prefix = "";
-  if (localePrefix === "never") {
-    prefix = "";
-  } else if (localePrefix === "as-needed") {
-    if (resolvedLocale !== resolvedDefaultLocale) {
-      prefix = `/${resolvedLocale}`;
-    }
-  } else {
-    prefix = `/${resolvedLocale}`;
-  }
+  const wantsPrefix = localePrefix !== "never" && (options.forcePrefix === true || localeNeedsPrefix(resolvedLocale, resolvedDefaultLocale, localePrefix));
+  const prefix = wantsPrefix ? prefixForLocale(resolvedLocale, prefixConfig) : "";
   const finalPath = prefix ? mappedPathname === "/" ? prefix : `${prefix}${mappedPathname.startsWith("/") ? mappedPathname : `/${mappedPathname}`}` : mappedPathname;
   const withBasePath = `${basePath}${finalPath === "/" && basePath ? "" : finalPath}${search}${hash}`;
   const targetDomain = domains?.find((entry) => {
@@ -164,7 +165,9 @@ function resolveLocalizedPathname(options, config) {
   return withBasePath;
 }
 function switchLocaleHref(target, explicitLocale, config) {
-  const { locales, localePrefix = "always", basePath = "" } = config;
+  const { locales, basePath = "" } = config;
+  const prefixConfig = normalizeLocalePrefix(locales, config.localePrefix);
+  const localePrefix = prefixConfig.mode;
   if (!explicitLocale || isExternalUrl(target) || target.startsWith("#")) {
     return target;
   }
@@ -176,12 +179,11 @@ function switchLocaleHref(target, explicitLocale, config) {
   const url = new URL(target, "https://next-fluent.invalid");
   const route = basePath && (url.pathname === basePath || url.pathname.startsWith(`${basePath}/`)) ? url.pathname.slice(basePath.length) || "/" : url.pathname;
   if (localePrefix === "as-needed") {
-    const firstSegment = route.split("/").filter(Boolean)[0];
-    if (firstSegment && matchSupportedLocale(firstSegment, locales)) {
+    if (matchLocalePrefix(route, locales, prefixConfig)) {
       return target;
     }
   }
-  return `${basePath}/${locale}${route === "/" ? "" : route}${url.search}${url.hash}`;
+  return `${basePath}${prefixForLocale(locale, prefixConfig)}${route === "/" ? "" : route}${url.search}${url.hash}`;
 }
 function rewriteToInternalPath(pathname, locale, locales, pathnames) {
   if (!pathnames) return pathname;

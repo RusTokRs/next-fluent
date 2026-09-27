@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 import { createNavigation } from '../dist/navigation.js';
 import { FluentProvider } from '../dist/client.js';
-import { createFluentBundle, createTranslator, getBundleCacheStats } from '../dist/bundle.js';
+import { createFluentBundle, createTranslator } from '../dist/bundle.js';
 import { pseudoLocalizeFtl } from '../dist/pseudo.js';
 import { generateTypeDeclarations } from '../dist/typegen.js';
 import { createI18nMiddleware } from '../dist/middleware.js';
@@ -84,10 +84,14 @@ test('N03: t.raw returns the message value when attributes are present too', () 
   assert.deepEqual(t.raw('msg.other'), 'Other');
 });
 
-test('N03: t.raw still returns an array for attribute-only messages', () => {
+test('N03: t.raw returns attribute-only messages in declaration order', () => {
   const bundle = createFluentBundle('en', 'only =\n    .b = Second\n    .a = First');
   const t = createTranslator(bundle);
-  assert.deepEqual(t.raw('only'), ['First', 'Second']);
+  // Declaration order mirrors the catalog; alphabetical sorting detached the
+  // values from the attribute names a translator actually sees.
+  assert.deepEqual(t.raw('only'), ['Second', 'First']);
+  assert.equal(t.raw('only.b'), 'Second');
+  assert.equal(t.raw('only.a'), 'First');
 });
 
 // ---------------------------------------------------------------------------

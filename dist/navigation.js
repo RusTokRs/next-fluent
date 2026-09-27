@@ -5,7 +5,8 @@ import {
   redirect as nextRedirect,
   permanentRedirect as nextPermanentRedirect
 } from "next/navigation.js";
-import { matchSupportedLocale, validateI18nConfig } from "./utils.js";
+import { validateI18nConfig } from "./utils.js";
+import { matchLocalePrefix, normalizeLocalePrefix } from "./locale-prefix.js";
 import { validatePathnames, validateRouteEnvironment } from "./route-engine.js";
 import {
   resolveLocalizedPathname,
@@ -13,21 +14,7 @@ import {
   switchLocaleHref
 } from "./nav-url.js";
 import { LocalizedLink, useLocale } from "./client.js";
-import { formatUrlObject as formatUrlObject2, resolveLocalizedPathname as resolveLocalizedPathname2, assertSafeHref, isExternalUrl } from "./nav-url.js";
-const STUB_ROUTER = {
-  push: () => {
-  },
-  replace: () => {
-  },
-  prefetch: () => {
-  },
-  back: () => {
-  },
-  forward: () => {
-  },
-  refresh: () => {
-  }
-};
+import { formatUrlObject, resolveLocalizedPathname as resolveLocalizedPathname2, assertSafeHref, isExternalUrl } from "./nav-url.js";
 function createNavigation(config) {
   validateI18nConfig({
     locales: config.locales,
@@ -52,25 +39,19 @@ function createNavigation(config) {
     if (basePath && (rawPathname === basePath || rawPathname.startsWith(`${basePath}/`))) {
       rawPathname = rawPathname.slice(basePath.length) || "/";
     }
-    const segments = rawPathname.split("/").filter(Boolean);
-    if (segments.length === 0) return "/";
-    let cleanPathname = rawPathname;
-    const first = segments[0];
-    if (matchSupportedLocale(first, locales)) {
-      const rest = segments.slice(1).join("/");
-      cleanPathname = rest ? `/${rest}` : "/";
-    }
+    const prefixMatch = matchLocalePrefix(
+      rawPathname,
+      locales,
+      normalizeLocalePrefix(locales, config.localePrefix)
+    );
+    const cleanPathname = prefixMatch ? prefixMatch.rest : rawPathname;
+    if (cleanPathname === "/") return "/";
     const lookupKey = cleanPathname.length > 1 && cleanPathname.endsWith("/") ? cleanPathname.slice(0, -1) : cleanPathname;
     const internal = rewriteToInternalPath(lookupKey, currentLocale, locales, pathnames);
     return cleanPathname.endsWith("/") && internal !== "/" ? `${internal}/` : internal;
   }
   function useRouter() {
-    let router;
-    try {
-      router = useNextRouter();
-    } catch {
-      router = STUB_ROUTER;
-    }
+    const router = useNextRouter();
     const currentLocale = useLocale();
     return useMemo(
       () => ({
@@ -78,7 +59,7 @@ function createNavigation(config) {
         push(href, options) {
           const targetLocale = options?.locale ?? currentLocale ?? defaultLocale;
           const target = switchLocaleHref(
-            getPathname({ href, locale: targetLocale }),
+            getPathname({ href, locale: targetLocale, forcePrefix: options?.forcePrefix }),
             options?.locale,
             config
           );
@@ -88,7 +69,7 @@ function createNavigation(config) {
         replace(href, options) {
           const targetLocale = options?.locale ?? currentLocale ?? defaultLocale;
           const target = switchLocaleHref(
-            getPathname({ href, locale: targetLocale }),
+            getPathname({ href, locale: targetLocale, forcePrefix: options?.forcePrefix }),
             options?.locale,
             config
           );
@@ -98,7 +79,11 @@ function createNavigation(config) {
         prefetch(href, options) {
           if (options?.locale && config.localePrefix !== "always") return;
           const targetLocale = options?.locale ?? currentLocale ?? defaultLocale;
-          const target = getPathname({ href, locale: targetLocale });
+          const target = getPathname({
+            href,
+            locale: targetLocale,
+            forcePrefix: options?.forcePrefix
+          });
           return router.prefetch(target);
         },
         back() {
@@ -114,15 +99,21 @@ function createNavigation(config) {
       [router, currentLocale]
     );
   }
+  function redirectArgs(url, more) {
+    const extra = typeof more === "string" ? { type: more } : more ?? {};
+    if (typeof url === "string") return [url, extra];
+    const { href, ...rest } = url;
+    return [href, { ...rest, ...extra }];
+  }
   function redirect(url, options) {
-    const targetLocale = options?.locale ?? defaultLocale;
-    const target = getPathname({ href: url, locale: targetLocale });
-    return nextRedirect(target, options?.type);
+    const [href, opts] = redirectArgs(url, options);
+    const target = getPathname({ href, locale: opts.locale ?? defaultLocale, forcePrefix: opts.forcePrefix });
+    return nextRedirect(target, opts.type);
   }
   function permanentRedirect(url, options) {
-    const targetLocale = options?.locale ?? defaultLocale;
-    const target = getPathname({ href: url, locale: targetLocale });
-    return nextPermanentRedirect(target, options?.type);
+    const [href, opts] = redirectArgs(url, options);
+    const target = getPathname({ href, locale: opts.locale ?? defaultLocale, forcePrefix: opts.forcePrefix });
+    return nextPermanentRedirect(target, opts.type);
   }
   return {
     Link,
@@ -130,13 +121,14 @@ function createNavigation(config) {
     useRouter,
     redirect,
     permanentRedirect,
-    getPathname
+    getPathname,
+    config
   };
 }
 export {
   assertSafeHref,
   createNavigation,
-  formatUrlObject2 as formatUrlObject,
+  formatUrlObject,
   isExternalUrl,
   resolveLocalizedPathname2 as resolveLocalizedPathname
 };

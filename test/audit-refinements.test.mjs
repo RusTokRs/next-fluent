@@ -6,11 +6,11 @@ import {
   clearFormatterCache,
   resolveLocalizedPathname,
   formatUrlObject,
-  createNavigation,
   FluentProvider,
   FormattedMessage,
   createFluentBundle,
 } from '../dist/index.js';
+import { assertSafeHref } from '../dist/navigation.js';
 
 test('resolveLocalizedPathname rejects open redirects and protocols', () => {
   const config = {
@@ -134,4 +134,105 @@ order-status = Hello, { $customer }! Order <num>#{ $orderId }</num> is <status>{
   );
 
   assert.ok(React.isValidElement(providerTree));
+});
+
+test('assertSafeHref sees the URL the way a browser does', () => {
+  // Browsers remove ASCII tab/LF/CR anywhere in a URL and strip C0 controls at
+  // the edges before resolving the scheme, so these all execute if rendered.
+  for (const href of [
+    'javascript:alert(1)',
+    'java\tscript:alert(1)',
+    'java\nscript:alert(1)',
+    'java\rscript:alert(1)',
+    'dat\ta:text/html,x',
+    'vbscript\t:x',
+    '\u0001javascript:alert(1)',
+    '\u0000javascript:alert(1)',
+    '\tjavascript:alert(1)',
+  ]) {
+    assert.throws(() => assertSafeHref(href), /Unsafe href/, `expected rejection: ${JSON.stringify(href)}`);
+  }
+
+  // Ordinary hrefs keep working.
+  for (const href of ['/about', 'about', 'https://example.com/x', 'mailto:a@b.dev', '#frag', '/a?b=1#c']) {
+    assert.doesNotThrow(() => assertSafeHref(href), `expected acceptance: ${href}`);
+  }
+});
+
+test('a rejected href cannot rewrite its own error message', () => {
+  let message = '';
+  try {
+    assertSafeHref('java\tscript:\nalert(1)');
+  } catch (error) {
+    message = error.message;
+  }
+  assert.match(message, /Unsafe href/);
+  // eslint-disable-next-line no-control-regex -- asserting their absence is the point
+  assert.equal(/[\u0000-\u001f]/.test(message), false, `control characters leaked: ${JSON.stringify(message)}`);
+});
+
+test('resolveLocalizedPathname rejects the normalized-scheme bypass', () => {
+  const config = { locales: ['en', 'ru'], defaultLocale: 'en', localePrefix: 'always' };
+  assert.throws(
+    () => resolveLocalizedPathname({ href: 'java\tscript:alert(1)' }, config),
+    /Unsafe href/
+  );
+});
+
+test('canonicalizeLocale stays correct while memoized', async () => {
+  const { canonicalizeLocale } = await import('../dist/utils.js');
+  // Repeated calls must agree with the first, including negative results: the
+  // cache stores undefined too, so garbage has to keep being rejected.
+  for (let i = 0; i < 3; i++) {
+    assert.equal(canonicalizeLocale('en_us'), 'en-US');
+    assert.equal(canonicalizeLocale('"en"'), 'en');
+    assert.equal(canonicalizeLocale('not a locale!'), undefined);
+    assert.equal(canonicalizeLocale('a'.repeat(65)), undefined);
+    assert.equal(canonicalizeLocale(''), undefined);
+    assert.equal(canonicalizeLocale(null), undefined);
+  }
+  // A large volume of distinct inputs must not grow the cache without bound.
+  for (let i = 0; i < 2000; i++) canonicalizeLocale(`xx-${i}`);
+  assert.equal(canonicalizeLocale('en_us'), 'en-US');
+});
+
+test('the memoized prefix table stays correct across configs and calls', async () => {
+  const { matchLocalePrefix, normalizeLocalePrefix } = await import('../dist/locale-prefix.js');
+  const locales = ['en', 'ru', 'de'];
+  const asNeeded = normalizeLocalePrefix(locales, 'as-needed');
+  const always = normalizeLocalePrefix(locales, 'always');
+
+  for (let i = 0; i < 3; i++) {
+    assert.deepEqual(matchLocalePrefix('/ru/about', locales, always), { locale: 'ru', rest: '/about' });
+    // matchLocalePrefix is deliberately mode-agnostic: it reports whether the
+    // path carries a prefix, and the middleware decides what to do about it.
+    assert.deepEqual(matchLocalePrefix('/en/about', locales, asNeeded), {
+      locale: 'en',
+      rest: '/about',
+    });
+    assert.deepEqual(matchLocalePrefix('/de', locales, always), { locale: 'de', rest: '/' });
+    assert.equal(matchLocalePrefix('/about', locales, always), null);
+  }
+  // Custom prefixes change the table, so a second config must not reuse it.
+  const custom = normalizeLocalePrefix(locales, { mode: 'always', prefixes: { ru: '/russkiy' } });
+  assert.deepEqual(matchLocalePrefix('/russkiy/about', locales, custom), {
+    locale: 'ru',
+    rest: '/about',
+  });
+  assert.equal(matchLocalePrefix('/ru/about', locales, custom), null);
+});
+
+test('defineRouting freezes its locale list', async () => {
+  const { defineRouting } = await import('../dist/routing.js');
+  const source = ['en', 'ru'];
+  const routing = defineRouting({ locales: source, defaultLocale: 'en' });
+  assert.equal(Object.isFrozen(routing.locales), true);
+  // Mutating the array the caller passed must not change the routing config,
+  // which the prefix-table memoization depends on.
+  assert.throws(() => {
+    'use strict';
+    routing.locales.push('de');
+  }, TypeError);
+  assert.deepEqual([...routing.locales], ['en', 'ru']);
+  assert.deepEqual(source, ['en', 'ru'], 'the caller array is left alone');
 });

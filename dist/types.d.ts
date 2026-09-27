@@ -1,6 +1,11 @@
 import type { FluentBundle, FluentFunction, FluentVariable } from '@fluent/bundle';
 import type React from 'react';
+import type { GetMessageFallbackFn, OnErrorFn } from './errors';
 export type { FluentBundle, FluentVariable, FluentFunction };
+export type { JsonCatalog, MessageSource } from './catalog';
+import type { MessageSource } from './catalog';
+export type { OnErrorFn, GetMessageFallbackFn, MessageFallbackArgs } from './errors';
+export { FluentError, FluentErrorCode } from './errors';
 export type NonEmptyArray<T> = readonly [T, ...T[]];
 export type FluentArgs = Record<string, FluentVariable>;
 export type TagRenderFn = (children: React.ReactNode) => React.ReactNode;
@@ -33,6 +38,10 @@ export interface TranslationFn<Key extends string = DefaultKey, ArgsMap extends 
     <K extends Key>(key: K, ...args: MessageArgsFor<K, ArgsMap>): string;
     raw<K extends Key>(key: K, ...args: MessageArgsFor<K, ArgsMap>): string[] | string;
     rich<K extends Key>(key: K, values?: RichTranslationValues): React.ReactNode;
+    /** Every attribute of a message, in declaration order. */
+    attrs<K extends Key>(key: K, ...args: MessageArgsFor<K, ArgsMap>): Record<string, string>;
+    /** Message text with rich-text markers removed. */
+    plain<K extends Key>(key: K, ...args: MessageArgsFor<K, ArgsMap>): string;
     has<K extends Key>(key: K): boolean;
 }
 export type Translations<Key extends string = DefaultKey, ArgsMap extends Record<string, any> = AppFluentMessages> = TranslationFn<Key, ArgsMap>;
@@ -47,21 +56,44 @@ export interface FormattedMessageProps<Key extends string = DefaultKey, ArgsMap 
 export interface FormatterOptions {
     locale: string;
     timeZone?: string;
+    /** Named formats resolvable by passing a string to the formatter methods. */
+    formats?: Formats;
 }
+/**
+ * Named `Intl` option presets, addressable from the formatter methods:
+ * `format.dateTime(value, 'short')`.
+ */
+export interface Formats {
+    dateTime?: Record<string, Intl.DateTimeFormatOptions>;
+    number?: Record<string, Intl.NumberFormatOptions>;
+    relativeTime?: Record<string, Intl.RelativeTimeFormatOptions>;
+    list?: Record<string, Intl.ListFormatOptions>;
+}
+export type FormatName<T> = T extends Record<infer K, unknown> ? K : never;
 export interface Formatter {
     readonly locale: string;
     readonly timeZone?: string;
-    dateTime(value: Date | number | string, options?: Intl.DateTimeFormatOptions): string;
-    number(value: number | bigint, options?: Intl.NumberFormatOptions): string;
-    relativeTime(value: number, unit: Intl.RelativeTimeFormatUnit, options?: Intl.RelativeTimeFormatOptions): string;
-    list(value: Iterable<string>, options?: Intl.ListFormatOptions): string;
+    dateTime(value: Date | number | string, options?: Intl.DateTimeFormatOptions | string): string;
+    number(value: number | bigint, options?: Intl.NumberFormatOptions | string): string;
+    relativeTime(value: number, unit: Intl.RelativeTimeFormatUnit, options?: Intl.RelativeTimeFormatOptions | string): string;
+    list(value: Iterable<string>, options?: Intl.ListFormatOptions | string): string;
 }
 export type LocalePrefixMode = 'always' | 'as-needed' | 'never';
+/** Locale → URL prefix, e.g. `{ 'en-US': '/usa', de: '/deutsch' }`. */
+export type LocalePrefixes = Partial<Record<string, string>>;
+/**
+ * `'always' | 'as-needed' | 'never'`, or the verbose form that also maps
+ * individual locales to custom URL prefixes.
+ */
+export type LocalePrefixConfig = LocalePrefixMode | {
+    mode?: LocalePrefixMode;
+    prefixes?: LocalePrefixes;
+};
 export type Pathnames<Locales extends readonly string[] = readonly string[]> = Record<string, string | Record<Locales[number] | string, string>>;
 export interface NavigationConfig<Locales extends readonly string[] = readonly string[]> {
     locales: Locales;
     defaultLocale: Locales[number] | string;
-    localePrefix?: LocalePrefixMode;
+    localePrefix?: LocalePrefixConfig;
     pathnames?: Pathnames<Locales>;
     domains?: readonly {
         domain: string;
@@ -97,11 +129,20 @@ export interface GetPathnameOptions<Routes extends string = string> {
     href: NavigationHref<Routes>;
     locale?: string;
     domain?: string;
+    /**
+     * Add the locale prefix even for the default locale, which `as-needed`
+     * otherwise omits. Useful when a URL must be unambiguous regardless of the
+     * visitor's stored locale. A no-op in `never`, where prefixed URLs do not
+     * exist and the middleware would strip one immediately.
+     */
+    forcePrefix?: boolean;
 }
 export interface Navigation<Locales extends readonly string[] = readonly string[], Routes extends string = string> {
     Link: React.ForwardRefExoticComponent<Omit<React.AnchorHTMLAttributes<HTMLAnchorElement>, 'href'> & {
         href: NavigationHref<Routes>;
         locale?: Locales[number];
+        /** Force the locale prefix even for the default locale. */
+        forcePrefix?: boolean;
         replace?: boolean;
         scroll?: boolean;
         prefetch?: boolean;
@@ -113,60 +154,99 @@ export interface Navigation<Locales extends readonly string[] = readonly string[
         push(href: NavigationHref<Routes>, options?: {
             locale?: Locales[number];
             scroll?: boolean;
+            forcePrefix?: boolean;
         }): void;
         replace(href: NavigationHref<Routes>, options?: {
             locale?: Locales[number];
             scroll?: boolean;
+            forcePrefix?: boolean;
         }): void;
         prefetch(href: NavigationHref<Routes>, options?: {
             locale?: Locales[number];
+            forcePrefix?: boolean;
         }): void;
         back(): void;
         forward(): void;
         refresh(): void;
     };
-    redirect(url: Extract<NavigationHref<Routes>, string>, options?: {
-        locale?: Locales[number];
-        type?: 'push' | 'replace';
-    }): never;
-    permanentRedirect(url: Extract<NavigationHref<Routes>, string>, options?: {
-        locale?: Locales[number];
-        type?: 'push' | 'replace';
-    }): never;
+    redirect(url: Extract<NavigationHref<Routes>, string> | ({
+        href: string;
+    } & NavigationRedirectOptions<Locales>), options?: NavigationRedirectOptions<Locales> | 'push' | 'replace'): never;
+    permanentRedirect(url: Extract<NavigationHref<Routes>, string> | ({
+        href: string;
+    } & NavigationRedirectOptions<Locales>), options?: NavigationRedirectOptions<Locales> | 'push' | 'replace'): never;
     getPathname(options: Omit<GetPathnameOptions<Routes>, 'locale'> & {
         locale?: Locales[number];
     }): string;
+    /** The routing configuration this navigation was created from. */
+    config: NavigationConfig;
+}
+export interface NavigationRedirectOptions<Locales extends readonly string[] = readonly string[]> {
+    locale?: Locales[number] | string;
+    type?: 'push' | 'replace';
+    forcePrefix?: boolean;
 }
 export interface RequestConfigParams {
     locale?: string;
 }
 export interface RequestConfigResult {
     locale?: string;
-    messages: string | readonly string[];
+    /** FTL text, an array of FTL sources, or a JSON catalog object. */
+    messages: MessageSource;
     fallbackLocale?: string;
-    fallbackMessages?: string | readonly string[];
+    fallbackMessages?: MessageSource;
     defaultTranslationValues?: RichTranslationValues;
     timeZone?: string;
     now?: Date;
     functions?: Record<string, FluentFunction>;
+    /** Named `Intl` presets used by `getFormatter()` / `useFormatter()`. */
+    formats?: Formats;
+    /**
+     * Fluent inserts U+2068/U+2069 bidi isolates around placeables by default.
+     * Disable them for catalogs rendered into non-HTML sinks (`<title>`, meta
+     * tags, JSON APIs, plain-text emails).
+     */
+    useIsolating?: boolean;
+    /** Report missing/unformattable messages to your own monitoring. */
+    onError?: OnErrorFn;
+    /** Customize the string rendered when a message cannot be resolved. */
+    getMessageFallback?: GetMessageFallbackFn;
+    /** Only resolve `namespace.key` candidates (never the bare key). */
+    strictNamespace?: boolean;
 }
 export type RequestConfigFn = (params: RequestConfigParams) => Promise<RequestConfigResult> | RequestConfigResult;
 export interface GetTranslationsOptions {
     locale?: string;
-    messages?: string | readonly string[];
+    messages?: MessageSource;
     fallbackLocale?: string;
     fallbackLocales?: readonly string[];
-    fallbackMessages?: string | readonly string[];
+    fallbackMessages?: MessageSource;
     defaultTranslationValues?: RichTranslationValues;
     namespace?: string;
     debug?: boolean;
     strictNamespace?: boolean;
     functions?: Record<string, FluentFunction>;
+    useIsolating?: boolean;
+    onError?: OnErrorFn;
+    getMessageFallback?: GetMessageFallbackFn;
+}
+/** Attributes accepted when configuring the locale cookie. */
+export interface LocaleCookieConfig {
+    /** Cookie name. Defaults to `cookieName` (`NEXT_LOCALE`). */
+    name?: string;
+    maxAge?: number;
+    sameSite?: 'strict' | 'lax' | 'none' | boolean;
+    secure?: boolean;
+    domain?: string;
+    path?: string;
+    httpOnly?: boolean;
+    partitioned?: boolean;
+    priority?: 'low' | 'medium' | 'high';
 }
 export interface I18nMiddlewareOptions {
     locales: readonly string[];
     defaultLocale: string;
-    localePrefix?: 'always' | 'as-needed' | 'never';
+    localePrefix?: LocalePrefixConfig;
     cookieName?: string;
     headerName?: string;
     pathnames?: Pathnames<any>;
@@ -182,11 +262,26 @@ export interface I18nMiddlewareOptions {
      * cache poisoning; entries support a `*.` subdomain wildcard.
      */
     trustedHosts?: readonly string[];
+    /**
+     * Disable or customize the locale cookie. `false` stops the middleware from
+     * ever writing it (the locale then comes from the URL only).
+     */
+    localeCookie?: boolean | LocaleCookieConfig;
+    /**
+     * Set to `false` to ignore the locale cookie and `Accept-Language` when the
+     * URL carries no locale prefix.
+     */
+    localeDetection?: boolean;
+    /**
+     * Emit `Link: <url>; rel="alternate"; hreflang="…"` response headers for the
+     * localized variants of the current route. Defaults to `true`.
+     */
+    alternateLinks?: boolean;
 }
 export interface I18nConfig {
     locales: readonly string[];
     defaultLocale: string;
-    localePrefix?: 'always' | 'as-needed' | 'never';
+    localePrefix?: LocalePrefixConfig;
     cookieName?: string;
     headerName?: string;
     pathnames?: Pathnames<any>;
@@ -197,5 +292,8 @@ export interface I18nConfig {
     }[];
     basePath?: string;
     trustedHosts?: readonly string[];
-    loadMessages?: (locale: string) => Promise<string | readonly string[]> | string | readonly string[];
+    localeCookie?: boolean | LocaleCookieConfig;
+    localeDetection?: boolean;
+    alternateLinks?: boolean;
+    loadMessages?: (locale: string) => Promise<MessageSource> | MessageSource;
 }

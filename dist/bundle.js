@@ -1,7 +1,10 @@
+import { FluentNumber, FluentType } from "@fluent/bundle";
 import React from "react";
 import { buildKeyCandidates, canonicalizeLocale, withKebabKey } from "./utils.js";
+import { toFluentSource } from "./catalog.js";
 import {
   parseRichText,
+  stripRichText,
   createReactElementToken,
   REACT_ELEMENT_TOKEN_PREFIX
 } from "./rich.js";
@@ -12,6 +15,11 @@ import {
   LRUCache
 } from "./cache.js";
 import { clearFunctionsCache } from "./functions.js";
+import {
+  FluentErrorCode,
+  FluentError,
+  createErrorReporter
+} from "./errors.js";
 function clearBundleCache() {
   clearInternalBundleCache();
   clearFunctionsCache();
@@ -33,23 +41,44 @@ function createFluentBundle(locale, ftlSource, options = {}) {
       `[next-fluent] Invalid Fluent bundle locale: "${fluentBundleLocaleDiagnostic(locale)}"`
     );
   }
-  return getCachedFluentBundle(canonicalLocale, ftlSource, options);
+  return getCachedFluentBundle(canonicalLocale, toFluentSource(ftlSource), options);
 }
-const FORMAT_ERROR = /* @__PURE__ */ Symbol("format-error");
 function stripBidiIsolates(value) {
   return value.replace(/[\u2068\u2069]/g, "");
 }
 function buildFluentArgs(values) {
-  const fluentArgs = {};
-  if (!values) return fluentArgs;
+  const args = {};
+  const rejected = [];
+  if (!values) return { args, rejected };
   for (const [k, v] of Object.entries(values)) {
     if (React.isValidElement(v)) {
-      fluentArgs[k] = createReactElementToken(k);
-    } else if (typeof v === "string" || typeof v === "number" || v instanceof Date || typeof v === "object" && v !== null && "type" in v) {
-      fluentArgs[k] = v;
+      args[k] = createReactElementToken(k);
+      continue;
     }
+    if (v === null || v === void 0) {
+      rejected.push(k);
+      continue;
+    }
+    if (typeof v === "string" || typeof v === "number" || v instanceof Date) {
+      args[k] = v;
+      continue;
+    }
+    if (typeof v === "boolean") {
+      args[k] = String(v);
+      continue;
+    }
+    if (typeof v === "bigint") {
+      const digits = v.toString();
+      args[k] = Number.isFinite(Number(digits)) ? new FluentNumber(digits) : digits;
+      continue;
+    }
+    if (v instanceof FluentType || typeof v === "object" && "value" in v && typeof v.valueOf === "function") {
+      args[k] = v;
+      continue;
+    }
+    rejected.push(k);
   }
-  return fluentArgs;
+  return { args, rejected };
 }
 function createTranslator(bundle, namespaceOrFallbackOrOpts, maybeNamespace) {
   const allBundles = [];
@@ -58,6 +87,8 @@ function createTranslator(bundle, namespaceOrFallbackOrOpts, maybeNamespace) {
   let debug = false;
   let defaultTranslationValues;
   let strictNamespace;
+  let onError;
+  let getMessageFallback;
   if (typeof namespaceOrFallbackOrOpts === "string") {
     namespace = namespaceOrFallbackOrOpts;
   } else if (namespaceOrFallbackOrOpts && typeof namespaceOrFallbackOrOpts === "object") {
@@ -80,21 +111,22 @@ function createTranslator(bundle, namespaceOrFallbackOrOpts, maybeNamespace) {
       debug = opts.debug ?? false;
       defaultTranslationValues = opts.defaultTranslationValues;
       strictNamespace = opts.strictNamespace;
+      onError = opts.onError;
+      getMessageFallback = opts.getMessageFallback;
     }
   } else {
     namespace = maybeNamespace;
   }
-  const defaultFluentArgs = buildFluentArgs(defaultTranslationValues);
+  const report = createErrorReporter({ onError, getMessageFallback, debug });
+  const defaults = buildFluentArgs(defaultTranslationValues);
+  const bundleLocale = (targetBundle) => targetBundle.locales?.[0];
   const formatCandidate = (targetBundle, candidate, args) => {
     const msg = targetBundle.getMessage(candidate);
     if (msg?.value) {
       const errors = [];
       const formatted = targetBundle.formatPattern(msg.value, args, errors);
-      if (errors.length > 0) {
-        console.warn(`[next-fluent] Format errors for key "${candidate}":`, errors);
-        return FORMAT_ERROR;
-      }
-      return formatted;
+      if (errors.length > 0) return { kind: "error", errors };
+      return { kind: "ok", value: formatted };
     }
     const lastDot = candidate.lastIndexOf(".");
     if (lastDot !== -1) {
@@ -106,43 +138,52 @@ function createTranslator(bundle, namespaceOrFallbackOrOpts, maybeNamespace) {
         if (pattern) {
           const errors = [];
           const formatted = targetBundle.formatPattern(pattern, args, errors);
-          if (errors.length > 0) {
-            console.warn(
-              `[next-fluent] Format errors for attribute "${candidate}":`,
-              errors
-            );
-            return FORMAT_ERROR;
-          }
-          return formatted;
+          if (errors.length > 0) return { kind: "error", errors };
+          return { kind: "ok", value: formatted };
         }
       }
     }
-    return null;
+    return { kind: "missing" };
   };
-  const formatKey = (key, args) => {
-    const mergedArgs = Object.keys(defaultFluentArgs).length > 0 ? { ...defaultFluentArgs, ...args } : args;
+  const formatKey = (key, args, rejectedArgs) => {
+    const mergedArgs = Object.keys(defaults.args).length > 0 || Object.keys(args ?? {}).length > 0 ? { ...defaults.args, ...args } : void 0;
+    const rejected = defaults.rejected.length > 0 || rejectedArgs.length > 0 ? [...defaults.rejected, ...rejectedArgs] : void 0;
     const candidates = buildKeyCandidates(namespace, key, { strictNamespace });
-    const fallbackKey = namespace ? `${namespace}.${key}` : key;
     for (const b of allBundles) {
       for (const candidate of candidates) {
         const formatted = formatCandidate(b, candidate, mergedArgs);
-        if (formatted === FORMAT_ERROR) return fallbackKey;
-        if (formatted !== null) return formatted;
+        if (formatted.kind === "error") {
+          const details = rejected ? {
+            code: FluentErrorCode.INVALID_ARGUMENT,
+            key,
+            namespace,
+            locale: bundleLocale(b),
+            cause: { unsupportedArguments: rejected, errors: formatted.errors }
+          } : {
+            code: FluentErrorCode.FORMATTING_ERROR,
+            key,
+            namespace,
+            locale: bundleLocale(b),
+            cause: formatted.errors
+          };
+          return report(details);
+        }
+        if (formatted.kind === "ok") return formatted.value;
       }
     }
-    if (debug) {
-      console.warn(`[next-fluent] Missing translation for key "${fallbackKey}"`);
-      return `[MISSING: ${fallbackKey}]`;
-    }
-    return fallbackKey;
+    return report({ code: FluentErrorCode.MISSING_MESSAGE, key, namespace });
   };
   const tFn = ((key, args) => {
-    const formatted = formatKey(key, buildFluentArgs(args));
+    const built = buildFluentArgs(args);
+    const formatted = formatKey(key, built.args, built.rejected);
     if (formatted.includes(REACT_ELEMENT_TOKEN_PREFIX)) {
       const fallbackKey = namespace ? `${namespace}.${key}` : key;
-      throw new Error(
-        `[next-fluent] Message "${fallbackKey}" interpolates a React element. Use t.rich() or <FormattedMessage> for rich content.`
-      );
+      throw new FluentError({
+        code: FluentErrorCode.UNSUPPORTED_VALUE,
+        key,
+        namespace,
+        message: `[next-fluent] Message "${fallbackKey}" interpolates a React element. Use t.rich() or <FormattedMessage> for rich content.`
+      });
     }
     return formatted;
   });
@@ -182,36 +223,115 @@ function createTranslator(bundle, namespaceOrFallbackOrOpts, maybeNamespace) {
       return rawText;
     }
     if (msg.attributes && Object.keys(msg.attributes).length > 0) {
-      const sortedAttrKeys = Object.keys(msg.attributes).sort(
-        (a, b) => a.localeCompare(b, void 0, { numeric: true, sensitivity: "base" })
-      );
-      return sortedAttrKeys.map(
+      return Object.keys(msg.attributes).map(
         (attrKey) => formatRawPattern(targetBundle, msg.attributes[attrKey], args)
       );
     }
     return null;
   };
   tFn.raw = ((key, args) => {
-    const mergedArgs = buildFluentArgs(args);
+    const built = buildFluentArgs(args);
+    const mergedArgs = Object.keys(defaults.args).length > 0 || Object.keys(built.args).length > 0 ? { ...defaults.args, ...built.args } : void 0;
     const candidates = buildKeyCandidates(namespace, key, { strictNamespace });
-    const fallbackKey = namespace ? `${namespace}.${key}` : key;
     for (const b of allBundles) {
       for (const candidate of candidates) {
         const res = getRawValue(b, candidate, mergedArgs);
         if (res !== null && res !== void 0) return res;
       }
     }
-    if (debug) {
-      console.warn(`[next-fluent] Missing raw translation for key "${fallbackKey}"`);
-      return `[MISSING: ${fallbackKey}]`;
-    }
-    return fallbackKey;
+    return report({ code: FluentErrorCode.MISSING_MESSAGE, key, namespace });
   });
   tFn.rich = (key, values) => {
     const mergedValues = defaultTranslationValues || values ? { ...defaultTranslationValues ?? {}, ...values ?? {} } : void 0;
-    const formattedText = formatKey(key, buildFluentArgs(mergedValues));
+    const built = buildFluentArgs(mergedValues);
+    const formattedText = formatKey(key, built.args, built.rejected);
     return parseRichText(formattedText, mergedValues);
   };
+  tFn.attrs = ((key, args) => {
+    const built = buildFluentArgs(args);
+    const mergedArgs = Object.keys(defaults.args).length > 0 || Object.keys(built.args).length > 0 ? { ...defaults.args, ...built.args } : void 0;
+    const candidates = buildKeyCandidates(namespace, key, { strictNamespace });
+    for (const b of allBundles) {
+      for (const candidate of candidates) {
+        const msg = b.getMessage(candidate);
+        if (!msg?.attributes || Object.keys(msg.attributes).length === 0) continue;
+        const result = {};
+        const errors = [];
+        for (const [attrKey, pattern] of Object.entries(msg.attributes)) {
+          result[attrKey] = stripBidiIsolates(
+            b.formatPattern(pattern, mergedArgs, errors)
+          );
+        }
+        if (errors.length > 0) {
+          const details = built.rejected.length > 0 ? {
+            code: FluentErrorCode.INVALID_ARGUMENT,
+            key,
+            namespace,
+            locale: bundleLocale(b),
+            cause: { unsupportedArguments: built.rejected, errors }
+          } : {
+            code: FluentErrorCode.FORMATTING_ERROR,
+            key,
+            namespace,
+            locale: bundleLocale(b),
+            cause: errors
+          };
+          report(details);
+          return {};
+        }
+        return result;
+      }
+    }
+    report({ code: FluentErrorCode.MISSING_MESSAGE, key, namespace });
+    return {};
+  });
+  tFn.plain = ((key, args) => {
+    const built = buildFluentArgs(args);
+    return stripRichText(formatKey(key, built.args, built.rejected));
+  });
+  tFn.attrs = ((key, args) => {
+    const built = buildFluentArgs(args);
+    const mergedArgs = Object.keys(defaults.args).length > 0 || Object.keys(built.args).length > 0 ? { ...defaults.args, ...built.args } : void 0;
+    const candidates = buildKeyCandidates(namespace, key, { strictNamespace });
+    for (const b of allBundles) {
+      for (const candidate of candidates) {
+        const msg = b.getMessage(candidate) ?? b.getMessage(withKebabKey(candidate));
+        if (!msg?.attributes || Object.keys(msg.attributes).length === 0) continue;
+        const result = {};
+        const errors = [];
+        for (const [attrKey, pattern] of Object.entries(msg.attributes)) {
+          result[attrKey] = stripBidiIsolates(
+            b.formatPattern(pattern, mergedArgs, errors)
+          );
+        }
+        if (errors.length > 0) {
+          report(
+            built.rejected.length > 0 ? {
+              code: FluentErrorCode.INVALID_ARGUMENT,
+              key,
+              namespace,
+              locale: bundleLocale(b),
+              cause: { unsupportedArguments: built.rejected, errors }
+            } : {
+              code: FluentErrorCode.FORMATTING_ERROR,
+              key,
+              namespace,
+              locale: bundleLocale(b),
+              cause: errors
+            }
+          );
+          return {};
+        }
+        return result;
+      }
+    }
+    report({ code: FluentErrorCode.MISSING_MESSAGE, key, namespace });
+    return {};
+  });
+  tFn.plain = ((key, args) => {
+    const built = buildFluentArgs(args);
+    return stripRichText(formatKey(key, built.args, built.rejected));
+  });
   tFn.has = (key) => {
     const candidates = buildKeyCandidates(namespace, key, { strictNamespace });
     for (const candidate of candidates) {
@@ -233,6 +353,8 @@ function createTranslator(bundle, namespaceOrFallbackOrOpts, maybeNamespace) {
   return tFn;
 }
 export {
+  FluentError,
+  FluentErrorCode,
   LRUCache,
   clearBundleCache,
   clearFunctionsCache,

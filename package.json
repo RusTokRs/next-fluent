@@ -40,7 +40,14 @@
       "default": "./dist/routing.js"
     },
     "./plugin": {
-      "types": "./dist/plugin.d.ts",
+      "import": {
+        "types": "./dist/plugin.d.ts",
+        "default": "./dist/plugin.js"
+      },
+      "require": {
+        "types": "./plugin.d.cts",
+        "default": "./dist/cjs/plugin.cjs"
+      },
       "default": "./dist/plugin.js"
     },
     "./factory": {
@@ -50,6 +57,30 @@
     "./typegen": {
       "types": "./dist/typegen.d.ts",
       "default": "./dist/typegen.js"
+    },
+    "./catalog": {
+      "types": "./dist/catalog.d.ts",
+      "default": "./dist/catalog.js"
+    },
+    "./catalog-io": {
+      "types": "./dist/catalog-io.d.ts",
+      "default": "./dist/catalog-io.js"
+    },
+    "./pseudo": {
+      "types": "./dist/pseudo.d.ts",
+      "default": "./dist/pseudo.js"
+    },
+    "./messages": {
+      "types": "./dist/pick-messages.d.ts",
+      "default": "./dist/pick-messages.js"
+    },
+    "./check": {
+      "types": "./dist/check.d.ts",
+      "default": "./dist/check.js"
+    },
+    "./usage": {
+      "types": "./dist/usage.d.ts",
+      "default": "./dist/usage.js"
     },
     "./utils": {
       "types": "./dist/utils.d.ts",
@@ -71,6 +102,7 @@
   "files": [
     "dist",
     "bin",
+    "plugin.d.cts",
     "src",
     "README.md",
     "LICENSE"
@@ -78,6 +110,7 @@
   "scripts": {
     "build": "node ./scripts/build.mjs",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
     "test:types": "node ./bin/next-fluent.mjs typegen --input test/types/messages.ftl --output test/types/messages.d.ts && tsc -p test/types/tsconfig.json",
     "test:next": "npm run build && node ./scripts/test-next-integration.mjs",
     "test": "node --test \"test/*.test.mjs\"",
@@ -85,16 +118,20 @@
     "test:next:browser": "npm run build && node ./scripts/test-next-integration.mjs --browser",
     "prepack": "npm run build",
     "check-dist": "npm run build && git diff --ignore-space-at-eol --exit-code dist/",
-    "ci": "npm run build && npm run check-dist && npm run typecheck && npm test",
-    "check": "npm run ci && npm run test:types && npm run test:next",
-    "verify": "npm run build && npm run typecheck && npm run test:types && npm test"
+    "size": "node ./scripts/size-budget.mjs",
+    "test:edge": "node ./scripts/check-edge-runtime.mjs",
+    "ci": "npm run build && npm run check-dist && npm run lint && npm run typecheck && npm run test:edge && npm test && npm run test:consumer && npm run size",
+    "check": "npm run ci && npm run test:types && npm run test:next && npm run test:next:16",
+    "verify": "npm run build && npm run lint && npm run typecheck && npm run test:types && npm test",
+    "test:consumer": "node ./scripts/test-consumer.mjs",
+    "test:next:16": "npm run build && NEXT_FLUENT_NEXT_VERSION=16 node ./scripts/test-next-integration.mjs"
   },
   "dependencies": {
     "@fluent/bundle": "0.19.1",
     "@fluent/syntax": "^0.19.0"
   },
   "peerDependencies": {
-    "next": ">=15.0.0 <17.0.0",
+    "next": ">=15.3.0 <17.0.0",
     "react": ">=19.0.0"
   },
   "devDependencies": {
@@ -102,10 +139,14 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "esbuild": "^0.28.2",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "^6.1.1",
+    "globals": "^17.12.0",
     "next": "^15.1.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.70.1"
   },
   "overrides": {
     "postcss": "^8.5.23"

@@ -2,6 +2,7 @@
 import React, { createContext, forwardRef, useContext, useEffect, useMemo, useState } from "react";
 import NextLink from "next/link.js";
 import { createFluentBundle, createTranslator } from "./bundle.js";
+import { isJsonCatalog, jsonToFluent } from "./catalog.js";
 import { createFormatter } from "./formatter.js";
 import { computeSourceHash } from "./cache.js";
 import { resolveLocalizedPathname, switchLocaleHref } from "./nav-url.js";
@@ -23,31 +24,46 @@ function FluentProvider({
   functions,
   defaultTranslationValues,
   debug,
+  strictNamespace,
+  formats,
+  useIsolating,
+  onError,
+  getMessageFallback,
   children
 }) {
-  const messagesKey = useMemo(
-    () => typeof messages === "string" || Array.isArray(messages) ? computeSourceHash(messages) : null,
+  const normalizedMessages = useMemo(
+    () => isJsonCatalog(messages) ? jsonToFluent(messages) : messages,
     [messages]
   );
-  const fallbackMessagesKey = useMemo(
-    () => typeof fallbackMessages === "string" || Array.isArray(fallbackMessages) ? computeSourceHash(fallbackMessages) : null,
+  const normalizedFallbackMessages = useMemo(
+    () => isJsonCatalog(fallbackMessages) ? jsonToFluent(fallbackMessages) : fallbackMessages,
     [fallbackMessages]
   );
+  const messagesKey = useMemo(
+    () => typeof normalizedMessages === "string" || Array.isArray(normalizedMessages) ? computeSourceHash(normalizedMessages) : null,
+    [normalizedMessages]
+  );
+  const fallbackMessagesKey = useMemo(
+    () => typeof normalizedFallbackMessages === "string" || Array.isArray(normalizedFallbackMessages) ? computeSourceHash(normalizedFallbackMessages) : null,
+    [normalizedFallbackMessages]
+  );
+  const bundleIdentity = messagesKey ?? normalizedMessages;
+  const fallbackBundleIdentity = fallbackMessagesKey ?? normalizedFallbackMessages;
   const bundle = useMemo(() => {
-    if (!messages) return null;
-    if (typeof messages === "string" || Array.isArray(messages)) {
-      return createFluentBundle(locale, messages, { functions });
+    if (!normalizedMessages) return null;
+    if (typeof normalizedMessages === "string" || Array.isArray(normalizedMessages)) {
+      return createFluentBundle(locale, normalizedMessages, { functions, useIsolating });
     }
-    return messages;
-  }, [locale, messagesKey ?? messages, functions]);
+    return normalizedMessages;
+  }, [locale, bundleIdentity, functions, useIsolating]);
   const fallbackBundle = useMemo(() => {
-    if (!fallbackMessages) return null;
+    if (!normalizedFallbackMessages) return null;
     const fLocale = fallbackLocale || "en";
-    if (typeof fallbackMessages === "string" || Array.isArray(fallbackMessages)) {
-      return createFluentBundle(fLocale, fallbackMessages, { functions });
+    if (typeof normalizedFallbackMessages === "string" || Array.isArray(normalizedFallbackMessages)) {
+      return createFluentBundle(fLocale, normalizedFallbackMessages, { functions, useIsolating });
     }
-    return fallbackMessages;
-  }, [fallbackLocale, fallbackMessagesKey ?? fallbackMessages, functions]);
+    return normalizedFallbackMessages;
+  }, [fallbackLocale, fallbackBundleIdentity, functions, useIsolating]);
   const resolvedFallbackBundles = useMemo(() => {
     if (fallbackBundles) {
       return Array.isArray(fallbackBundles) ? fallbackBundles : [fallbackBundles];
@@ -61,6 +77,7 @@ function FluentProvider({
     () => ({
       locale,
       bundle,
+      messages: typeof normalizedMessages === "string" || Array.isArray(normalizedMessages) ? normalizedMessages : void 0,
       fallbackLocale,
       fallbackBundle,
       fallbackBundles: resolvedFallbackBundles,
@@ -68,11 +85,16 @@ function FluentProvider({
       now,
       functions,
       defaultTranslationValues,
-      debug
+      debug,
+      strictNamespace,
+      formats,
+      onError,
+      getMessageFallback
     }),
     [
       locale,
       bundle,
+      normalizedMessages,
       fallbackLocale,
       fallbackBundle,
       resolvedFallbackBundles,
@@ -80,7 +102,11 @@ function FluentProvider({
       now,
       functions,
       defaultTranslationValues,
-      debug
+      debug,
+      strictNamespace,
+      formats,
+      onError,
+      getMessageFallback
     ]
   );
   return React.createElement(FluentContext.Provider, { value }, children);
@@ -100,10 +126,19 @@ function useTimeZone() {
     return "UTC";
   }
 }
+function useMessages() {
+  const context = useContext(FluentContext);
+  return context.messages;
+}
 function useFormatter() {
   const locale = useLocale();
   const timeZone = useTimeZone();
-  return useMemo(() => createFormatter({ locale, timeZone }), [locale, timeZone]);
+  const context = useContext(FluentContext);
+  const formats = context.formats;
+  return useMemo(
+    () => createFormatter({ locale, timeZone, formats }),
+    [locale, timeZone, formats]
+  );
 }
 function useNow(options) {
   const context = useContext(FluentContext);
@@ -131,7 +166,10 @@ function useTranslations(namespace) {
       fallbackBundles: context.fallbackBundles ?? (context.fallbackBundle ? [context.fallbackBundle] : null),
       namespace,
       debug: context.debug,
-      defaultTranslationValues: context.defaultTranslationValues
+      defaultTranslationValues: context.defaultTranslationValues,
+      strictNamespace: context.strictNamespace,
+      onError: context.onError,
+      getMessageFallback: context.getMessageFallback
     }),
     [
       context.bundle,
@@ -139,7 +177,10 @@ function useTranslations(namespace) {
       context.fallbackBundles,
       namespace,
       context.debug,
-      context.defaultTranslationValues
+      context.defaultTranslationValues,
+      context.strictNamespace,
+      context.onError,
+      context.getMessageFallback
     ]
   );
 }
@@ -169,18 +210,22 @@ function FormattedMessage({
   return content;
 }
 const LocalizedLink = forwardRef(
-  function LocalizedLink2({ navConfig, href, locale: propLocale, ...rest }, ref) {
+  function LocalizedLink2({ navConfig, href, locale: propLocale, forcePrefix, ...rest }, ref) {
     const currentLocale = useLocale();
     const targetLocale = propLocale ?? currentLocale ?? navConfig.defaultLocale;
     const localizedHref = switchLocaleHref(
-      resolveLocalizedPathname({ href, locale: targetLocale }, navConfig),
+      resolveLocalizedPathname({ href, locale: targetLocale, forcePrefix }, navConfig),
       propLocale,
       navConfig
     );
     return React.createElement(NextLink, {
       ...rest,
       href: localizedHref,
-      prefetch: propLocale && navConfig.localePrefix !== "always" ? false : rest.prefetch,
+      // With an explicit locale the href can differ from the one the visitor is
+      // on, and the middleware settles it with a redirect — prefetching that
+      // would fetch a page nobody lands on. A forced prefix is already
+      // unambiguous, so it prefetches like `always` does.
+      prefetch: propLocale && !forcePrefix && navConfig.localePrefix !== "always" ? false : rest.prefetch,
       ref
     });
   }
@@ -193,6 +238,7 @@ export {
   createFormatter,
   useFormatter,
   useLocale,
+  useMessages,
   useNow,
   useTimeZone,
   useTranslations

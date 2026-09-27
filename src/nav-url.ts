@@ -1,6 +1,12 @@
 import type { NavigationConfig, Pathnames, UrlObject } from './types';
 import { matchSupportedLocale } from './utils';
 import { localizePath, rewriteLocalizedPath } from './route-engine';
+import {
+  localeNeedsPrefix,
+  matchLocalePrefix,
+  normalizeLocalePrefix,
+  prefixForLocale,
+} from './locale-prefix';
 
 /**
  * Pure URL helpers shared by the navigation entry (server- and client-safe)
@@ -11,7 +17,23 @@ const UNSAFE_HREF_SCHEME = /^(?:javascript|data|vbscript|file):/i;
 const WINDOWS_UNC_PREFIX = /^\\\\/;
 
 function hrefDiagnostic(href: string): string {
-  return href.length > 64 ? `<oversized href: ${href.length} code units>` : href;
+  if (href.length > 64) return `<oversized href: ${href.length} code units>`;
+  // Control characters would let a rejected href rewrite the log line it is
+  // reported in, so they are shown escaped.
+  // eslint-disable-next-line no-control-regex -- escaping control characters is the point
+  return href.replace(/[\u0000-\u001f\u007f]/g, (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
+
+/**
+ * What a browser sees before it resolves the scheme: ASCII tab, LF and CR are
+ * removed anywhere in a URL, and C0 controls and space are stripped at the
+ * edges. Testing the raw string lets `java\tscript:` through.
+ */
+function browserNormalizedHref(href: string): string {
+  // eslint-disable-next-line no-control-regex -- tab/LF/CR are precisely what a browser discards
+  const withoutDiscarded = href.replace(/[\u0009\u000a\u000d]/g, '');
+  // eslint-disable-next-line no-control-regex -- C0 controls and space are stripped at the URL edges
+  return withoutDiscarded.replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, '');
 }
 
 /**
@@ -20,7 +42,7 @@ function hrefDiagnostic(href: string): string {
  * Windows UNC `\\host` forms that browsers normalize to protocol-relative URLs).
  */
 export function assertSafeHref(href: string): void {
-  const trimmed = href.trim();
+  const trimmed = browserNormalizedHref(href);
   if (UNSAFE_HREF_SCHEME.test(trimmed) || WINDOWS_UNC_PREFIX.test(trimmed)) {
     throw new Error(`[next-fluent] Unsafe href rejected: "${hrefDiagnostic(href)}"`);
   }
@@ -54,6 +76,7 @@ export function formatUrlObject(urlObj: UrlObject): {
   if (!pathname.startsWith('/')) {
     pathname = `/${pathname}`;
   }
+  // eslint-disable-next-line no-control-regex -- rejecting C0 controls in a pathname is the point
   if (pathname.startsWith('//') || pathname.includes('\\') || /[\u0000-\u001f]/.test(pathname)) {
     throw new Error('[next-fluent] URL object pathname must be an internal path.');
   }
@@ -100,11 +123,13 @@ export function formatUrlObject(urlObj: UrlObject): {
 }
 
 export function resolveLocalizedPathname(
-  options: { href: string | UrlObject; locale?: string; domain?: string },
+  options: { href: string | UrlObject; locale?: string; domain?: string; forcePrefix?: boolean },
   config: NavigationConfig
 ): string {
   const { href, locale: explicitLocale } = options;
-  const { locales, defaultLocale, localePrefix = 'always', pathnames, domains, basePath = '' } = config;
+  const { locales, defaultLocale, pathnames, domains, basePath = '' } = config;
+  const prefixConfig = normalizeLocalePrefix(locales, config.localePrefix);
+  const localePrefix = prefixConfig.mode;
 
   let rawPathname = '';
   let search = '';
@@ -148,17 +173,13 @@ export function resolveLocalizedPathname(
     rawPathname = rawPathname.slice(basePath.length) || '/';
   }
 
-  // Strip existing supported locale prefix if present
-  const segments = rawPathname.split('/').filter(Boolean);
+  // Strip an existing locale prefix (including custom per-locale prefixes).
   let cleanPathname = rawPathname;
   let sourceLocale: string | undefined;
-  if (segments.length > 0) {
-    const first = segments[0];
-    sourceLocale = matchSupportedLocale(first, locales);
-    if (sourceLocale) {
-      const rest = segments.slice(1).join('/');
-      cleanPathname = rest ? `/${rest}` : '/';
-    }
+  const prefixMatch = matchLocalePrefix(rawPathname, locales, prefixConfig);
+  if (prefixMatch) {
+    sourceLocale = prefixMatch.locale;
+    cleanPathname = prefixMatch.rest;
   }
 
   const hasTrailingSlash =
@@ -194,17 +215,14 @@ export function resolveLocalizedPathname(
     mappedPathname = `${mappedPathname}/`;
   }
 
-  let prefix = '';
-  if (localePrefix === 'never') {
-    prefix = '';
-  } else if (localePrefix === 'as-needed') {
-    if (resolvedLocale !== resolvedDefaultLocale) {
-      prefix = `/${resolvedLocale}`;
-    }
-  } else {
-    // 'always'
-    prefix = `/${resolvedLocale}`;
-  }
+  // `forcePrefix` opts the caller into an explicit prefix for the default
+  // locale too. It is ignored in `never` mode: prefixed URLs do not exist
+  // there, so emitting one would only be stripped again by the middleware.
+  const wantsPrefix =
+    localePrefix !== 'never' &&
+    (options.forcePrefix === true ||
+      localeNeedsPrefix(resolvedLocale, resolvedDefaultLocale, localePrefix));
+  const prefix = wantsPrefix ? prefixForLocale(resolvedLocale, prefixConfig) : '';
 
   const finalPath = prefix
     ? mappedPathname === '/'
@@ -238,7 +256,9 @@ export function switchLocaleHref(
   explicitLocale: string | undefined,
   config: NavigationConfig
 ): string {
-  const { locales, localePrefix = 'always', basePath = '' } = config;
+  const { locales, basePath = '' } = config;
+  const prefixConfig = normalizeLocalePrefix(locales, config.localePrefix);
+  const localePrefix = prefixConfig.mode;
   if (!explicitLocale || isExternalUrl(target) || target.startsWith('#')) {
     return target;
   }
@@ -259,13 +279,12 @@ export function switchLocaleHref(
     // A prefixed canonical href (switch to a non-default locale) is already
     // unambiguous — return it as is. Only prefix-less canonical hrefs need the
     // temporary signal URL so that middleware can update the locale cookie.
-    const firstSegment = route.split('/').filter(Boolean)[0];
-    if (firstSegment && matchSupportedLocale(firstSegment, locales)) {
+    if (matchLocalePrefix(route, locales, prefixConfig)) {
       return target;
     }
   }
 
-  return `${basePath}/${locale}${route === '/' ? '' : route}${url.search}${url.hash}`;
+  return `${basePath}${prefixForLocale(locale, prefixConfig)}${route === '/' ? '' : route}${url.search}${url.hash}`;
 }
 
 /**

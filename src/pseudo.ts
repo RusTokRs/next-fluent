@@ -2,12 +2,12 @@
  * Pseudo-localization engine for layout overflow and truncation testing.
  */
 import {
-  parse,
   serialize,
   Visitor,
   TextElement,
   type Pattern,
 } from '@fluent/syntax';
+import { parseFtl } from './ftl-parse';
 
 const CHAR_MAP: Record<string, string> = {
   a: 'å', b: 'ƀ', c: 'ç', d: 'ð', e: 'é', f: 'ƒ', g: 'ĝ', h: 'ĥ', i: 'î',
@@ -38,21 +38,14 @@ export function pseudoLocalizeText(text: string, options: PseudoOptions = {}): s
   const suffix = options.suffix ?? ']';
   const elongate = options.elongate ?? true;
 
-  // Split by Fluent expressions {...} and HTML tags <...>
-  const tokenRegex = /(\{[^}]*\}|<\/?[a-zA-Z][a-zA-Z0-9_-]*\s*\/?>)/g;
-  const parts = text.split(tokenRegex);
-
-  const transformedParts = parts.map((part) => {
-    // If it's a variable/expression or HTML tag, preserve as-is
-    if (part.startsWith('{') && part.endsWith('}')) {
-      return part;
-    }
-    if (part.startsWith('<') && part.endsWith('>')) {
-      return part;
+  const transformedParts = splitPreservedTokens(text).map((part) => {
+    // Fluent expressions and HTML tags are structure, not copy — keep them intact.
+    if (part.kind !== 'text') {
+      return part.value;
     }
 
     let res = '';
-    for (const ch of part) {
+    for (const ch of part.value) {
       const mapped = CHAR_MAP[ch] || ch;
       res += mapped;
       // Elongate vowels if requested
@@ -64,6 +57,84 @@ export function pseudoLocalizeText(text: string, options: PseudoOptions = {}): s
   });
 
   return `${prefix}${transformedParts.join('')}${suffix}`;
+}
+
+type PreservedToken = { kind: 'text' | 'expr' | 'tag'; value: string };
+
+/**
+ * Splits text into translatable runs and the tokens that must survive
+ * untouched: Fluent placeables and HTML tags.
+ *
+ * A flat `\{[^}]*\}` pattern breaks on nested placeables — `{ $count ->
+ * [one] { NUMBER($count) } }` — because it stops at the first `}` and the rest
+ * of the selector gets pseudo-localized. Brace depth (and Fluent string
+ * literals) are tracked instead.
+ */
+export function splitPreservedTokens(text: string): PreservedToken[] {
+  const tokens: PreservedToken[] = [];
+  let buffer = '';
+  let index = 0;
+
+  const flush = () => {
+    if (buffer !== '') {
+      tokens.push({ kind: 'text', value: buffer });
+      buffer = '';
+    }
+  };
+
+  while (index < text.length) {
+    const ch = text[index];
+
+    if (ch === '{') {
+      let depth = 0;
+      let cursor = index;
+      let inString = false;
+      while (cursor < text.length) {
+        const current = text[cursor];
+        if (inString) {
+          if (current === '\\') cursor++;
+          else if (current === '"') inString = false;
+        } else if (current === '"') {
+          inString = true;
+        } else if (current === '{') {
+          depth++;
+        } else if (current === '}') {
+          depth--;
+          if (depth === 0) {
+            cursor++;
+            break;
+          }
+        }
+        cursor++;
+      }
+      // Unbalanced braces are plain text, not a placeable.
+      if (depth !== 0) {
+        buffer += ch;
+        index++;
+        continue;
+      }
+      flush();
+      tokens.push({ kind: 'expr', value: text.slice(index, cursor) });
+      index = cursor;
+      continue;
+    }
+
+    if (ch === '<') {
+      const tag = /^<\/?[a-zA-Z][a-zA-Z0-9_-]*(?:\s[^<>]*)?\/?>/.exec(text.slice(index));
+      if (tag) {
+        flush();
+        tokens.push({ kind: 'tag', value: tag[0] });
+        index += tag[0].length;
+        continue;
+      }
+    }
+
+    buffer += ch;
+    index++;
+  }
+
+  flush();
+  return tokens;
 }
 
 /**
@@ -101,7 +172,7 @@ function wrapPatternEdges(pattern: Pattern, options: PseudoOptions): void {
  * prefix/suffix wraps each message (and each select variant) as a whole.
  */
 export function pseudoLocalizeFtl(ftlContent: string, options: PseudoOptions = {}): string {
-  const resource = parse(ftlContent, { withSpans: false });
+  const resource = parseFtl(ftlContent, 'The catalog');
   const textOptions: PseudoOptions = { ...options, prefix: '', suffix: '' };
   class PseudoVisitor extends Visitor {
     visitTextElement(node: TextElement): void {
