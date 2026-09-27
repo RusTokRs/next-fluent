@@ -1,4 +1,5 @@
-import { parse, Visitor } from "@fluent/syntax";
+import { Visitor } from "@fluent/syntax";
+import { parseFtl } from "./ftl-parse.js";
 import { toFluentSource } from "./catalog.js";
 class VariableExtractor extends Visitor {
   variables = /* @__PURE__ */ new Set();
@@ -11,9 +12,7 @@ class VariableExtractor extends Visitor {
 }
 function extractMessagesFromFtl(ftlContent) {
   const source = toFluentSource(ftlContent);
-  const resource = parse(typeof source === "string" ? source : source.join("\n"), {
-    withSpans: false
-  });
+  const resource = parseFtl(typeof source === "string" ? source : source.join("\n"), "The catalog");
   const messages = [];
   for (const entry of resource.body) {
     if (entry.type === "Message") {

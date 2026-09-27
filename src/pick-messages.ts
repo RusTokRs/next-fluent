@@ -1,4 +1,5 @@
-import { parse, FluentSerializer, Resource, Visitor, type Message, type TermReference } from '@fluent/syntax';
+import { FluentSerializer, Resource, Visitor, type Message, type TermReference } from '@fluent/syntax';
+import { parseFtl } from './ftl-parse';
 import { toFluentSource, type MessageSource } from './catalog';
 
 /**
@@ -55,7 +56,7 @@ export function pickMessages(
   const combined = typeof source === 'string' ? source : source.join('\n');
   if (!namespace) return combined;
 
-  const resource = parse(combined, { withSpans: false });
+  const resource = parseFtl(combined, 'The catalog');
   const kept = resource.body.filter(
     (entry): entry is Message => entry.type === 'Message' && matchesNamespace(entry.id.name, namespace)
   );
@@ -92,7 +93,7 @@ export function pickMessages(
 export function listMessageKeys(messages: MessageSource): string[] {
   const source = toFluentSource(messages);
   const combined = typeof source === 'string' ? source : source.join('\n');
-  const resource = parse(combined, { withSpans: false });
+  const resource = parseFtl(combined, 'The catalog');
   const keys: string[] = [];
   for (const entry of resource.body) {
     if (entry.type !== 'Message') continue;

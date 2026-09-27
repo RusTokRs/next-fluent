@@ -1,4 +1,5 @@
-import { parse, FluentSerializer, Resource, Visitor } from "@fluent/syntax";
+import { FluentSerializer, Resource, Visitor } from "@fluent/syntax";
+import { parseFtl } from "./ftl-parse.js";
 import { toFluentSource } from "./catalog.js";
 class TermCollector extends Visitor {
   terms = /* @__PURE__ */ new Set();
@@ -19,7 +20,7 @@ function pickMessages(messages, namespace, options = {}) {
   const source = toFluentSource(messages);
   const combined = typeof source === "string" ? source : source.join("\n");
   if (!namespace) return combined;
-  const resource = parse(combined, { withSpans: false });
+  const resource = parseFtl(combined, "The catalog");
   const kept = resource.body.filter(
     (entry) => entry.type === "Message" && matchesNamespace(entry.id.name, namespace)
   );
@@ -51,7 +52,7 @@ function pickMessages(messages, namespace, options = {}) {
 function listMessageKeys(messages) {
   const source = toFluentSource(messages);
   const combined = typeof source === "string" ? source : source.join("\n");
-  const resource = parse(combined, { withSpans: false });
+  const resource = parseFtl(combined, "The catalog");
   const keys = [];
   for (const entry of resource.body) {
     if (entry.type !== "Message") continue;

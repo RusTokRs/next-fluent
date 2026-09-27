@@ -69,6 +69,31 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `LRUCache` rejects non-positive and non-integer sizes instead of silently
   behaving like a one-entry cache.
 
+### Fixed
+
+- **Usage analysis no longer reports phantom findings.** A commented-out or
+  stringified `t('key')` counted as a real call site (hiding dead keys), and a
+  translator received through props produced a *missing-key failure* for a
+  namespace the analyzer cannot know — a false positive that fails CI. Call
+  sites are now found in a masked copy of the source (comments, strings, regex
+  and template literals blanked, `${…}` interpolations kept), a call that cannot
+  be attributed to a binding in the file is matched against every namespace and
+  reported as unverifiable rather than missing, and an unrelated callable named
+  `t` is ignored entirely.
+- **Usage analysis was quadratic.** Line numbers were counted from the start of
+  the file for every call site: 20 000 call sites took ~7.8 s, now ~0.1 s.
+- **Deep nesting no longer surfaces as a bare stack overflow.** `@fluent/syntax`
+  recurses per nesting level, so a message with a few thousand nested placeables
+  made `check`, `typegen` and `pseudo` die with "Maximum call stack size
+  exceeded". `parseFtl()` converts that into `The catalog is nested too deeply
+  for the FTL parser. Flatten the message or split it into several.` (the
+  original error is kept as `cause`), and `jsonToFluent` rejects JSON nested
+  deeper than 32 levels with the same clarity.
+- **A CLI flag without its value** (`next-fluent check --input`) reported
+  `Unknown option "--input"`. It now says `"--input" requires a value.`
+- `checkCatalogs` failures in the CLI are reported as `Error: <message>` instead
+  of a raw stack trace.
+
 ### Security
 
 - **Open redirect closed.** With `localePrefix: 'never'` (and `'as-needed'` for

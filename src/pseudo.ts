@@ -2,12 +2,12 @@
  * Pseudo-localization engine for layout overflow and truncation testing.
  */
 import {
-  parse,
   serialize,
   Visitor,
   TextElement,
   type Pattern,
 } from '@fluent/syntax';
+import { parseFtl } from './ftl-parse';
 
 const CHAR_MAP: Record<string, string> = {
   a: 'å', b: 'ƀ', c: 'ç', d: 'ð', e: 'é', f: 'ƒ', g: 'ĝ', h: 'ĥ', i: 'î',
@@ -172,7 +172,7 @@ function wrapPatternEdges(pattern: Pattern, options: PseudoOptions): void {
  * prefix/suffix wraps each message (and each select variant) as a whole.
  */
 export function pseudoLocalizeFtl(ftlContent: string, options: PseudoOptions = {}): string {
-  const resource = parse(ftlContent, { withSpans: false });
+  const resource = parseFtl(ftlContent, 'The catalog');
   const textOptions: PseudoOptions = { ...options, prefix: '', suffix: '' };
   class PseudoVisitor extends Visitor {
     visitTextElement(node: TextElement): void {

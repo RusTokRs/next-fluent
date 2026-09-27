@@ -41,13 +41,6 @@ function namespaceOf(argument) {
   const named = /namespace\s*:\s*(['"`])([^'"`]*)\1/.exec(argument);
   return named?.[2] || void 0;
 }
-function lineOf(code, index) {
-  let line = 1;
-  for (let i = 0; i < index && i < code.length; i++) {
-    if (code[i] === "\n") line++;
-  }
-  return line;
-}
 function ignoredLines(content) {
   const ignored = /* @__PURE__ */ new Set();
   const lines = content.split("\n");
@@ -58,8 +51,198 @@ function ignoredLines(content) {
   });
   return ignored;
 }
+function skipLiteral(source, start) {
+  const quote = source[start];
+  let i = start + 1;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === "\\") {
+      i += 2;
+      continue;
+    }
+    if (quote === "`" && ch === "$" && source[i + 1] === "{") {
+      let depth = 1;
+      i += 2;
+      while (i < source.length && depth > 0) {
+        const inner = source[i];
+        if (inner === "{") depth++;
+        else if (inner === "}") depth--;
+        else if (inner === '"' || inner === "'" || inner === "`") {
+          i = skipLiteral(source, i);
+          continue;
+        }
+        i++;
+      }
+      continue;
+    }
+    if (ch === quote) return i + 1;
+    i++;
+  }
+  return source.length;
+}
+function skipRegex(source, start) {
+  let i = start + 1;
+  let inClass = false;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === "\\") {
+      i += 2;
+      continue;
+    }
+    if (ch === "\n") return start;
+    if (ch === "[") inClass = true;
+    else if (ch === "]") inClass = false;
+    else if (ch === "/" && !inClass) {
+      i++;
+      while (i < source.length && /[a-z]/.test(source[i])) i++;
+      return i;
+    }
+    i++;
+  }
+  return start;
+}
+const REGEX_PRECEDING_KEYWORDS = /* @__PURE__ */ new Set([
+  "return",
+  "typeof",
+  "instanceof",
+  "in",
+  "of",
+  "new",
+  "delete",
+  "void",
+  "case",
+  "do",
+  "else",
+  "yield",
+  "await",
+  "throw"
+]);
+function regexAllowed(source, index, lastSignificant) {
+  if (lastSignificant === "") return true;
+  if (lastSignificant === ")") return false;
+  if (/[A-Za-z0-9_$\])]/.test(lastSignificant)) {
+    let end = index;
+    while (end > 0 && /\s/.test(source[end - 1])) end--;
+    let wordEnd = end;
+    while (wordEnd > 0 && /[A-Za-z_$]/.test(source[wordEnd - 1])) wordEnd--;
+    const word = source.slice(wordEnd, end);
+    return word !== "" && REGEX_PRECEDING_KEYWORDS.has(word);
+  }
+  return true;
+}
+function maskNonCode(source) {
+  const out = source.split("");
+  const blank = (from, to) => {
+    for (let i2 = from; i2 < to && i2 < out.length; i2++) {
+      if (out[i2] !== "\n") out[i2] = " ";
+    }
+  };
+  const stack = [];
+  let i = 0;
+  let lastSignificant = "";
+  while (i < source.length) {
+    const ch = source[i];
+    const top = stack[stack.length - 1];
+    if (top === "template") {
+      if (ch === "\\") {
+        out[i] = " ";
+        out[i + 1] = " ";
+        i += 2;
+        continue;
+      }
+      if (ch === "`") {
+        out[i] = " ";
+        stack.pop();
+        lastSignificant = ")";
+        i++;
+        continue;
+      }
+      if (ch === "$" && source[i + 1] === "{") {
+        out[i] = " ";
+        out[i + 1] = " ";
+        stack.push(1);
+        i += 2;
+        continue;
+      }
+      if (ch !== "\n") out[i] = " ";
+      i++;
+      continue;
+    }
+    if (typeof top === "number") {
+      if (ch === "{") {
+        stack[stack.length - 1] = top + 1;
+        lastSignificant = ch;
+        i++;
+        continue;
+      }
+      if (ch === "}") {
+        if (top === 1) {
+          stack.pop();
+          out[i] = " ";
+          i++;
+          continue;
+        }
+        stack[stack.length - 1] = top - 1;
+        lastSignificant = ch;
+        i++;
+        continue;
+      }
+    }
+    if (ch === "/" && source[i + 1] === "/") {
+      const end = source.indexOf("\n", i);
+      blank(i, end === -1 ? source.length : end);
+      i = end === -1 ? source.length : end;
+      continue;
+    }
+    if (ch === "/" && source[i + 1] === "*") {
+      const close = source.indexOf("*/", i + 2);
+      const end = close === -1 ? source.length : close + 2;
+      blank(i, end);
+      i = end;
+      continue;
+    }
+    if (ch === "`") {
+      out[i] = " ";
+      stack.push("template");
+      i++;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      const end = skipLiteral(source, i);
+      blank(i, end);
+      i = end;
+      lastSignificant = ")";
+      continue;
+    }
+    if (ch === "/" && regexAllowed(source, i, lastSignificant)) {
+      const end = skipRegex(source, i);
+      if (end > i) {
+        blank(i, end);
+        i = end;
+        lastSignificant = ")";
+        continue;
+      }
+    }
+    if (!/\s/.test(ch)) lastSignificant = ch;
+    i++;
+  }
+  return out.join("");
+}
+function createLineCounter(masked) {
+  let scanned = 0;
+  let line = 1;
+  return (index) => {
+    for (let i = scanned; i < index; i++) {
+      if (masked[i] === "\n") line++;
+    }
+    scanned = Math.max(scanned, index);
+    return line;
+  };
+}
 function collectCallSites(file) {
   const { content } = file;
+  const masked = maskNonCode(content);
+  const lineAt = createLineCounter(masked);
   const bindings = /* @__PURE__ */ new Map();
   const sites = [];
   const suppressed = ignoredLines(content);
@@ -67,38 +250,32 @@ function collectCallSites(file) {
     `(?:const|let|var)\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*(?:await\\s+)?(${FACTORIES.join("|")})\\s*\\(`,
     "g"
   );
-  for (let match = factoryPattern.exec(content); match; match = factoryPattern.exec(content)) {
+  for (let match = factoryPattern.exec(masked); match; match = factoryPattern.exec(masked)) {
     const openParen = match.index + match[0].length - 1;
     bindings.set(match[1], namespaceOf(readFirstArgument(content, openParen)));
   }
-  const inlinePattern = new RegExp(`(${FACTORIES.join("|")})\\s*\\(`, "g");
-  const inlineNamespaces = [];
-  for (let match = inlinePattern.exec(content); match; match = inlinePattern.exec(content)) {
-    const openParen = match.index + match[0].length - 1;
-    inlineNamespaces.push({
-      index: match.index,
-      namespace: namespaceOf(readFirstArgument(content, openParen))
-    });
-  }
-  const names = /* @__PURE__ */ new Set([...bindings.keys(), "t", "translate"]);
+  const bareNames = ["t", "translate"];
+  const names = /* @__PURE__ */ new Set([...bindings.keys(), ...bareNames]);
   const methodAlternatives = CALL_METHODS.join("|");
   const callPattern = new RegExp(
     `\\b(${[...names].map((name) => name.replace(/\$/g, "\\$")).join("|")})\\s*(?:\\.\\s*(${methodAlternatives}))?\\s*\\(`,
     "g"
   );
-  for (let match = callPattern.exec(content); match; match = callPattern.exec(content)) {
+  for (let match = callPattern.exec(masked); match; match = callPattern.exec(masked)) {
     const name = match[1];
     if (FACTORIES.includes(name)) continue;
     const openParen = match.index + match[0].length - 1;
     const argument = readFirstArgument(content, openParen);
     if (argument === void 0) continue;
-    const namespace = bindings.has(name) ? bindings.get(name) : inlineNamespaces.find((entry) => entry.index < match.index)?.namespace;
-    const line = lineOf(content, match.index);
+    const namespaceKnown = bindings.has(name);
+    if (!namespaceKnown && staticString(argument) === void 0) continue;
+    const line = lineAt(match.index);
     sites.push({
       method: match[2],
       argument,
       line,
-      namespace,
+      namespace: namespaceKnown ? bindings.get(name) : void 0,
+      namespaceKnown,
       ignored: suppressed.has(line)
     });
   }
@@ -119,6 +296,13 @@ function indexCatalog(source) {
     }
   }
   return { keys, withAttributes };
+}
+function findInAnyNamespace(keys, key) {
+  if (keys.has(key)) return key;
+  for (const candidate of keys) {
+    if (candidate.endsWith(`.${key}`) || candidate.endsWith(`-${key}`)) return candidate;
+  }
+  return void 0;
 }
 function isIgnored(key, ignore) {
   return ignore.some((prefix) => key === prefix || key.startsWith(`${prefix}.`) || key.startsWith(`${prefix}-`));
@@ -152,8 +336,7 @@ function analyzeUsage(catalogs, sources, options = {}) {
         }
         continue;
       }
-      const candidates = buildKeyCandidates(site.namespace, key);
-      const resolved = candidates.find((candidate) => index.keys.has(candidate));
+      const resolved = site.namespaceKnown ? buildKeyCandidates(site.namespace, key).find((candidate) => index.keys.has(candidate)) : findInAnyNamespace(index.keys, key);
       if (resolved) {
         usedKeys.add(resolved);
         if (site.method === "attrs") {
@@ -173,9 +356,19 @@ function analyzeUsage(catalogs, sources, options = {}) {
         continue;
       }
       if (site.ignored) continue;
+      if (!site.namespaceKnown) {
+        dynamicSites++;
+        issues.push({
+          kind: "dynamic",
+          file: file.path,
+          line: site.line,
+          message: `"${key}" is used through a translator this file does not create, so its namespace cannot be verified.`
+        });
+        continue;
+      }
       issues.push({
         kind: "missing",
-        key: candidates[0],
+        key: buildKeyCandidates(site.namespace, key)[0],
         file: file.path,
         line: site.line,
         message: `"${key}" is used in ${file.path} but is missing from ${referenceLocale || "the catalog"}.`

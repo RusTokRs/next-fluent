@@ -62,7 +62,14 @@ function normalizeId(segment, path) {
   }
   return id;
 }
-function walk(value, id, path, out) {
+const MAX_JSON_DEPTH = 32;
+function walk(value, id, path, out, depth = 0) {
+  if (depth > MAX_JSON_DEPTH) {
+    throw invalid(
+      `JSON catalog value at "${path}" is nested more than ${MAX_JSON_DEPTH} levels deep.`,
+      path
+    );
+  }
   if (value === null || value === void 0) {
     throw invalid(
       `JSON catalog value at "${path}" is ${value === null ? "null" : "undefined"}. Every message must be a string, a number, a boolean or a nested object.`,
@@ -106,7 +113,7 @@ function walk(value, id, path, out) {
     return;
   }
   for (const [key, nested] of entries) {
-    walk(nested, `${id}-${normalizeId(key, `${path}.${key}`)}`, `${path}.${key}`, out);
+    walk(nested, `${id}-${normalizeId(key, `${path}.${key}`)}`, `${path}.${key}`, out, depth + 1);
   }
 }
 function jsonToFluent(catalog) {

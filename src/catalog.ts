@@ -124,7 +124,16 @@ function normalizeId(segment: string, path: string): string {
   return id;
 }
 
-function walk(value: unknown, id: string, path: string, out: string[]): void {
+/** Guards against a stack overflow turning into an opaque crash. */
+const MAX_JSON_DEPTH = 32;
+
+function walk(value: unknown, id: string, path: string, out: string[], depth = 0): void {
+  if (depth > MAX_JSON_DEPTH) {
+    throw invalid(
+      `JSON catalog value at "${path}" is nested more than ${MAX_JSON_DEPTH} levels deep.`,
+      path
+    );
+  }
   if (value === null || value === undefined) {
     throw invalid(
       `JSON catalog value at "${path}" is ${value === null ? 'null' : 'undefined'}. ` +
@@ -176,7 +185,7 @@ function walk(value: unknown, id: string, path: string, out: string[]): void {
   }
 
   for (const [key, nested] of entries) {
-    walk(nested, `${id}-${normalizeId(key, `${path}.${key}`)}`, `${path}.${key}`, out);
+    walk(nested, `${id}-${normalizeId(key, `${path}.${key}`)}`, `${path}.${key}`, out, depth + 1);
   }
 }
 

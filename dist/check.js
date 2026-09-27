@@ -1,8 +1,8 @@
-import { parse } from "@fluent/syntax";
+import { parseFtl } from "./ftl-parse.js";
 import { toFluentSource } from "./catalog.js";
 function collectKeys(source) {
   const combined = typeof source === "string" ? source : source.join("\n");
-  const resource = parse(combined, { withSpans: false });
+  const resource = parseFtl(combined, "The catalog");
   const keys = /* @__PURE__ */ new Set();
   const duplicates = [];
   const parseErrors = [];

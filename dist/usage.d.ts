@@ -57,6 +57,7 @@ export declare function collectCallSites(file: SourceFile): {
     bindings: Map<string, string | undefined>;
     sites: (CallSite & {
         namespace?: string;
+        namespaceKnown: boolean;
         ignored: boolean;
     })[];
 };

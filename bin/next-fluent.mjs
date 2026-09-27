@@ -99,23 +99,36 @@ const options = {
 
 for (let i = 1; i < argv.length; i++) {
   const arg = argv[i];
+  /**
+   * Reads a flag's value. Returns `null` when this argument is not the flag, so
+   * a flag that *is* known but has no value gets its own error instead of being
+   * reported as an unknown option.
+   */
   const take = (flag, short) => {
-    if (arg === flag || (short && arg === short)) return argv[++i];
     if (arg.startsWith(`${flag}=`)) return arg.slice(flag.length + 1);
     if (short && arg.startsWith(`${short}=`)) return arg.slice(short.length + 1);
-    return undefined;
+    if (arg === flag || (short && arg === short)) {
+      const value = argv[i + 1];
+      if (value === undefined || value.startsWith('-')) {
+        console.error(`Error: "${arg}" requires a value.\n\n${USAGE}`);
+        process.exit(1);
+      }
+      i++;
+      return value;
+    }
+    return null;
   };
 
   const input = take('--input', '-i');
-  if (input !== undefined) { options.input = input; continue; }
+  if (input !== null) { options.input = input; continue; }
   const output = take('--output', '-o');
-  if (output !== undefined) { options.output = output; continue; }
+  if (output !== null) { options.output = output; continue; }
   const reference = take('--reference', '-r');
-  if (reference !== undefined) { options.reference = reference; continue; }
+  if (reference !== null) { options.reference = reference; continue; }
   const src = take('--src');
-  if (src !== undefined) { options.src = src; continue; }
+  if (src !== null) { options.src = src; continue; }
   const ignoreUnused = take('--ignore-unused');
-  if (ignoreUnused !== undefined) { options.ignoreUnused.push(ignoreUnused); continue; }
+  if (ignoreUnused !== null) { options.ignoreUnused.push(ignoreUnused); continue; }
   if (arg === '--watch' || arg === '-w') { options.watch = true; continue; }
   if (arg === '--json') { options.json = true; continue; }
   if (arg === '--usage') { options.usage = true; continue; }
@@ -196,7 +209,9 @@ if (command === 'check') {
     process.exit(1);
   }
 
-  const report = checkCatalogs(catalogs, { referenceLocale: options.reference || undefined });
+  const report = runGuarded(() =>
+    checkCatalogs(catalogs, { referenceLocale: options.reference || undefined })
+  );
 
   let usageReport = null;
   if (options.usage) {

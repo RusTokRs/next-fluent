@@ -188,3 +188,51 @@ test('never writes to the catalog and never mutates its inputs', () => {
   analyzeUsage(catalogs, sources, { referenceLocale: 'en' });
   assert.equal(JSON.stringify({ catalogs, sources }), before);
 });
+
+// --- Regressions from the third audit pass -------------------------------
+
+test('a commented-out call site is not usage', () => {
+  const report = analyze([
+    file('app/page.tsx', '// t("orphan-key")\nconst t = useTranslations();\nt("hello");\n'),
+  ]);
+  const unused = report.issues.filter((issue) => issue.kind === 'unused').map((issue) => issue.key);
+  assert.ok(unused.includes('orphan-key'), `comment counted as usage: ${unused.join(', ')}`);
+});
+
+test('a call site inside a string literal is not usage', () => {
+  const report = analyze([
+    file('app/page.tsx', 'const t = useTranslations();\nconst doc = "t(\'orphan-key\')";\nt("hello");\n'),
+  ]);
+  const unused = report.issues.filter((issue) => issue.kind === 'unused').map((issue) => issue.key);
+  assert.ok(unused.includes('orphan-key'), `string counted as usage: ${unused.join(', ')}`);
+});
+
+test('a call inside a template interpolation is still usage', () => {
+  const report = analyze([
+    file('app/page.tsx', 'const t = useTranslations();\nconst s = `${f(1)}${t("hello")}`;\n'),
+  ]);
+  assert.deepEqual(report.usedKeys, ['hello']);
+});
+
+test('a translator received via props never produces a missing-key failure', () => {
+  // The namespace is unknowable here, so claiming the key is missing would be a
+  // false positive that fails CI.
+  const report = analyze([file('app/row.tsx', 'export function Row({ t }) {\n  return t("total");\n}\n')]);
+  assert.deepEqual(report.issues.filter((issue) => issue.kind === 'missing'), []);
+  // `checkout-total` is matched despite the unknown namespace.
+  assert.deepEqual(report.usedKeys, ['checkout-total']);
+});
+
+test('an unrelated callable named t produces no report at all', () => {
+  const report = analyze([file('app/x.tsx', 'const t = 5;\nconst y = t(3);\n')]);
+  assert.deepEqual(report.issues.filter((issue) => issue.kind === 'dynamic'), []);
+});
+
+test('scanning stays linear in the number of call sites', () => {
+  const many = `const t = useTranslations();\n${'t("hello");\n'.repeat(20000)}`;
+  const started = Date.now();
+  const report = analyze([file('app/many.tsx', many)]);
+  const ms = Date.now() - started;
+  assert.deepEqual(report.usedKeys, ['hello']);
+  assert.ok(ms < 3000, `analysis took ${ms}ms for 20000 call sites`);
+});

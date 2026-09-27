@@ -1,9 +1,9 @@
 import {
-  parse,
   serialize,
   Visitor,
   TextElement
 } from "@fluent/syntax";
+import { parseFtl } from "./ftl-parse.js";
 const CHAR_MAP = {
   a: "\xE5",
   b: "\u0180",
@@ -159,7 +159,7 @@ function wrapPatternEdges(pattern, options) {
   }
 }
 function pseudoLocalizeFtl(ftlContent, options = {}) {
-  const resource = parse(ftlContent, { withSpans: false });
+  const resource = parseFtl(ftlContent, "The catalog");
   const textOptions = { ...options, prefix: "", suffix: "" };
   class PseudoVisitor extends Visitor {
     visitTextElement(node) {

@@ -1,4 +1,5 @@
-import { parse, type Entry } from '@fluent/syntax';
+import { type Entry } from '@fluent/syntax';
+import { parseFtl } from './ftl-parse';
 import { toFluentSource, type MessageSource } from './catalog';
 
 /**
@@ -40,7 +41,7 @@ interface CatalogKeys {
 
 function collectKeys(source: string | readonly string[]): CatalogKeys {
   const combined = typeof source === 'string' ? source : source.join('\n');
-  const resource = parse(combined, { withSpans: false });
+  const resource = parseFtl(combined, 'The catalog');
   const keys = new Set<string>();
   const duplicates: string[] = [];
   const parseErrors: string[] = [];

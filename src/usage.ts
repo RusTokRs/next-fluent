@@ -110,14 +110,6 @@ function namespaceOf(argument: string | undefined): string | undefined {
   return named?.[2] || undefined;
 }
 
-function lineOf(code: string, index: number): number {
-  let line = 1;
-  for (let i = 0; i < index && i < code.length; i++) {
-    if (code[i] === '\n') line++;
-  }
-  return line;
-}
-
 /**
  * Lines exempt from reporting.
  *
@@ -136,14 +128,234 @@ function ignoredLines(content: string): Set<number> {
   return ignored;
 }
 
+/** Index just past the string/template literal that starts at `start`. */
+function skipLiteral(source: string, start: number): number {
+  const quote = source[start];
+  let i = start + 1;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === '\\') {
+      i += 2;
+      continue;
+    }
+    if (quote === '`' && ch === '$' && source[i + 1] === '{') {
+      // Interpolation: skip to the matching brace, honouring nested literals.
+      let depth = 1;
+      i += 2;
+      while (i < source.length && depth > 0) {
+        const inner = source[i];
+        if (inner === '{') depth++;
+        else if (inner === '}') depth--;
+        else if (inner === '"' || inner === "'" || inner === '`') {
+          i = skipLiteral(source, i);
+          continue;
+        }
+        i++;
+      }
+      continue;
+    }
+    if (ch === quote) return i + 1;
+    i++;
+  }
+  return source.length;
+}
+
+/** Index just past the regex literal starting at `start`, or `start` if it is not one. */
+function skipRegex(source: string, start: number): number {
+  let i = start + 1;
+  let inClass = false;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === '\\') {
+      i += 2;
+      continue;
+    }
+    if (ch === '\n') return start;
+    if (ch === '[') inClass = true;
+    else if (ch === ']') inClass = false;
+    else if (ch === '/' && !inClass) {
+      i++;
+      while (i < source.length && /[a-z]/.test(source[i])) i++;
+      return i;
+    }
+    i++;
+  }
+  return start;
+}
+
+const REGEX_PRECEDING_KEYWORDS = new Set([
+  'return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void',
+  'case', 'do', 'else', 'yield', 'await', 'throw',
+]);
+
+/** Whether a `/` at this point starts a regex rather than a division. */
+function regexAllowed(source: string, index: number, lastSignificant: string): boolean {
+  if (lastSignificant === '') return true;
+  if (lastSignificant === ')') return false;
+  if (/[A-Za-z0-9_$\])]/.test(lastSignificant)) {
+    // Could be `x / y`, or `return /re/`. Look at the preceding word.
+    let end = index;
+    while (end > 0 && /\s/.test(source[end - 1])) end--;
+    let wordEnd = end;
+    while (wordEnd > 0 && /[A-Za-z_$]/.test(source[wordEnd - 1])) wordEnd--;
+    const word = source.slice(wordEnd, end);
+    return word !== '' && REGEX_PRECEDING_KEYWORDS.has(word);
+  }
+  return true;
+}
+
+/**
+ * Blanks out everything that is not executable code — comments, string and
+ * template literals, regex literals — replacing each character with a space.
+ *
+ * Length and line breaks are preserved, so indices and line numbers computed on
+ * the masked copy still point at the same place in the original. Without this,
+ * a commented-out `t('key')` or the text of a string counts as a call site.
+ *
+ * Template literals are handled with a stack: their literal text is blanked,
+ * but the code inside `${…}` stays visible, because that is where real call
+ * sites live.
+ */
+function maskNonCode(source: string): string {
+  const out = source.split('');
+  const blank = (from: number, to: number): void => {
+    for (let i = from; i < to && i < out.length; i++) {
+      if (out[i] !== '\n') out[i] = ' ';
+    }
+  };
+
+  /** `'template'` inside template text, a number inside a `${…}` expression. */
+  const stack: ('template' | number)[] = [];
+
+  let i = 0;
+  let lastSignificant = '';
+  while (i < source.length) {
+    const ch = source[i];
+    const top = stack[stack.length - 1];
+
+    if (top === 'template') {
+      if (ch === '\\') {
+        out[i] = ' ';
+        out[i + 1] = ' ';
+        i += 2;
+        continue;
+      }
+      if (ch === '`') {
+        out[i] = ' ';
+        stack.pop();
+        lastSignificant = ')';
+        i++;
+        continue;
+      }
+      if (ch === '$' && source[i + 1] === '{') {
+        out[i] = ' ';
+        out[i + 1] = ' ';
+        stack.push(1);
+        i += 2;
+        continue;
+      }
+      if (ch !== '\n') out[i] = ' ';
+      i++;
+      continue;
+    }
+
+    if (typeof top === 'number') {
+      if (ch === '{') {
+        stack[stack.length - 1] = top + 1;
+        lastSignificant = ch;
+        i++;
+        continue;
+      }
+      if (ch === '}') {
+        if (top === 1) {
+          stack.pop();
+          out[i] = ' ';
+          i++;
+          continue;
+        }
+        stack[stack.length - 1] = top - 1;
+        lastSignificant = ch;
+        i++;
+        continue;
+      }
+    }
+
+    if (ch === '/' && source[i + 1] === '/') {
+      const end = source.indexOf('\n', i);
+      blank(i, end === -1 ? source.length : end);
+      i = end === -1 ? source.length : end;
+      continue;
+    }
+    if (ch === '/' && source[i + 1] === '*') {
+      const close = source.indexOf('*/', i + 2);
+      const end = close === -1 ? source.length : close + 2;
+      blank(i, end);
+      i = end;
+      continue;
+    }
+    if (ch === '`') {
+      out[i] = ' ';
+      stack.push('template');
+      i++;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      const end = skipLiteral(source, i);
+      blank(i, end);
+      i = end;
+      lastSignificant = ')';
+      continue;
+    }
+    if (ch === '/' && regexAllowed(source, i, lastSignificant)) {
+      const end = skipRegex(source, i);
+      if (end > i) {
+        blank(i, end);
+        i = end;
+        lastSignificant = ')';
+        continue;
+      }
+    }
+
+    if (!/\s/.test(ch)) lastSignificant = ch;
+    i++;
+  }
+  return out.join('');
+}
+
+/**
+ * Resolves line numbers for a strictly increasing sequence of indices.
+ *
+ * Counting from the start for every call site made analysis quadratic — 20 000
+ * call sites took ~8 s. Walking forward once keeps it linear.
+ */
+function createLineCounter(masked: string): (index: number) => number {
+  let scanned = 0;
+  let line = 1;
+  return (index: number) => {
+    for (let i = scanned; i < index; i++) {
+      if (masked[i] === '\n') line++;
+    }
+    scanned = Math.max(scanned, index);
+    return line;
+  };
+}
+
 /** Finds translator bindings and the call sites that use them. */
 export function collectCallSites(file: SourceFile): {
   bindings: Map<string, string | undefined>;
-  sites: (CallSite & { namespace?: string; ignored: boolean })[];
+  sites: (CallSite & { namespace?: string; namespaceKnown: boolean; ignored: boolean })[];
 } {
   const { content } = file;
+  // Patterns run on the masked copy so comments, strings and regex literals
+  // cannot pose as call sites; arguments are read from the original text.
+  const masked = maskNonCode(content);
+  const lineAt = createLineCounter(masked);
   const bindings = new Map<string, string | undefined>();
-  const sites: (CallSite & { namespace?: string; ignored: boolean })[] = [];
+  const sites: (CallSite & {
+    namespace?: string;
+    namespaceKnown: boolean;
+    ignored: boolean;
+  })[] = [];
   const suppressed = ignoredLines(content);
 
   // 1. Bindings: `const t = useTranslations('ns')`, optionally awaited, and the
@@ -152,48 +364,40 @@ export function collectCallSites(file: SourceFile): {
     `(?:const|let|var)\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*(?:await\\s+)?(${FACTORIES.join('|')})\\s*\\(`,
     'g'
   );
-  for (let match = factoryPattern.exec(content); match; match = factoryPattern.exec(content)) {
+  for (let match = factoryPattern.exec(masked); match; match = factoryPattern.exec(masked)) {
     const openParen = match.index + match[0].length - 1;
     bindings.set(match[1], namespaceOf(readFirstArgument(content, openParen)));
   }
 
-  // 2. Direct factory calls: `(await getTranslations('ns'))('key')` and
-  //    `getTranslations('ns')` used inline. The namespace still applies.
-  const inlinePattern = new RegExp(`(${FACTORIES.join('|')})\\s*\\(`, 'g');
-  const inlineNamespaces: { index: number; namespace?: string }[] = [];
-  for (let match = inlinePattern.exec(content); match; match = inlinePattern.exec(content)) {
-    const openParen = match.index + match[0].length - 1;
-    inlineNamespaces.push({
-      index: match.index,
-      namespace: namespaceOf(readFirstArgument(content, openParen)),
-    });
-  }
-
-  // 3. Call sites: `t('key')`, `t.rich('key')`, … for every known binding, plus
-  //    the conventional bare names used by the server API and by tests.
-  const names = new Set([...bindings.keys(), 't', 'translate']);
+  // 2. Call sites. Only a name bound to a translator factory in this file is
+  //    known to be a translator; the conventional bare names are still scanned,
+  //    but a call we cannot attribute to a binding carries no namespace
+  //    knowledge, so it can never be reported as a missing key.
+  const bareNames = ['t', 'translate'];
+  const names = new Set([...bindings.keys(), ...bareNames]);
   const methodAlternatives = CALL_METHODS.join('|');
   const callPattern = new RegExp(
     `\\b(${[...names].map((name) => name.replace(/\$/g, '\\$')).join('|')})\\s*(?:\\.\\s*(${methodAlternatives}))?\\s*\\(`,
     'g'
   );
 
-  for (let match = callPattern.exec(content); match; match = callPattern.exec(content)) {
+  for (let match = callPattern.exec(masked); match; match = callPattern.exec(masked)) {
     const name = match[1];
-    // Skip the factory declarations themselves.
     if ((FACTORIES as string[]).includes(name)) continue;
     const openParen = match.index + match[0].length - 1;
     const argument = readFirstArgument(content, openParen);
     if (argument === undefined) continue;
-    const namespace = bindings.has(name)
-      ? bindings.get(name)
-      : inlineNamespaces.find((entry) => entry.index < match.index)?.namespace;
-    const line = lineOf(content, match.index);
+    const namespaceKnown = bindings.has(name);
+    // An unattributed call with a non-string argument (`const t = 5; t(3)`) is
+    // not evidence of a translator at all — skip it instead of reporting noise.
+    if (!namespaceKnown && staticString(argument) === undefined) continue;
+    const line = lineAt(match.index);
     sites.push({
       method: match[2] as CallMethod | undefined,
       argument,
       line,
-      namespace,
+      namespace: namespaceKnown ? bindings.get(name) : undefined,
+      namespaceKnown,
       ignored: suppressed.has(line),
     });
   }
@@ -224,6 +428,18 @@ function indexCatalog(source: MessageSource): CatalogIndex {
   }
 
   return { keys, withAttributes };
+}
+
+/**
+ * Matches a bare key against every namespace: `total` finds `checkout-total`
+ * and `checkout.total`. Used only when the namespace is unknown.
+ */
+function findInAnyNamespace(keys: Set<string>, key: string): string | undefined {
+  if (keys.has(key)) return key;
+  for (const candidate of keys) {
+    if (candidate.endsWith(`.${key}`) || candidate.endsWith(`-${key}`)) return candidate;
+  }
+  return undefined;
 }
 
 function isIgnored(key: string, ignore: readonly string[]): boolean {
@@ -276,8 +492,14 @@ export function analyzeUsage(
         continue;
       }
 
-      const candidates = buildKeyCandidates(site.namespace, key);
-      const resolved = candidates.find((candidate) => index.keys.has(candidate));
+      // A call we cannot attribute to a binding in this file (a translator
+      // passed via props, for instance) carries no namespace knowledge. Such a
+      // call is matched against every namespace, and if nothing matches it is
+      // reported as unverifiable rather than as a missing key — failing a build
+      // over a call site we cannot attribute would be a false positive.
+      const resolved = site.namespaceKnown
+        ? buildKeyCandidates(site.namespace, key).find((candidate) => index.keys.has(candidate))
+        : findInAnyNamespace(index.keys, key);
       if (resolved) {
         usedKeys.add(resolved);
         // `t.attrs(key)` reads every attribute at once, so all of them count as
@@ -299,12 +521,27 @@ export function analyzeUsage(
         continue;
       }
 
-      // Unknown key. In TypeScript this is already a compile error; it is
-      // reported here so JS projects and CI summaries see it too.
       if (site.ignored) continue;
+
+      if (!site.namespaceKnown) {
+        dynamicSites++;
+        issues.push({
+          kind: 'dynamic',
+          file: file.path,
+          line: site.line,
+          message:
+            `"${key}" is used through a translator this file does not create, ` +
+            'so its namespace cannot be verified.',
+        });
+        continue;
+      }
+
+      // Unknown key under a known namespace. In TypeScript this is already a
+      // compile error; it is reported here so JS projects and CI summaries see
+      // it too.
       issues.push({
         kind: 'missing',
-        key: candidates[0],
+        key: buildKeyCandidates(site.namespace, key)[0],
         file: file.path,
         line: site.line,
         message: `"${key}" is used in ${file.path} but is missing from ${referenceLocale || 'the catalog'}.`,

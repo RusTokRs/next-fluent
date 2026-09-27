@@ -150,3 +150,26 @@ test('usage analysis works with a single locale', (t) => {
   assert.equal(status, 0, `expected success, got:\n${stdout}`);
   assert.match(stdout, /Usage against en/);
 });
+
+test('a flag without a value says so instead of blaming the flag', (t) => {
+  const p = project("const t = useTranslations();\n");
+  t.after(p.cleanup);
+  for (const flag of ['--input', '--reference', '--src', '--ignore-unused']) {
+    const { status, stdout } = p.run(['check', flag]);
+    assert.equal(status, 1, `${flag} should fail`);
+    assert.match(stdout, new RegExp(`"${flag}" requires a value`), `${flag}: ${stdout.split('\n')[0]}`);
+    assert.ok(!stdout.includes('Unknown option'), `${flag} was reported as unknown`);
+  }
+});
+
+test('a catalog too deeply nested for the parser reports the cause', (t) => {
+  const p = project("const t = useTranslations();\n");
+  t.after(p.cleanup);
+  const braces = '{'.repeat(4000) + '}'.repeat(4000);
+  fs.writeFileSync(path.join(p.dir, 'messages/en.ftl'), `a = ${braces}\n`);
+  const { status, stdout } = p.run(['check', '--input', 'messages']);
+  assert.equal(status, 1);
+  assert.match(stdout, /nested too deeply for the FTL parser/);
+  assert.ok(!stdout.includes('Maximum call stack size exceeded'), 'raw stack overflow leaked');
+  assert.ok(!stdout.includes('at '), 'a stack trace leaked into the report');
+});
