@@ -37,9 +37,11 @@ npm install next-fluent
 | Node.js | 22+ |
 | TypeScript | 5.1+ (required by Next.js 16) |
 
-Both Next.js majors are verified in CI by the same fixture (`npm run test:next`
-on 15, `npm run test:next:16` on 16), including the `middleware.ts` → `proxy.ts`
-rename and Turbopack being the default bundler for `next build`.
+Both Next.js majors are verified in CI on every push: `.github/workflows/ci.yml`
+runs an 8-cell matrix (Node 22 and 24 × Next 15 and 16 × Ubuntu and Windows) over
+the same integration fixture, which covers the `middleware.ts` → `proxy.ts` rename
+and Turbopack being the default bundler for `next build`. Locally, `npm run check`
+runs the fixture against both majors in one go (`test:next` then `test:next:16`).
 
 The floor is the **oldest version that still receives updates**, not the newest
 one available: Node.js 20 reached end of life on 2026-04-30, so 22 is the oldest
