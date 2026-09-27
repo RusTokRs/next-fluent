@@ -28,6 +28,26 @@ The high-performance Project Fluent alternative to `next-intl`.
 npm install next-fluent
 ```
 
+### Supported versions
+
+| | |
+| --- | --- |
+| Next.js | 15.3 – 16.x (App Router) |
+| React | 19+ |
+| Node.js | 22+ |
+| TypeScript | 5.1+ (required by Next.js 16) |
+
+Both Next.js majors are verified in CI by the same fixture (`npm run test:next`
+on 15, `npm run test:next:16` on 16), including the `middleware.ts` → `proxy.ts`
+rename and Turbopack being the default bundler for `next build`.
+
+The floor is the **oldest version that still receives updates**, not the newest
+one available: Node.js 20 reached end of life on 2026-04-30, so 22 is the oldest
+supported LTS, and Next.js 15.3 is where the top-level `turbopack` config landed
+(15.0–15.2 needed the old `experimental.turbo` spelling, so that branch is gone
+rather than carried). Next.js 15.5.x still receives backports, which is why 15 is
+not dropped.
+
 ---
 
 ## Quick Start

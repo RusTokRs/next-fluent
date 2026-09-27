@@ -121,16 +121,17 @@
     "size": "node ./scripts/size-budget.mjs",
     "test:edge": "node ./scripts/check-edge-runtime.mjs",
     "ci": "npm run build && npm run check-dist && npm run lint && npm run typecheck && npm run test:edge && npm test && npm run test:consumer && npm run size",
-    "check": "npm run ci && npm run test:types && npm run test:next",
+    "check": "npm run ci && npm run test:types && npm run test:next && npm run test:next:16",
     "verify": "npm run build && npm run lint && npm run typecheck && npm run test:types && npm test",
-    "test:consumer": "node ./scripts/test-consumer.mjs"
+    "test:consumer": "node ./scripts/test-consumer.mjs",
+    "test:next:16": "npm run build && NEXT_FLUENT_NEXT_VERSION=16 node ./scripts/test-next-integration.mjs"
   },
   "dependencies": {
     "@fluent/bundle": "0.19.1",
     "@fluent/syntax": "^0.19.0"
   },
   "peerDependencies": {
-    "next": ">=15.0.0 <17.0.0",
+    "next": ">=15.3.0 <17.0.0",
     "react": ">=19.0.0"
   },
   "devDependencies": {

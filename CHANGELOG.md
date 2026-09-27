@@ -77,8 +77,30 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `LRUCache` rejects non-positive and non-integer sizes instead of silently
   behaving like a one-entry cache.
 
+### Changed
+
+- **`peerDependencies.next` is now `>=15.3.0 <17.0.0`** (was `>=15.0.0`). Next
+  15.3 is where the top-level `turbopack` option landed; 15.0–15.2 needed the old
+  `experimental.turbo` spelling. That made `needsLegacyTurboConfig()` — which
+  shelled out to read Next's `package.json` and parse its version on every config
+  evaluation — the only version-conditional code left in the library, and it is
+  now deleted instead of carried.
+- **Node.js 22 stays the floor, deliberately.** No API newer than ES2022 is used
+  anywhere in `src/` or `bin/`, and Node.js 20 reached end of life on 2026-04-30,
+  so 22 is already the oldest supported LTS. Raising to 24 would exclude apps on
+  a runtime supported until 2027-04-30 while unlocking nothing.
+
 ### Added
 
+- **`npm run test:next:16`**, wired into `npm run check`. Next.js 16 was
+  previously untested: the repository installs Next 15, so the harness branch that
+  renames `middleware.ts` to `proxy.ts` never ran and Turbopack — the default
+  bundler for `next build` since 16 — was never exercised. The same fixture now
+  runs against both majors (`NEXT_FLUENT_NEXT_VERSION` installs the other one
+  into the throwaway app). Verified on Next 16.3.6: build under Turbopack with
+  the plugin's `webpack` hook present, `proxy.ts` registered as "ƒ Proxy
+  (Middleware)", static rendering for `/en`, `/ru`, `/en/about`, `/ru/about`, and
+  the runtime redirect/hreflang/cookie checks.
 - **`next-fluent/plugin` now works from a CommonJS `next.config.js`.** Until now
   the package was ESM-only, so the config format most Next.js apps actually use
   could not load it. On Node < 22.12 `require('next-fluent/plugin')` threw

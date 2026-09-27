@@ -1,20 +1,5 @@
 import path from 'node:path';
-import { readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { watchCatalogs, writeTypeDeclarations } from './catalog-io';
-
-const require = createRequire(import.meta.url);
-
-function needsLegacyTurboConfig(): boolean {
-  try {
-    const packagePath = require.resolve('next/package.json');
-    const version = JSON.parse(readFileSync(packagePath, 'utf8')).version as string;
-    const [major, minor] = version.split('.').map(Number);
-    return major < 15 || (major === 15 && minor < 3);
-  } catch {
-    return false;
-  }
-}
 
 /** Automatic `next-fluent typegen` wiring for `next dev` / `next build`. */
 export interface TypegenPluginOptions {
@@ -86,7 +71,6 @@ export function createNextFluentPlugin(
     const resolvedPath = path.resolve(process.cwd(), i18nRequestPath);
     const relativePath = path.relative(process.cwd(), resolvedPath).split(path.sep).join('/');
     const turbopackPath = relativePath.startsWith('.') ? relativePath : `./${relativePath}`;
-    const legacyTurbo = needsLegacyTurboConfig();
 
     return {
       ...nextConfig,
@@ -100,18 +84,9 @@ export function createNextFluentPlugin(
         }
         return config;
       },
-      ...(legacyTurbo ? {
-        experimental: {
-          ...nextConfig.experimental,
-          turbo: {
-            ...nextConfig.experimental?.turbo,
-            resolveAlias: {
-              ...nextConfig.experimental?.turbo?.resolveAlias,
-              'next-fluent/config': turbopackPath,
-            },
-          },
-        },
-      } : {}),
+      // Top-level `turbopack` is the supported location since Next 15.3; the
+      // old `experimental.turbo` spelling is an alias Next keeps for 13.0-15.2,
+      // which the peer range no longer covers.
       turbopack: {
         ...nextConfig.turbopack,
         resolveAlias: {

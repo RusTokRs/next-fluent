@@ -33,21 +33,7 @@ __export(plugin_exports, {
 });
 module.exports = __toCommonJS(plugin_exports);
 var import_node_path = __toESM(require("node:path"), 1);
-var import_node_fs = require("node:fs");
-var import_node_module = require("node:module");
 var import_catalog_io = require("./catalog-io.cjs");
-const import_meta = { url: require('node:url').pathToFileURL(__filename).href };
-const require2 = (0, import_node_module.createRequire)(import_meta.url);
-function needsLegacyTurboConfig() {
-  try {
-    const packagePath = require2.resolve("next/package.json");
-    const version = JSON.parse((0, import_node_fs.readFileSync)(packagePath, "utf8")).version;
-    const [major, minor] = version.split(".").map(Number);
-    return major < 15 || major === 15 && minor < 3;
-  } catch {
-    return false;
-  }
-}
 function createNextFluentPlugin(i18nRequestPath = "./src/i18n/request.ts", options = {}) {
   return function withNextFluent(nextConfig = {}) {
     if (options.typegen) {
@@ -75,7 +61,6 @@ function createNextFluentPlugin(i18nRequestPath = "./src/i18n/request.ts", optio
     const resolvedPath = import_node_path.default.resolve(process.cwd(), i18nRequestPath);
     const relativePath = import_node_path.default.relative(process.cwd(), resolvedPath).split(import_node_path.default.sep).join("/");
     const turbopackPath = relativePath.startsWith(".") ? relativePath : `./${relativePath}`;
-    const legacyTurbo = needsLegacyTurboConfig();
     return {
       ...nextConfig,
       webpack(config, context) {
@@ -87,18 +72,9 @@ function createNextFluentPlugin(i18nRequestPath = "./src/i18n/request.ts", optio
         }
         return config;
       },
-      ...legacyTurbo ? {
-        experimental: {
-          ...nextConfig.experimental,
-          turbo: {
-            ...nextConfig.experimental?.turbo,
-            resolveAlias: {
-              ...nextConfig.experimental?.turbo?.resolveAlias,
-              "next-fluent/config": turbopackPath
-            }
-          }
-        }
-      } : {},
+      // Top-level `turbopack` is the supported location since Next 15.3; the
+      // old `experimental.turbo` spelling is an alias Next keeps for 13.0-15.2,
+      // which the peer range no longer covers.
       turbopack: {
         ...nextConfig.turbopack,
         resolveAlias: {

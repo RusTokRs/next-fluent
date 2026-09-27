@@ -164,17 +164,50 @@ async function checkRuntime(nextCli) {
   }
 }
 
+// `NEXT_FLUENT_NEXT_VERSION` installs a different Next major into the throwaway
+// app, so the very same fixture can be exercised against Next 16 without the
+// repository giving up its own Next 15 install. That matters because the two
+// majors differ in ways this fixture touches: `middleware.ts` becomes
+// `proxy.ts`, and Turbopack is the default bundler for `next build`.
+const nextOverride = process.env.NEXT_FLUENT_NEXT_VERSION;
+
+/** Absolute path of the `next` package the target app will build with. */
+function nextRoot() {
+  return nextOverride
+    ? join(target, 'node_modules', 'next')
+    : join(root, 'node_modules', 'next');
+}
+
 try {
   await cp(fixture, target, { recursive: true });
-  const nextPackage = JSON.parse(readFileSync(join(root, 'node_modules', 'next', 'package.json'), 'utf8'));
-  if (Number.parseInt(nextPackage.version, 10) >= 16) {
-    await rename(join(target, 'middleware.ts'), join(target, 'proxy.ts'));
-  }
   await mkdir(join(target, 'node_modules'), { recursive: true });
+
+  if (nextOverride) {
+    const install = spawnSync(
+      process.env.npm_execpath ? process.execPath : 'npm',
+      process.env.npm_execpath
+        ? [process.env.npm_execpath, 'install', '--no-save', '--no-audit', '--no-fund',
+           `next@${nextOverride}`, 'react@19', 'react-dom@19']
+        : ['install', '--no-save', '--no-audit', '--no-fund',
+           `next@${nextOverride}`, 'react@19', 'react-dom@19'],
+      { cwd: target, stdio: 'inherit', env: { ...process.env, NEXT_TELEMETRY_DISABLED: '1' } }
+    );
+    if (install.status !== 0) throw new Error(`Installing next@${nextOverride} failed.`);
+  }
+
+  // Linked after any install: npm prunes packages it does not know about, which
+  // would silently drop this symlink.
   await symlink(root, join(target, 'node_modules', 'next-fluent'),
     process.platform === 'win32' ? 'junction' : 'dir');
   linked = true;
-  const nextCli = join(root, 'node_modules', 'next', 'dist', 'bin', 'next');
+
+  const nextPackage = JSON.parse(readFileSync(join(nextRoot(), 'package.json'), 'utf8'));
+  console.log(`[next-fluent] Integration fixture against Next ${nextPackage.version}.`);
+  if (Number.parseInt(nextPackage.version, 10) >= 16) {
+    // Next 16 renamed the network-boundary file and runs it on Node, not edge.
+    await rename(join(target, 'middleware.ts'), join(target, 'proxy.ts'));
+  }
+  const nextCli = join(nextRoot(), 'dist', 'bin', 'next');
   const result = spawnSync(process.execPath, [nextCli, 'build'], {
     cwd: target,
     stdio: 'inherit',
@@ -189,7 +222,7 @@ try {
   const resolvedTarget = existsSync(target) ? realpathSync(target) : target;
   const isInsideRepo = resolvedTarget.toLowerCase().startsWith((resolvedRoot + sep).toLowerCase());
   if (isInsideRepo) {
-    if (linked) await unlink(join(resolvedTarget, 'node_modules', 'next-fluent'));
+    if (linked) await unlink(join(resolvedTarget, 'node_modules', 'next-fluent')).catch(() => {});
     await rm(resolvedTarget, { recursive: true, force: true });
   } else {
     console.error(`[next-fluent] Refusing to clean up an unexpected path: ${resolvedTarget}`);
