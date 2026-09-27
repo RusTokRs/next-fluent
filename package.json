@@ -40,7 +40,14 @@
       "default": "./dist/routing.js"
     },
     "./plugin": {
-      "types": "./dist/plugin.d.ts",
+      "import": {
+        "types": "./dist/plugin.d.ts",
+        "default": "./dist/plugin.js"
+      },
+      "require": {
+        "types": "./plugin.d.cts",
+        "default": "./dist/cjs/plugin.cjs"
+      },
       "default": "./dist/plugin.js"
     },
     "./factory": {
@@ -95,6 +102,7 @@
   "files": [
     "dist",
     "bin",
+    "plugin.d.cts",
     "src",
     "README.md",
     "LICENSE"
@@ -112,9 +120,10 @@
     "check-dist": "npm run build && git diff --ignore-space-at-eol --exit-code dist/",
     "size": "node ./scripts/size-budget.mjs",
     "test:edge": "node ./scripts/check-edge-runtime.mjs",
-    "ci": "npm run build && npm run check-dist && npm run lint && npm run typecheck && npm run test:edge && npm test && npm run size",
+    "ci": "npm run build && npm run check-dist && npm run lint && npm run typecheck && npm run test:edge && npm test && npm run test:consumer && npm run size",
     "check": "npm run ci && npm run test:types && npm run test:next",
-    "verify": "npm run build && npm run lint && npm run typecheck && npm run test:types && npm test"
+    "verify": "npm run build && npm run lint && npm run typecheck && npm run test:types && npm test",
+    "test:consumer": "node ./scripts/test-consumer.mjs"
   },
   "dependencies": {
     "@fluent/bundle": "0.19.1",

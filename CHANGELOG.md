@@ -77,6 +77,30 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `LRUCache` rejects non-positive and non-integer sizes instead of silently
   behaving like a one-entry cache.
 
+### Added
+
+- **`next-fluent/plugin` now works from a CommonJS `next.config.js`.** Until now
+  the package was ESM-only, so the config format most Next.js apps actually use
+  could not load it. On Node < 22.12 `require('next-fluent/plugin')` threw
+  `ERR_REQUIRE_ESM`; on newer Node it returned the module *namespace*, so the
+  natural `const createNextFluentPlugin = require('next-fluent/plugin')` failed
+  with "is not a function". The plugin now ships a real CJS build (the way
+  next-intl does for its own `./plugin`) whose `module.exports` is the factory,
+  with `.default` and the named export kept for interop, plus a `plugin.d.cts`
+  using `export =` so `import x = require('next-fluent/plugin')` typechecks.
+  Only the plugin's six-module dependency closure is duplicated; the app entries
+  stay ESM-only.
+- **`npm run test:consumer`** — a consumer contract test, wired into `npm run ci`.
+  Everything else in the suite runs against the repository, so nothing proved a
+  real project could install and use the package. It builds a throwaway consumer
+  and checks that every documented entry point resolves and exports what the
+  README claims, that every bare import in `dist/` is a declared dependency
+  (`next-fluent/config` excepted — the plugin aliases that virtual module), that
+  both `next.config.js` and `next.config.mjs` produce a working config whose
+  alias points inside the consumer, and that `.mts` and `.cts` consumers
+  typecheck under `module: nodenext`. A negative control asserts the typecheck
+  harness can still fail.
+
 ### Fixed
 
 - **Locale resolution no longer re-canonicalizes the configured locales on

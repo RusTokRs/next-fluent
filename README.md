@@ -47,6 +47,21 @@ const nextConfig = {};
 export default withNextFluent(nextConfig);
 ```
 
+A CommonJS `next.config.js` — still the default in most apps — works too. The
+plugin ships a real CJS build whose `module.exports` *is* the factory, so there
+is no `.default` to remember:
+
+```javascript
+const createNextFluentPlugin = require('next-fluent/plugin');
+
+const withNextFluent = createNextFluentPlugin('./src/i18n/request.ts');
+
+/** @type {import('next').NextConfig} */
+const nextConfig = {};
+
+module.exports = withNextFluent(nextConfig);
+```
+
 ### 2. Routing Configuration (`src/i18n/routing.ts`)
 
 Define your locales, prefixes, and optional localized URL slugs:
