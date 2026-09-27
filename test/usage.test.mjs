@@ -236,3 +236,58 @@ test('scanning stays linear in the number of call sites', () => {
   assert.deepEqual(report.usedKeys, ['hello']);
   assert.ok(ms < 3000, `analysis took ${ms}ms for 20000 call sites`);
 });
+
+test('two bindings of the same variable resolve against their own namespace', () => {
+  // One file, two components, two namespaces. Resolving the name to whichever
+  // binding came last made the first call a false `missing` key, failing CI
+  // on code that is actually correct.
+  const catalog = 'nav-home = Home\ncheckout-total = Total\n';
+  const report = analyzeUsage(
+    { en: catalog },
+    [
+      file(
+        'app/x.tsx',
+        [
+          'function A() {',
+          "  const t = useTranslations('checkout');",
+          "  return t('total');",
+          '}',
+          'function B() {',
+          "  const t = useTranslations('nav');",
+          "  return t('home');",
+          '}',
+          '',
+        ].join('\n')
+      ),
+    ],
+    { referenceLocale: 'en' }
+  );
+
+  assert.deepEqual(report.usedKeys, ['checkout-total', 'nav-home']);
+  assert.deepEqual(report.issues.filter((issue) => issue.kind === 'missing'), []);
+});
+
+test('a call preceding every binding is never reported as missing', () => {
+  // The namespace is genuinely unknown at that point, so the key must be
+  // reported as `dynamic` (advisory) and never as `missing` (a CI failure).
+  const catalog = 'nav-home = Home\n';
+  const report = analyzeUsage(
+    { en: catalog },
+    [
+      file(
+        'app/y.tsx',
+        [
+          "function helper() { return t('home'); }",
+          '',
+          'function A() { const t = useTranslations("nav"); }',
+          'function B() { const t = useTranslations("checkout"); }',
+          '',
+        ].join('\n')
+      ),
+    ],
+    { referenceLocale: 'en' }
+  );
+
+  assert.deepEqual(report.issues.filter((issue) => issue.kind === 'missing'), []);
+  assert.equal(report.issues.filter((issue) => issue.kind === 'dynamic').length, 1);
+});

@@ -343,7 +343,12 @@ function createLineCounter(masked: string): (index: number) => number {
 /** Finds translator bindings and the call sites that use them. */
 export function collectCallSites(file: SourceFile): {
   bindings: Map<string, string | undefined>;
-  sites: (CallSite & { namespace?: string; namespaceKnown: boolean; ignored: boolean })[];
+  sites: (CallSite & {
+    namespace?: string;
+    namespaceKnown: boolean;
+    ambiguous: boolean;
+    ignored: boolean;
+  })[];
 } {
   const { content } = file;
   // Patterns run on the masked copy so comments, strings and regex literals
@@ -354,6 +359,7 @@ export function collectCallSites(file: SourceFile): {
   const sites: (CallSite & {
     namespace?: string;
     namespaceKnown: boolean;
+    ambiguous: boolean;
     ignored: boolean;
   })[] = [];
   const suppressed = ignoredLines(content);
@@ -364,10 +370,45 @@ export function collectCallSites(file: SourceFile): {
     `(?:const|let|var)\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*(?:await\\s+)?(${FACTORIES.join('|')})\\s*\\(`,
     'g'
   );
+  /**
+   * Every `const t = useTranslations(…)` in the file, in source order.
+   *
+   * One file routinely holds several components, each with its own `t` bound to
+   * a different namespace. Keeping only the last binding made an earlier call
+   * resolve against the wrong namespace and report a key as missing.
+   */
+  const bindingList: { index: number; name: string; namespace: string | undefined }[] = [];
   for (let match = factoryPattern.exec(masked); match; match = factoryPattern.exec(masked)) {
     const openParen = match.index + match[0].length - 1;
-    bindings.set(match[1], namespaceOf(readFirstArgument(content, openParen)));
+    const name = match[1];
+    const namespace = namespaceOf(readFirstArgument(content, openParen));
+    bindingList.push({ index: match.index, name, namespace });
+    bindings.set(name, namespace);
   }
+
+  /**
+   * Resolves the namespace in effect at `index`: the nearest preceding binding
+   * for that name, or the file's only binding when the call appears before it.
+   * Returns `undefined` for the namespace and `false` for `known` when the name
+   * is bound to several different namespaces and position cannot decide.
+   */
+  const namespaceAt = (
+    name: string,
+    index: number
+  ): { namespace?: string; known: boolean; ambiguous: boolean } => {
+    const own = bindingList.filter((entry) => entry.name === name);
+    if (own.length === 0) return { namespace: undefined, known: false, ambiguous: false };
+    const preceding = own.filter((entry) => entry.index < index);
+    if (preceding.length > 0) {
+      return { namespace: preceding[preceding.length - 1].namespace, known: true, ambiguous: false };
+    }
+    const distinct = new Set(own.map((entry) => entry.namespace ?? ''));
+    if (distinct.size === 1) return { namespace: own[0].namespace, known: true, ambiguous: false };
+    // Bound to several namespaces and the call precedes all of them: guessing
+    // would produce a false missing-key failure, and matching against every
+    // namespace would silently hide a genuine typo. Report it as unresolvable.
+    return { namespace: undefined, known: false, ambiguous: true };
+  };
 
   // 2. Call sites. Only a name bound to a translator factory in this file is
   //    known to be a translator; the conventional bare names are still scanned,
@@ -387,17 +428,18 @@ export function collectCallSites(file: SourceFile): {
     const openParen = match.index + match[0].length - 1;
     const argument = readFirstArgument(content, openParen);
     if (argument === undefined) continue;
-    const namespaceKnown = bindings.has(name);
+    const { namespace, known, ambiguous } = namespaceAt(name, match.index);
     // An unattributed call with a non-string argument (`const t = 5; t(3)`) is
     // not evidence of a translator at all — skip it instead of reporting noise.
-    if (!namespaceKnown && staticString(argument) === undefined) continue;
+    if (!known && staticString(argument) === undefined) continue;
     const line = lineAt(match.index);
     sites.push({
       method: match[2] as CallMethod | undefined,
       argument,
       line,
-      namespace: namespaceKnown ? bindings.get(name) : undefined,
-      namespaceKnown,
+      namespace,
+      namespaceKnown: known,
+      ambiguous,
       ignored: suppressed.has(line),
     });
   }
@@ -497,6 +539,21 @@ export function analyzeUsage(
       // call is matched against every namespace, and if nothing matches it is
       // reported as unverifiable rather than as a missing key — failing a build
       // over a call site we cannot attribute would be a false positive.
+      // The name is bound in this file, but to several namespaces and only
+      // after this call site. Neither the namespace nor a global lookup can
+      // answer here, so the call is unverifiable rather than wrong.
+      if (site.ambiguous && !site.ignored) {
+        dynamicSites++;
+        issues.push({
+          kind: 'dynamic',
+          key,
+          file: file.path,
+          line: site.line,
+          message: `Several namespaces bind this translator in the file and the call precedes all of them, so the namespace cannot be determined statically.`,
+        });
+        continue;
+      }
+
       const resolved = site.namespaceKnown
         ? buildKeyCandidates(site.namespace, key).find((candidate) => index.keys.has(candidate))
         : findInAnyNamespace(index.keys, key);

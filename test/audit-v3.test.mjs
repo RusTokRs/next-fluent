@@ -173,13 +173,38 @@ test('V3-02: the client-supplied signal header is never forwarded to the app', a
 // V3-06: slugs of another locale are normalized instead of 404-ing
 // ---------------------------------------------------------------------------
 
-test('V3-06: a slug belonging to another locale is rewritten to the internal route', async () => {
+test('V3-06: a slug belonging to another locale redirects to the canonical one', async () => {
   const mw = createI18nMiddleware(routing);
   const response = await mw(mockRequest('/ru/about-us'));
+
+  // The route still resolves, but through the slug this locale actually
+  // defines, so there is exactly one URL per page.
+  assert.equal(response.status, 307);
+  assert.equal(new URL(response.headers.get('location')).pathname, '/ru/o-nas');
+  assert.equal(response.headers.get('x-middleware-rewrite'), null);
+});
+
+test('V3-06b: the canonical slug still resolves to the internal route', async () => {
+  const mw = createI18nMiddleware(routing);
+  const response = await mw(mockRequest('/ru/o-nas'));
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('location'), null);
   assert.equal(
     new URL(response.headers.get('x-middleware-rewrite')).pathname,
     '/ru/about'
   );
+});
+
+test('V3-06c: the canonical redirect does not loop on the rewritten pathname', async () => {
+  const mw = createI18nMiddleware(routing);
+  // Next.js runs the middleware again for the internal pathname the rewrite
+  // points at. Without the signal header that pass would redirect back.
+  const response = await mw(
+    mockRequest('/ru/about', { 'x-next-fluent-rewrite': '/ru/about' })
+  );
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('location'), null);
 });
 
 // ---------------------------------------------------------------------------

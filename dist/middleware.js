@@ -5,7 +5,12 @@ import {
   normalizeLocalePrefix,
   prefixForLocale
 } from "./locale-prefix.js";
-import { rewriteLocalizedPath, validatePathnames, validateRouteEnvironment } from "./route-engine.js";
+import {
+  localizePath,
+  rewriteLocalizedPath,
+  validatePathnames,
+  validateRouteEnvironment
+} from "./route-engine.js";
 import { buildAlternateLinksHeader } from "./alternate-links.js";
 const REWRITE_SIGNAL_HEADER = "x-next-fluent-rewrite";
 function hostMatchesTrustedList(requestHost, list) {
@@ -99,6 +104,7 @@ function createI18nMiddleware(options) {
       }
       return externalPath;
     };
+    const canonicalPath = (locale, externalPath) => pathnames ? localizePath(externalPath, locale, locale, pathnames, void 0, allLocales).pathname : externalPath;
     const cookieLocale = localeDetection ? matchSupportedLocale(
       request.cookies.get(cookieConfig?.name ?? cookieName)?.value || (cookieName !== "NEXT_LOCALE" ? request.cookies.get("NEXT_LOCALE")?.value : void 0),
       locales
@@ -194,6 +200,15 @@ function createI18nMiddleware(options) {
         const remainingPath = `${pathnameWithoutPrefix === "/" ? "/" : pathnameWithoutPrefix}${search}`;
         return createRedirect(requestUrl(withBasePath(remainingPath)), matchedPrefix);
       }
+      if (!isRewriteSignal) {
+        const canonical2 = canonicalPath(preferredLocale, pathname);
+        if (canonical2 !== pathname) {
+          return createRedirect(
+            requestUrl(withBasePath(`${canonical2 === "/" ? "" : canonical2}${search}`)),
+            preferredLocale
+          );
+        }
+      }
       const route = internalPath(preferredLocale, pathname);
       const rewritePath = `${prefixForLocale(preferredLocale, prefixConfig)}${route === "/" ? "" : route}${search}`;
       return createSuccessResponse(preferredLocale, rewritePath);
@@ -203,15 +218,35 @@ function createI18nMiddleware(options) {
         if (isRewriteSignal) {
           return createSuccessResponse(matchedPrefix);
         }
-        const remainingPath = `${pathnameWithoutPrefix === "/" ? "/" : pathnameWithoutPrefix}${search}`;
+        const canonical2 = canonicalPath(defaultLocale, pathnameWithoutPrefix);
+        const remainingPath = `${canonical2 === "/" ? "/" : canonical2}${search}`;
         return createRedirect(requestUrl(withBasePath(remainingPath)), defaultLocale);
       }
       if (matchedPrefix) {
+        if (!isRewriteSignal) {
+          const canonical2 = canonicalPath(matchedPrefix, pathnameWithoutPrefix);
+          if (canonical2 !== pathnameWithoutPrefix) {
+            const prefix = prefixForLocale(matchedPrefix, prefixConfig);
+            return createRedirect(
+              requestUrl(withBasePath(`${prefix}${canonical2 === "/" ? "" : canonical2}${search}`)),
+              matchedPrefix
+            );
+          }
+        }
         const route = internalPath(matchedPrefix, pathnameWithoutPrefix);
         const rewritePath = route === pathnameWithoutPrefix ? void 0 : `${prefixForLocale(matchedPrefix, prefixConfig)}${route === "/" ? "" : route}${search}`;
         return createSuccessResponse(matchedPrefix, rewritePath);
       }
       if (preferredLocale === defaultLocale) {
+        if (!isRewriteSignal) {
+          const canonical2 = canonicalPath(defaultLocale, pathname);
+          if (canonical2 !== pathname) {
+            return createRedirect(
+              requestUrl(withBasePath(`${canonical2 === "/" ? "" : canonical2}${search}`)),
+              defaultLocale
+            );
+          }
+        }
         const route = internalPath(defaultLocale, pathname);
         const rewritePath = `${prefixForLocale(defaultLocale, prefixConfig)}${route === "/" ? "" : route}${search}`;
         return createSuccessResponse(defaultLocale, rewritePath);
@@ -220,11 +255,22 @@ function createI18nMiddleware(options) {
       return createRedirect(requestUrl(withBasePath(targetPath2)), preferredLocale);
     }
     if (matchedPrefix) {
+      if (!isRewriteSignal) {
+        const canonical2 = canonicalPath(matchedPrefix, pathnameWithoutPrefix);
+        if (canonical2 !== pathnameWithoutPrefix) {
+          const prefix = prefixForLocale(matchedPrefix, prefixConfig);
+          return createRedirect(
+            requestUrl(withBasePath(`${prefix}${canonical2 === "/" ? "" : canonical2}${search}`)),
+            matchedPrefix
+          );
+        }
+      }
       const route = internalPath(matchedPrefix, pathnameWithoutPrefix);
       const rewritePath = route === pathnameWithoutPrefix ? void 0 : `${prefixForLocale(matchedPrefix, prefixConfig)}${route === "/" ? "" : route}${search}`;
       return createSuccessResponse(matchedPrefix, rewritePath);
     }
-    const targetPath = `${prefixForLocale(preferredLocale, prefixConfig)}${pathname === "/" ? "" : pathname}${search}`;
+    const canonical = canonicalPath(preferredLocale, pathname);
+    const targetPath = `${prefixForLocale(preferredLocale, prefixConfig)}${canonical === "/" ? "" : canonical}${search}`;
     return createRedirect(requestUrl(withBasePath(targetPath)), preferredLocale);
   };
 }

@@ -71,6 +71,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Localized pathnames are now canonicalized.** With `pathnames` configured,
+  `/ru/about` and `/ru/o-nas` both served the same page, and a slug belonging to
+  another locale (`/en/o-nas`) was served under the wrong locale. Requests are
+  now redirected (307) to the slug the resolved locale actually defines, so
+  there is exactly one URL per page in every `localePrefix` mode. The redirect
+  is skipped on the middleware's own rewrite pass, so it cannot loop.
+- **Usage analysis resolved a variable to the wrong namespace when one file
+  bound it twice.** Two components in the same file using
+  `const t = useTranslations(...)` with different namespaces made the earlier
+  call resolve against the later namespace, reporting a *missing key* for code
+  that is correct. Bindings are now tracked in source order and resolved by the
+  nearest preceding one; a call preceding all of them, where the namespace
+  genuinely cannot be determined, is reported as `dynamic` (advisory) instead of
+  `missing` (a build failure).
 - **Usage analysis no longer reports phantom findings.** A commented-out or
   stringified `t('key')` counted as a real call site (hiding dead keys), and a
   translator received through props produced a *missing-key failure* for a

@@ -250,10 +250,25 @@ function collectCallSites(file) {
     `(?:const|let|var)\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*(?:await\\s+)?(${FACTORIES.join("|")})\\s*\\(`,
     "g"
   );
+  const bindingList = [];
   for (let match = factoryPattern.exec(masked); match; match = factoryPattern.exec(masked)) {
     const openParen = match.index + match[0].length - 1;
-    bindings.set(match[1], namespaceOf(readFirstArgument(content, openParen)));
+    const name = match[1];
+    const namespace = namespaceOf(readFirstArgument(content, openParen));
+    bindingList.push({ index: match.index, name, namespace });
+    bindings.set(name, namespace);
   }
+  const namespaceAt = (name, index) => {
+    const own = bindingList.filter((entry) => entry.name === name);
+    if (own.length === 0) return { namespace: void 0, known: false, ambiguous: false };
+    const preceding = own.filter((entry) => entry.index < index);
+    if (preceding.length > 0) {
+      return { namespace: preceding[preceding.length - 1].namespace, known: true, ambiguous: false };
+    }
+    const distinct = new Set(own.map((entry) => entry.namespace ?? ""));
+    if (distinct.size === 1) return { namespace: own[0].namespace, known: true, ambiguous: false };
+    return { namespace: void 0, known: false, ambiguous: true };
+  };
   const bareNames = ["t", "translate"];
   const names = /* @__PURE__ */ new Set([...bindings.keys(), ...bareNames]);
   const methodAlternatives = CALL_METHODS.join("|");
@@ -267,15 +282,16 @@ function collectCallSites(file) {
     const openParen = match.index + match[0].length - 1;
     const argument = readFirstArgument(content, openParen);
     if (argument === void 0) continue;
-    const namespaceKnown = bindings.has(name);
-    if (!namespaceKnown && staticString(argument) === void 0) continue;
+    const { namespace, known, ambiguous } = namespaceAt(name, match.index);
+    if (!known && staticString(argument) === void 0) continue;
     const line = lineAt(match.index);
     sites.push({
       method: match[2],
       argument,
       line,
-      namespace: namespaceKnown ? bindings.get(name) : void 0,
-      namespaceKnown,
+      namespace,
+      namespaceKnown: known,
+      ambiguous,
       ignored: suppressed.has(line)
     });
   }
@@ -334,6 +350,17 @@ function analyzeUsage(catalogs, sources, options = {}) {
             message: `Key is not a string literal and cannot be checked statically.`
           });
         }
+        continue;
+      }
+      if (site.ambiguous && !site.ignored) {
+        dynamicSites++;
+        issues.push({
+          kind: "dynamic",
+          key,
+          file: file.path,
+          line: site.line,
+          message: `Several namespaces bind this translator in the file and the call precedes all of them, so the namespace cannot be determined statically.`
+        });
         continue;
       }
       const resolved = site.namespaceKnown ? buildKeyCandidates(site.namespace, key).find((candidate) => index.keys.has(candidate)) : findInAnyNamespace(index.keys, key);

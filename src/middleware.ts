@@ -6,7 +6,12 @@ import {
   normalizeLocalePrefix,
   prefixForLocale,
 } from './locale-prefix';
-import { rewriteLocalizedPath, validatePathnames, validateRouteEnvironment } from './route-engine';
+import {
+  localizePath,
+  rewriteLocalizedPath,
+  validatePathnames,
+  validateRouteEnvironment,
+} from './route-engine';
 import { buildAlternateLinksHeader } from './alternate-links';
 
 /**
@@ -162,6 +167,18 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
       return externalPath;
     };
 
+    /**
+     * The public pathname a locale serves this route under.
+     *
+     * With `pathnames` configured, `/ru/about` and `/ru/o-nas` both reached the
+     * same page, leaving two URLs for one page and no canonical one. Requests
+     * are now redirected to the slug the locale actually defines.
+     */
+    const canonicalPath = (locale: string, externalPath: string): string =>
+      pathnames
+        ? localizePath(externalPath, locale, locale, pathnames, undefined, allLocales).pathname
+        : externalPath;
+
     const cookieLocale = localeDetection
       ? matchSupportedLocale(
           request.cookies.get(cookieConfig?.name ?? cookieName)?.value ||
@@ -295,6 +312,15 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
         const remainingPath = `${pathnameWithoutPrefix === '/' ? '/' : pathnameWithoutPrefix}${search}`;
         return createRedirect(requestUrl(withBasePath(remainingPath)), matchedPrefix);
       }
+      if (!isRewriteSignal) {
+        const canonical = canonicalPath(preferredLocale, pathname);
+        if (canonical !== pathname) {
+          return createRedirect(
+            requestUrl(withBasePath(`${canonical === '/' ? '' : canonical}${search}`)),
+            preferredLocale
+          );
+        }
+      }
       const route = internalPath(preferredLocale, pathname);
       const rewritePath = `${prefixForLocale(preferredLocale, prefixConfig)}${route === '/' ? '' : route}${search}`;
       return createSuccessResponse(preferredLocale, rewritePath);
@@ -308,12 +334,23 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
         if (isRewriteSignal) {
           return createSuccessResponse(matchedPrefix);
         }
-        // Strip default locale prefix
-        const remainingPath = `${pathnameWithoutPrefix === '/' ? '/' : pathnameWithoutPrefix}${search}`;
+        // Strip default locale prefix, canonicalizing the localized slug too.
+        const canonical = canonicalPath(defaultLocale, pathnameWithoutPrefix);
+        const remainingPath = `${canonical === '/' ? '/' : canonical}${search}`;
         return createRedirect(requestUrl(withBasePath(remainingPath)), defaultLocale);
       }
       if (matchedPrefix) {
         // Non-default locale with prefix
+        if (!isRewriteSignal) {
+          const canonical = canonicalPath(matchedPrefix, pathnameWithoutPrefix);
+          if (canonical !== pathnameWithoutPrefix) {
+            const prefix = prefixForLocale(matchedPrefix, prefixConfig);
+            return createRedirect(
+              requestUrl(withBasePath(`${prefix}${canonical === '/' ? '' : canonical}${search}`)),
+              matchedPrefix
+            );
+          }
+        }
         const route = internalPath(matchedPrefix, pathnameWithoutPrefix);
         const rewritePath = route === pathnameWithoutPrefix
           ? undefined
@@ -322,6 +359,15 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
       }
       // No prefix in URL:
       if (preferredLocale === defaultLocale) {
+        if (!isRewriteSignal) {
+          const canonical = canonicalPath(defaultLocale, pathname);
+          if (canonical !== pathname) {
+            return createRedirect(
+              requestUrl(withBasePath(`${canonical === '/' ? '' : canonical}${search}`)),
+              defaultLocale
+            );
+          }
+        }
         const route = internalPath(defaultLocale, pathname);
         const rewritePath = `${prefixForLocale(defaultLocale, prefixConfig)}${route === '/' ? '' : route}${search}`;
         return createSuccessResponse(defaultLocale, rewritePath);
@@ -333,6 +379,16 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
 
     // Strategy 3: 'always' (default: every path requires prefix)
     if (matchedPrefix) {
+      if (!isRewriteSignal) {
+        const canonical = canonicalPath(matchedPrefix, pathnameWithoutPrefix);
+        if (canonical !== pathnameWithoutPrefix) {
+          const prefix = prefixForLocale(matchedPrefix, prefixConfig);
+          return createRedirect(
+            requestUrl(withBasePath(`${prefix}${canonical === '/' ? '' : canonical}${search}`)),
+            matchedPrefix
+          );
+        }
+      }
       const route = internalPath(matchedPrefix, pathnameWithoutPrefix);
       const rewritePath = route === pathnameWithoutPrefix
         ? undefined
@@ -340,7 +396,8 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
       return createSuccessResponse(matchedPrefix, rewritePath);
     }
 
-    const targetPath = `${prefixForLocale(preferredLocale, prefixConfig)}${pathname === '/' ? '' : pathname}${search}`;
+    const canonical = canonicalPath(preferredLocale, pathname);
+    const targetPath = `${prefixForLocale(preferredLocale, prefixConfig)}${canonical === '/' ? '' : canonical}${search}`;
     return createRedirect(requestUrl(withBasePath(targetPath)), preferredLocale);
   };
 }
