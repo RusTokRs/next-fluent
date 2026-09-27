@@ -47,15 +47,18 @@ function checkBrowser(base) {
     if (beforeErrors.length) throw new Error(`Browser errors before navigation:\n${beforeErrors.join('\n')}`);
     run('click', link[1]);
     const after = run('snapshot');
-    if (!after.includes('Page URL:') || !after.includes('/about-us') || !after.includes('About route')) {
-      throw new Error(`Browser locale switch failed.\n${after}`);
-    }
-    if (!run('cookie-get', 'NEXT_LOCALE').includes('NEXT_LOCALE=en')) {
-      throw new Error('Browser locale switch did not update the cookie.');
-    }
     const afterErrors = run('console', 'error').split('\n').filter((line) =>
       line.startsWith('[ERROR]') && !line.includes('/favicon.ico')
     );
+    // The console text is part of every failure here: the snapshot alone shows
+    // where the browser ended up, but not why.
+    const consoleReport = `Console errors (${afterErrors.length}):\n${afterErrors.join('\n') || '(none)'}`;
+    if (!after.includes('Page URL:') || !after.includes('/about-us') || !after.includes('About route')) {
+      throw new Error(`Browser locale switch failed.\n${after}\n${consoleReport}`);
+    }
+    if (!run('cookie-get', 'NEXT_LOCALE').includes('NEXT_LOCALE=en')) {
+      throw new Error(`Browser locale switch did not update the cookie.\n${consoleReport}`);
+    }
     if (afterErrors.length) throw new Error(`Browser errors after navigation:\n${afterErrors.join('\n')}`);
     console.log('[next-fluent] Browser hydration and locale switch checks passed.');
   } finally {

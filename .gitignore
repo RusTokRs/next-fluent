@@ -12,3 +12,6 @@ deep-research-report.md
 
 # edge-runtime check scratch bundle
 .tmp-edge-*/
+
+# Scratch apps used for manual probing; never commit.
+.probe-*
