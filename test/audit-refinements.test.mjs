@@ -10,6 +10,7 @@ import {
   FormattedMessage,
   createFluentBundle,
 } from '../dist/index.js';
+import { assertSafeHref } from '../dist/navigation.js';
 
 test('resolveLocalizedPathname rejects open redirects and protocols', () => {
   const config = {
@@ -133,4 +134,47 @@ order-status = Hello, { $customer }! Order <num>#{ $orderId }</num> is <status>{
   );
 
   assert.ok(React.isValidElement(providerTree));
+});
+
+test('assertSafeHref sees the URL the way a browser does', () => {
+  // Browsers remove ASCII tab/LF/CR anywhere in a URL and strip C0 controls at
+  // the edges before resolving the scheme, so these all execute if rendered.
+  for (const href of [
+    'javascript:alert(1)',
+    'java\tscript:alert(1)',
+    'java\nscript:alert(1)',
+    'java\rscript:alert(1)',
+    'dat\ta:text/html,x',
+    'vbscript\t:x',
+    '\u0001javascript:alert(1)',
+    '\u0000javascript:alert(1)',
+    '\tjavascript:alert(1)',
+  ]) {
+    assert.throws(() => assertSafeHref(href), /Unsafe href/, `expected rejection: ${JSON.stringify(href)}`);
+  }
+
+  // Ordinary hrefs keep working.
+  for (const href of ['/about', 'about', 'https://example.com/x', 'mailto:a@b.dev', '#frag', '/a?b=1#c']) {
+    assert.doesNotThrow(() => assertSafeHref(href), `expected acceptance: ${href}`);
+  }
+});
+
+test('a rejected href cannot rewrite its own error message', () => {
+  let message = '';
+  try {
+    assertSafeHref('java\tscript:\nalert(1)');
+  } catch (error) {
+    message = error.message;
+  }
+  assert.match(message, /Unsafe href/);
+  // eslint-disable-next-line no-control-regex -- asserting their absence is the point
+  assert.equal(/[\u0000-\u001f]/.test(message), false, `control characters leaked: ${JSON.stringify(message)}`);
+});
+
+test('resolveLocalizedPathname rejects the normalized-scheme bypass', () => {
+  const config = { locales: ['en', 'ru'], defaultLocale: 'en', localePrefix: 'always' };
+  assert.throws(
+    () => resolveLocalizedPathname({ href: 'java\tscript:alert(1)' }, config),
+    /Unsafe href/
+  );
 });

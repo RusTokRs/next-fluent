@@ -17,7 +17,23 @@ const UNSAFE_HREF_SCHEME = /^(?:javascript|data|vbscript|file):/i;
 const WINDOWS_UNC_PREFIX = /^\\\\/;
 
 function hrefDiagnostic(href: string): string {
-  return href.length > 64 ? `<oversized href: ${href.length} code units>` : href;
+  if (href.length > 64) return `<oversized href: ${href.length} code units>`;
+  // Control characters would let a rejected href rewrite the log line it is
+  // reported in, so they are shown escaped.
+  // eslint-disable-next-line no-control-regex -- escaping control characters is the point
+  return href.replace(/[\u0000-\u001f\u007f]/g, (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
+
+/**
+ * What a browser sees before it resolves the scheme: ASCII tab, LF and CR are
+ * removed anywhere in a URL, and C0 controls and space are stripped at the
+ * edges. Testing the raw string lets `java\tscript:` through.
+ */
+function browserNormalizedHref(href: string): string {
+  // eslint-disable-next-line no-control-regex -- tab/LF/CR are precisely what a browser discards
+  const withoutDiscarded = href.replace(/[\u0009\u000a\u000d]/g, '');
+  // eslint-disable-next-line no-control-regex -- C0 controls and space are stripped at the URL edges
+  return withoutDiscarded.replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, '');
 }
 
 /**
@@ -26,7 +42,7 @@ function hrefDiagnostic(href: string): string {
  * Windows UNC `\\host` forms that browsers normalize to protocol-relative URLs).
  */
 export function assertSafeHref(href: string): void {
-  const trimmed = href.trim();
+  const trimmed = browserNormalizedHref(href);
   if (UNSAFE_HREF_SCHEME.test(trimmed) || WINDOWS_UNC_PREFIX.test(trimmed)) {
     throw new Error(`[next-fluent] Unsafe href rejected: "${hrefDiagnostic(href)}"`);
   }

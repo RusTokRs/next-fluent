@@ -29,8 +29,21 @@ export function collectCatalogFiles(target: string): string[] {
   const files: string[] = [];
   for (const entry of fs.readdirSync(target, { withFileTypes: true })) {
     const full = path.join(target, entry.name);
-    if (entry.isDirectory()) files.push(...collectCatalogFiles(full));
-    else if (entry.isFile() && isCatalogFile(entry.name)) files.push(full);
+    let isDir = entry.isDirectory();
+    let isFile = entry.isFile();
+    if (entry.isSymbolicLink()) {
+      // A symlink is neither isFile() nor isDirectory(), so linked catalogs
+      // were silently dropped. Follow the link to classify it — but only ever
+      // treat it as a file, so a directory symlink cannot create a cycle.
+      try {
+        isFile = fs.statSync(full).isFile();
+      } catch {
+        continue;
+      }
+      isDir = false;
+    }
+    if (isDir) files.push(...collectCatalogFiles(full));
+    else if (isFile && isCatalogFile(entry.name)) files.push(full);
   }
   return files.sort();
 }
@@ -38,7 +51,18 @@ export function collectCatalogFiles(target: string): string[] {
 /** Reads a catalog file, converting JSON catalogs into FTL source. */
 export function readCatalog(file: string): string {
   const raw = fs.readFileSync(file, 'utf8');
-  return file.toLowerCase().endsWith('.json') ? jsonToFluent(JSON.parse(raw)) : raw;
+  if (!file.toLowerCase().endsWith('.json')) return raw;
+  try {
+    return jsonToFluent(JSON.parse(raw));
+  } catch (error) {
+    // A bare "Unexpected end of JSON input" says nothing about which of the
+    // project's many locale files is broken.
+    throw new Error(
+      `[next-fluent] Cannot read the catalog ${file}: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
 }
 
 /** Groups catalogs by locale: `messages/en.ftl` or `messages/en/app.ftl` → `en`. */

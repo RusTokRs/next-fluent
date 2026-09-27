@@ -9,10 +9,15 @@ import {
 const UNSAFE_HREF_SCHEME = /^(?:javascript|data|vbscript|file):/i;
 const WINDOWS_UNC_PREFIX = /^\\\\/;
 function hrefDiagnostic(href) {
-  return href.length > 64 ? `<oversized href: ${href.length} code units>` : href;
+  if (href.length > 64) return `<oversized href: ${href.length} code units>`;
+  return href.replace(/[\u0000-\u001f\u007f]/g, (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+function browserNormalizedHref(href) {
+  const withoutDiscarded = href.replace(/[\u0009\u000a\u000d]/g, "");
+  return withoutDiscarded.replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, "");
 }
 function assertSafeHref(href) {
-  const trimmed = href.trim();
+  const trimmed = browserNormalizedHref(href);
   if (UNSAFE_HREF_SCHEME.test(trimmed) || WINDOWS_UNC_PREFIX.test(trimmed)) {
     throw new Error(`[next-fluent] Unsafe href rejected: "${hrefDiagnostic(href)}"`);
   }

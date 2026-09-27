@@ -71,6 +71,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`assertSafeHref()` could be bypassed with control characters.** Browsers
+  remove ASCII tab, LF and CR anywhere in a URL, and strip C0 controls at the
+  edges, before they resolve the scheme — so `java\tscript:alert(1)` executes
+  while the raw-string check saw an innocuous path. The guard now tests the URL
+  the browser will see. It is exported for validating untrusted hrefs; `Link`
+  and `getPathname` were not themselves exploitable, because an unrecognized
+  scheme was turned into a relative path, but such an href is now rejected
+  outright. The reported href is escaped, so a rejected value cannot rewrite its
+  own error line.
+- **A broken JSON catalog did not say which file was broken.** `JSON.parse`
+  surfaced as a bare `Unexpected end of JSON input`, with no path — in a project
+  with a catalog per locale that is not actionable. The error now names the
+  file, and covers `jsonToFluent` failures such as excessive nesting too.
+- **A symlinked catalog was silently dropped.** `readdirSync(withFileTypes)`
+  reports a symlink as neither file nor directory, so a linked `en.ftl` was
+  skipped without a word and its messages simply went missing. Symlinks are now
+  classified by `stat`, and are only ever treated as files, so a directory
+  symlink cannot create a recursion cycle.
 - **`t.plain()` leaked bidi isolation marks into HTML attributes.** The marks
   Fluent puts around every placeable are invisible, and `t.plain()` is meant for
   `aria-label`, `title`, `alt` and `<meta>` content. They were only removed when

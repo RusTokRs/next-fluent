@@ -173,3 +173,64 @@ test('a catalog too deeply nested for the parser reports the cause', (t) => {
   assert.ok(!stdout.includes('Maximum call stack size exceeded'), 'raw stack overflow leaked');
   assert.ok(!stdout.includes('at '), 'a stack trace leaked into the report');
 });
+
+test('a broken JSON catalog names the file that failed', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nf-catalog-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'en.json'), '{ "a": ');
+    const { readCatalog } = await import('../dist/catalog-io.js');
+    let message = '';
+    try {
+      readCatalog(path.join(dir, 'en.json'));
+    } catch (error) {
+      message = error.message;
+    }
+    assert.match(message, /Cannot read the catalog/);
+    assert.ok(message.includes('en.json'), `file name missing: ${message}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a symlinked catalog is collected instead of silently dropped', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nf-sym-'));
+  const real = path.join(dir, 'real');
+  const linked = path.join(dir, 'linked');
+  try {
+    fs.mkdirSync(real, { recursive: true });
+    fs.mkdirSync(linked, { recursive: true });
+    fs.writeFileSync(path.join(real, 'en.ftl'), 'a = A\n');
+    let skipped = false;
+    try {
+      fs.symlinkSync(path.join(real, 'en.ftl'), path.join(linked, 'en.ftl'));
+    } catch {
+      skipped = true;
+    }
+    const { collectCatalogFiles } = await import('../dist/catalog-io.js');
+    if (skipped) {
+      assert.deepEqual(collectCatalogFiles(linked), []);
+      return;
+    }
+    assert.equal(collectCatalogFiles(linked).length, 1);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a directory symlink cannot make catalog collection recurse forever', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nf-symdir-'));
+  try {
+    fs.mkdirSync(path.join(dir, 'inner'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'inner', 'en.ftl'), 'a = A\n');
+    try {
+      fs.symlinkSync(path.join(dir, 'inner'), path.join(dir, 'inner', 'loop'));
+    } catch {
+      return; // symlinks unavailable
+    }
+    const { collectCatalogFiles } = await import('../dist/catalog-io.js');
+    // Must terminate, and must not follow the linked directory.
+    assert.equal(collectCatalogFiles(dir).length, 1);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -14,14 +14,31 @@ function collectCatalogFiles(target) {
   const files = [];
   for (const entry of fs.readdirSync(target, { withFileTypes: true })) {
     const full = path.join(target, entry.name);
-    if (entry.isDirectory()) files.push(...collectCatalogFiles(full));
-    else if (entry.isFile() && isCatalogFile(entry.name)) files.push(full);
+    let isDir = entry.isDirectory();
+    let isFile = entry.isFile();
+    if (entry.isSymbolicLink()) {
+      try {
+        isFile = fs.statSync(full).isFile();
+      } catch {
+        continue;
+      }
+      isDir = false;
+    }
+    if (isDir) files.push(...collectCatalogFiles(full));
+    else if (isFile && isCatalogFile(entry.name)) files.push(full);
   }
   return files.sort();
 }
 function readCatalog(file) {
   const raw = fs.readFileSync(file, "utf8");
-  return file.toLowerCase().endsWith(".json") ? jsonToFluent(JSON.parse(raw)) : raw;
+  if (!file.toLowerCase().endsWith(".json")) return raw;
+  try {
+    return jsonToFluent(JSON.parse(raw));
+  } catch (error) {
+    throw new Error(
+      `[next-fluent] Cannot read the catalog ${file}: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
 }
 function readCatalogsByLocale(dir) {
   const catalogs = /* @__PURE__ */ Object.create(null);
