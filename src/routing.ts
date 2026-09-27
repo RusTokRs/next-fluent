@@ -52,8 +52,16 @@ export function defineRouting<const Locales extends readonly string[]>(
   validatePathnames(config.locales, config.pathnames);
   validateRouteEnvironment(config.locales, config.domains, config.basePath);
 
+  // The returned config is frozen, but a spread does not freeze the arrays
+  // inside it — and `matchLocalePrefix` memoizes its prefix table by the
+  // identity of `locales`, so a later `routing.locales.push(...)` would leave a
+  // stale table behind. Snapshotting and freezing here makes the `readonly` in
+  // the type true at runtime, and keeps routing behaviour from changing under
+  // the caller if they reuse the array elsewhere.
   return Object.freeze({
     ...config,
+    // Same elements, same order, so the inferred tuple type still describes it.
+    locales: Object.freeze([...config.locales]) as Locales,
     localePrefix: config.localePrefix ?? 'always',
     cookieName: config.cookieName ?? 'NEXT_LOCALE',
     headerName: config.headerName ?? 'x-next-locale',

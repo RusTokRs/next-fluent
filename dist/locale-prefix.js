@@ -25,8 +25,22 @@ function localeNeedsPrefix(locale, defaultLocale, mode) {
   if (mode === "as-needed") return !matchSupportedLocale(locale, [defaultLocale]);
   return true;
 }
+const prefixTables = /* @__PURE__ */ new WeakMap();
+function sortedPrefixEntries(locales, config) {
+  let byConfig = prefixTables.get(locales);
+  if (!byConfig) {
+    byConfig = /* @__PURE__ */ new Map();
+    prefixTables.set(locales, byConfig);
+  }
+  let entries = byConfig.get(config);
+  if (!entries) {
+    entries = locales.map((locale) => ({ locale, prefix: prefixForLocale(locale, config) })).sort((a, b) => b.prefix.length - a.prefix.length);
+    byConfig.set(config, entries);
+  }
+  return entries;
+}
 function matchLocalePrefix(pathname, locales, config) {
-  const entries = locales.map((locale) => ({ locale, prefix: prefixForLocale(locale, config) })).sort((a, b) => b.prefix.length - a.prefix.length);
+  const entries = sortedPrefixEntries(locales, config);
   for (const { locale, prefix } of entries) {
     if (pathname === prefix) return { locale, rest: "/" };
     if (pathname.startsWith(`${prefix}/`)) {

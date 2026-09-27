@@ -12,6 +12,8 @@ function defineRouting(config) {
   validateRouteEnvironment(config.locales, config.domains, config.basePath);
   return Object.freeze({
     ...config,
+    // Same elements, same order, so the inferred tuple type still describes it.
+    locales: Object.freeze([...config.locales]),
     localePrefix: config.localePrefix ?? "always",
     cookieName: config.cookieName ?? "NEXT_LOCALE",
     headerName: config.headerName ?? "x-next-locale"

@@ -79,6 +79,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Locale resolution no longer re-canonicalizes the configured locales on
+  every request.** `Intl.getCanonicalLocales` ran once per configured locale per
+  candidate, so matching the last of 184 locales cost ~113 us against ~29 us for
+  the first, and a 200-locale site spent ~3.5 ms per request in the middleware.
+  Results are memoized in a bounded map (500 entries, then cleared), including
+  negative ones, which also makes repeated garbage in a cookie cheap rather than
+  expensive. Matching is now ~14 us regardless of position; the 200-locale
+  request dropped to ~2.2 ms, of which ~1.4 ms is building the 200-entry
+  hreflang header itself.
+- **`matchLocalePrefix` rebuilt and re-sorted the prefix table on every call.**
+  The table depends only on the locale list and the prefix config, yet it was
+  allocated and sorted per call — several times per request. It is now memoized
+  in a `WeakMap` keyed by the identity of both, so it dies with the config. To
+  keep that safe, `defineRouting` snapshots and freezes its `locales`, making
+  the `readonly` in its type true at runtime.
 - **A localized slug no longer loses its own locale.** With `pathnames`, a slug
   belongs to exactly one locale, but the middleware resolved the locale only
   from the prefix, the cookie and `Accept-Language` — never from the URL. So in

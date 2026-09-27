@@ -82,14 +82,46 @@ export function localeNeedsPrefix(
  * Matches a pathname against the configured prefixes, longest first so that
  * `/en-us` wins over `/en`. Returns the locale and the remaining path.
  */
+/**
+ * The sorted prefix table depends only on the `locales` array and the prefix
+ * config, both of which are created once per routing definition, yet this ran
+ * on every request — and several times per request, since the middleware,
+ * `nav-url` and `alternate-links` all match prefixes. With 200 locales that is
+ * an O(n log n) allocation on a hot path.
+ *
+ * A WeakMap keyed by identity is the right lifetime: the table dies with the
+ * config that produced it, so nothing can grow without bound.
+ */
+const prefixTables = new WeakMap<
+  readonly string[],
+  Map<NormalizedLocalePrefix, { locale: string; prefix: string }[]>
+>();
+
+function sortedPrefixEntries(
+  locales: readonly string[],
+  config: NormalizedLocalePrefix
+): { locale: string; prefix: string }[] {
+  let byConfig = prefixTables.get(locales);
+  if (!byConfig) {
+    byConfig = new Map();
+    prefixTables.set(locales, byConfig);
+  }
+  let entries = byConfig.get(config);
+  if (!entries) {
+    entries = locales
+      .map((locale) => ({ locale, prefix: prefixForLocale(locale, config) }))
+      .sort((a, b) => b.prefix.length - a.prefix.length);
+    byConfig.set(config, entries);
+  }
+  return entries;
+}
+
 export function matchLocalePrefix(
   pathname: string,
   locales: readonly string[],
   config: NormalizedLocalePrefix
 ): LocalePrefixMatch | null {
-  const entries = locales
-    .map((locale) => ({ locale, prefix: prefixForLocale(locale, config) }))
-    .sort((a, b) => b.prefix.length - a.prefix.length);
+  const entries = sortedPrefixEntries(locales, config);
 
   for (const { locale, prefix } of entries) {
     if (pathname === prefix) return { locale, rest: '/' };

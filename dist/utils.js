@@ -10,9 +10,18 @@ function localeDiagnosticValue(locale) {
   }
   return locale;
 }
+const CANONICAL_CACHE_MAX = 500;
+const canonicalCache = /* @__PURE__ */ new Map();
 function canonicalizeLocale(locale) {
   if (!locale || typeof locale !== "string") return void 0;
   if (locale.length > MAX_LOCALE_TAG_LENGTH) return void 0;
+  if (canonicalCache.has(locale)) return canonicalCache.get(locale);
+  const resolved = computeCanonicalLocale(locale);
+  if (canonicalCache.size >= CANONICAL_CACHE_MAX) canonicalCache.clear();
+  canonicalCache.set(locale, resolved);
+  return resolved;
+}
+function computeCanonicalLocale(locale) {
   let raw = locale.trim();
   if (!raw) return void 0;
   if (raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"')) {
