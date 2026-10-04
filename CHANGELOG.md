@@ -136,6 +136,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`t.has()` answers whether the key is renderable.** A Fluent message may
+  define attributes only (`id =` with `.attr = …` and no value); `t()` cannot
+  format it, but `has()` used to report `true`, so `<FormattedMessage fallback>`
+  rendered the raw key instead of the fallback. `has()` now matches what `t()`
+  can resolve — `true` for messages with a value and for attribute paths,
+  `false` for value-less ids and missing keys. The usage analyzer already
+  treats `t.has()` probes as legitimate references.
+- **The middleware rewrite signal is no longer forgeable.** The second pass
+  Next.js performs after `NextResponse.rewrite()` is recognized by
+  `x-next-fluent-rewrite` **plus** a random per-process token, so a request that
+  merely guesses the pathname (`GET /en/about` with
+  `x-next-fluent-rewrite: /en/about`) can no longer pin the internal alias as a
+  non-canonical duplicate — it canonicalizes to `/about-us` again under both
+  Next 15 and Next 16. Loop prevention is unchanged: the genuine second pass
+  still carries the signal, and the `sec-fetch-dest` fast path still covers the
+  router fetches Next 16 performs for client-side navigations. The internal
+  headers never reach the application.
+
 - **Deeply immutable routing definitions.** `defineRouting()` copies and freezes
   supported nested settings instead of sharing mutable prefix maps, pathnames,
   domain entries, cookie options and trusted hosts with the caller. The copied

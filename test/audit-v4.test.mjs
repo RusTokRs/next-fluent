@@ -2,8 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+
 import { analyzeUsage } from '../dist/usage.js';
 import { checkCatalogs } from '../dist/check.js';
+import { createFluentBundle, createTranslator } from '../dist/bundle.js';
+import { createI18nMiddleware } from '../dist/middleware.js';
+import { FluentProvider, FormattedMessage } from '../dist/client.js';
 
 const CATALOG = `
 hello = Hello
@@ -161,4 +167,108 @@ test('t() on an attribute-only message is reported once as missing-attributes', 
   const flagged = issues.filter((issue) => issue.kind === 'missing-attributes');
   assert.equal(flagged.length, 1, JSON.stringify(issues, null, 2));
   assert.match(flagged[0].message, /defines only attributes and no value/);
+});
+
+// ---------------------------------------------------------------------------
+// V4-04: `has()` answers renderability, so FormattedMessage falls back
+// ---------------------------------------------------------------------------
+
+test('t.has mirrors what t() can render', () => {
+  const bundle = createFluentBundle(
+    'en',
+    'full = Text\nattr-only =\n    .label = L\n'
+  );
+  const t = createTranslator(bundle, { onError: () => {} });
+
+  assert.equal(t.has('full'), true);
+  assert.equal(t.has('attr-only'), false, 'a message without a value is not renderable');
+  assert.equal(t.has('attr-only.label'), true, 'attribute paths stay queryable');
+  assert.equal(t.has('missing'), false);
+});
+
+test('FormattedMessage renders its fallback for a message without a value', () => {
+  const messages = 'full = Full text\nattr-only =\n    .label = L\n';
+  const render = (id, fallback) =>
+    renderToStaticMarkup(
+      React.createElement(
+        FluentProvider,
+        { locale: 'en', messages },
+        React.createElement(FormattedMessage, { id, fallback })
+      )
+    );
+
+  // SSRing `t(id)` for an attribute-only message falls back to the key, which
+  // used to be rendered even though the caller supplied a fallback.
+  assert.equal(render('attr-only', 'FB'), 'FB');
+  assert.equal(render('full', 'FB'), 'Full text');
+  assert.equal(render('missing', 'FB'), 'FB');
+});
+
+// ---------------------------------------------------------------------------
+// V4-05: the rewrite signal is bound to a per-process token
+// ---------------------------------------------------------------------------
+
+const MIDDLEWARE_ROUTING = {
+  locales: ['en', 'ru'],
+  defaultLocale: 'en',
+  localePrefix: 'as-needed',
+  pathnames: { '/about': { en: '/about-us', ru: '/o-nas' } },
+};
+
+function middlewareRequest(path, headers = {}) {
+  const url = new URL(path, 'http://localhost:3000');
+  const all = { host: 'localhost:3000', ...headers };
+  return {
+    url: url.toString(),
+    nextUrl: { pathname: url.pathname, search: url.search },
+    cookies: { get: () => undefined },
+    headers: {
+      get: (name) => all[name.toLowerCase()] ?? null,
+      forEach: (callback) => Object.entries(all).forEach(([key, value]) => callback(value, key)),
+    },
+  };
+}
+
+test('a forged rewrite signal cannot pin the internal alias of a canonical URL', async () => {
+  const mw = createI18nMiddleware(MIDDLEWARE_ROUTING);
+
+  // `/en/about` is the internal target of `/about-us`; a document request must
+  // canonicalize no matter which headers the client sends.
+  const forged = await mw(
+    middlewareRequest('/en/about', { 'x-next-fluent-rewrite': '/en/about' })
+  );
+  assert.equal(forged.status, 307);
+  assert.equal(new URL(forged.headers.get('location')).pathname, '/about-us');
+
+  const forgedWithToken = await mw(
+    middlewareRequest('/en/about', {
+      'x-next-fluent-rewrite': '/en/about',
+      'x-next-fluent-rewrite-token': 'not-the-token',
+    })
+  );
+  assert.equal(forgedWithToken.status, 307);
+});
+
+test('the genuine second pass is recognized and never leaks its token to the app', async () => {
+  const mw = createI18nMiddleware(MIDDLEWARE_ROUTING);
+
+  const first = await mw(middlewareRequest('/about-us'));
+  const forwarded = first.request.headers;
+  const signal = forwarded.get('x-next-fluent-rewrite');
+  const token = forwarded.get('x-next-fluent-rewrite-token');
+  assert.equal(signal, '/en/about');
+  assert.ok(token, 'the rewrite must carry a token');
+
+  const second = await mw(
+    middlewareRequest('/en/about', {
+      'x-next-fluent-rewrite': signal,
+      'x-next-fluent-rewrite-token': token,
+    })
+  );
+  assert.equal(second.headers.get('x-middleware-next'), '1');
+  assert.equal(second.headers.get('location'), null);
+  // The fixed point strips the internal headers before the request reaches the
+  // application, so a route cannot leak them.
+  assert.equal(second.request.headers.get('x-next-fluent-rewrite'), null);
+  assert.equal(second.request.headers.get('x-next-fluent-rewrite-token'), null);
 });

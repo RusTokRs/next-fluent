@@ -18,11 +18,25 @@ import { buildAlternateLinksHeader } from './alternate-links';
 import { domainLocalePrefix, findLocaleDomain, replaceUrlHost } from './domain-routing';
 
 /**
- * Internal request header used to recognize the second middleware pass that
- * Next.js performs after `NextResponse.rewrite()`. Only loop-prone strategies
- * consult it, so a client cannot use it to skip canonicalization.
+ * Internal request headers used to recognize the second middleware pass that
+ * Next.js performs after `NextResponse.rewrite()`. The pathname alone is not a
+ * secret — a client can send any header value — so it is paired with a random
+ * per-process token that only a rewrite issued by this process can carry. The
+ * passes run inside one request (Next re-routes internally and re-invokes the
+ * middleware in the same process), so the token is stable for both of them.
+ *
+ * This is not the only loop-breaker: `sec-fetch-dest` covers the router fetches
+ * Next 16 performs for a client-side navigation. Requests that *do* look like
+ * documents must prove they came from a rewrite, otherwise a client could pin
+ * a non-canonical URL (e.g. `/en/about` while the canonical form is
+ * `/about-us`) and serve the alias as a duplicate.
  */
 const REWRITE_SIGNAL_HEADER = 'x-next-fluent-rewrite';
+const REWRITE_TOKEN_HEADER = 'x-next-fluent-rewrite-token';
+const REWRITE_SIGNAL_TOKEN =
+  typeof globalThis.crypto?.randomUUID === 'function'
+    ? globalThis.crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 
 function hostMatchesTrustedList(requestHost: string, list: readonly string[]): boolean {
   const hostname = requestHost.replace(/:\d+$/, '');
@@ -264,9 +278,14 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
           REWRITE_SIGNAL_HEADER,
           requestUrl(rewritePath).pathname
         );
+        // The token makes the signal unforgeable: it exists only in this
+        // process, so a request that merely claims to be a rewrite cannot
+        // reproduce it.
+        requestHeaders.set(REWRITE_TOKEN_HEADER, REWRITE_SIGNAL_TOKEN);
       } else {
         // Never forward a client-supplied signal to the application.
         requestHeaders.delete(REWRITE_SIGNAL_HEADER);
+        requestHeaders.delete(REWRITE_TOKEN_HEADER);
       }
 
       const response = rewritePath
@@ -379,7 +398,8 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
 
     const isRewriteSignal =
       matchedPrefix !== undefined &&
-      request.headers.get(REWRITE_SIGNAL_HEADER) === pathname;
+      request.headers.get(REWRITE_SIGNAL_HEADER) === pathname &&
+      request.headers.get(REWRITE_TOKEN_HEADER) === REWRITE_SIGNAL_TOKEN;
 
     // Strategy 1: 'never' (no prefixes in URL, internal rewrite to /[locale]/... )
     if (localePrefix === 'never') {

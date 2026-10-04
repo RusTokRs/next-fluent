@@ -598,9 +598,10 @@ export function analyzeUsage(
         continue;
       }
 
-      // `t.attrs(key)`, `t.raw(key)` and `t.has(key)` also accept a message that
-      // carries only attributes; the value-reading methods do not, so the
-      // method decides whether an attribute-only id counts as resolved.
+      // `t.attrs(key)` and `t.raw(key)` render attribute-only messages, and
+      // `t.has(key)` is a legitimate probe for them (it answers false).
+      // Value-reading calls cannot use such an id, so the method decides
+      // whether it counts as resolved.
       const readsAttributes =
         site.method === 'attrs' || site.method === 'raw' || site.method === 'has';
       const accept = (candidate: string): boolean =>

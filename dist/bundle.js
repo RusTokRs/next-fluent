@@ -294,7 +294,8 @@ function createTranslator(bundle, namespaceOrFallbackOrOpts, maybeNamespace) {
     const candidates = buildKeyCandidates(namespace, key, { strictNamespace });
     for (const candidate of candidates) {
       for (const b of allBundles) {
-        if (b.hasMessage(candidate)) return true;
+        const message = b.getMessage(candidate);
+        if (message?.value != null) return true;
         const lastDot = candidate.lastIndexOf(".");
         if (lastDot !== -1) {
           const msgId = candidate.slice(0, lastDot);

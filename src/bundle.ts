@@ -503,11 +503,23 @@ export function createTranslator(
     return stripRichText(formatKey(key, built.args, built.rejected));
   }) as Translations['plain'];
 
+  /**
+   * Reports whether `t(key)` can render something for this key.
+   *
+   * A Fluent message may exist with attributes only and no value; `t()` cannot
+   * format such a message (it falls back to the key), so `has()` must not claim
+   * it is renderable — `FormattedMessage` uses the answer to decide whether to
+   * show its `fallback`. Attribute *paths* (`id.attr`) stay queryable: they are
+   * exactly what `t.attrs('id')`/`t.plain('id.attr')` render.
+   */
   tFn.has = (key: string): boolean => {
     const candidates = buildKeyCandidates(namespace, key, { strictNamespace });
     for (const candidate of candidates) {
       for (const b of allBundles) {
-        if (b.hasMessage(candidate)) return true;
+        const message = b.getMessage(candidate);
+        // `value` is null for a message that only carries attributes; every
+        // alias `t()` would try is already enumerated by buildKeyCandidates.
+        if (message?.value != null) return true;
         const lastDot = candidate.lastIndexOf('.');
         if (lastDot !== -1) {
           const msgId = candidate.slice(0, lastDot);

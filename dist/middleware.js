@@ -16,6 +16,8 @@ import {
 import { buildAlternateLinksHeader } from "./alternate-links.js";
 import { domainLocalePrefix, findLocaleDomain, replaceUrlHost } from "./domain-routing.js";
 const REWRITE_SIGNAL_HEADER = "x-next-fluent-rewrite";
+const REWRITE_TOKEN_HEADER = "x-next-fluent-rewrite-token";
+const REWRITE_SIGNAL_TOKEN = typeof globalThis.crypto?.randomUUID === "function" ? globalThis.crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 function hostMatchesTrustedList(requestHost, list) {
   const hostname = requestHost.replace(/:\d+$/, "");
   for (const raw of list) {
@@ -155,8 +157,10 @@ function createI18nMiddleware(options) {
           REWRITE_SIGNAL_HEADER,
           requestUrl(rewritePath).pathname
         );
+        requestHeaders.set(REWRITE_TOKEN_HEADER, REWRITE_SIGNAL_TOKEN);
       } else {
         requestHeaders.delete(REWRITE_SIGNAL_HEADER);
+        requestHeaders.delete(REWRITE_TOKEN_HEADER);
       }
       const response = rewritePath ? NextResponse.rewrite(new URL(normalizeLeadingSlashes(withBasePath(rewritePath)), request.url), {
         request: { headers: requestHeaders }
@@ -224,7 +228,7 @@ function createI18nMiddleware(options) {
     const secFetchDest = request.headers.get("sec-fetch-dest");
     const isDocumentNavigation = secFetchDest === null || secFetchDest === "document";
     const isInternalTarget = (locale, withoutPrefix, canonical2) => internalPrefixMatch?.locale === locale && (canonical2 !== withoutPrefix || prefixForLocale(locale, prefixConfig) !== `/${locale}`) && internalPath(locale, canonical2) === withoutPrefix;
-    const isRewriteSignal = matchedPrefix !== void 0 && request.headers.get(REWRITE_SIGNAL_HEADER) === pathname;
+    const isRewriteSignal = matchedPrefix !== void 0 && request.headers.get(REWRITE_SIGNAL_HEADER) === pathname && request.headers.get(REWRITE_TOKEN_HEADER) === REWRITE_SIGNAL_TOKEN;
     if (localePrefix === "never") {
       if (isRewriteSignal) {
         return createSuccessResponse(matchedPrefix);
