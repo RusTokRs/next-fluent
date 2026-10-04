@@ -59,6 +59,38 @@ const bundleCache = new LRUCache<{
   bundle: FluentBundle;
 }>(MAX_BUNDLE_CACHE);
 
+interface CachedBundle {
+  source: string | readonly string[];
+  bundle: FluentBundle;
+}
+
+/**
+ * Cache keyed by the custom-functions object itself.
+ *
+ * A bundle built with custom Fluent functions cannot join the shared cache (the
+ * functions are part of its behavior), but the same functions object is usually
+ * reused — a module-level table, or the stable identity `FluentProvider`
+ * maintains — and re-parsing the whole catalog on every request is pure waste.
+ * A `WeakMap` keyed by that object keeps the isolation without leaking it.
+ */
+const functionBundleCaches = new WeakMap<object, LRUCache<CachedBundle>>();
+
+/**
+ * Bumped by `clearBundleCache()`. Per-functions caches cannot be enumerated
+ * (that is what makes them leak-free), so a clear invalidates them by changing
+ * the keys instead.
+ */
+let cacheGeneration = 0;
+
+function getFunctionBundleCache(functions: object): LRUCache<CachedBundle> {
+  let cache = functionBundleCaches.get(functions);
+  if (!cache) {
+    cache = new LRUCache<CachedBundle>(MAX_BUNDLE_CACHE);
+    functionBundleCaches.set(functions, cache);
+  }
+  return cache;
+}
+
 function sameSource(a: string | readonly string[], b: string | readonly string[]): boolean {
   if (typeof a === 'string' || typeof b === 'string') return a === b;
   return a.length === b.length && a.every((item, index) => item === b[index]);
@@ -82,10 +114,15 @@ export function getCachedFluentBundle(
   const hasCustomFunctions = options.functions && Object.keys(options.functions).length > 0;
 
   const sourceHash = computeSourceHash(ftlSource);
-  const cacheKey = `${locale}:iso=${useIsolating}:${sourceHash}`;
+  const cacheKey = `${locale}:iso=${useIsolating}:gen=${cacheGeneration}:${sourceHash}`;
+  const cache = options.disableCache
+    ? undefined
+    : hasCustomFunctions
+      ? getFunctionBundleCache(options.functions as object)
+      : bundleCache;
 
-  if (!hasCustomFunctions && !options.disableCache) {
-    const cached = bundleCache.get(cacheKey);
+  if (cache) {
+    const cached = cache.get(cacheKey);
     if (cached && sameSource(cached.source, ftlSource)) {
       return cached.bundle;
     }
@@ -112,8 +149,8 @@ export function getCachedFluentBundle(
     }
   }
 
-  if (!hasCustomFunctions && !options.disableCache) {
-    bundleCache.set(cacheKey, {
+  if (cache) {
+    cache.set(cacheKey, {
       source: typeof ftlSource === 'string' ? ftlSource : [...ftlSource],
       bundle,
     });
@@ -123,6 +160,7 @@ export function getCachedFluentBundle(
 }
 
 export function clearBundleCache(): void {
+  cacheGeneration++;
   resourceCache.clear();
   bundleCache.clear();
 }

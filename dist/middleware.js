@@ -18,6 +18,16 @@ import { domainLocalePrefix, findLocaleDomain, replaceUrlHost } from "./domain-r
 const REWRITE_SIGNAL_HEADER = "x-next-fluent-rewrite";
 const REWRITE_TOKEN_HEADER = "x-next-fluent-rewrite-token";
 const REWRITE_SIGNAL_TOKEN = typeof globalThis.crypto?.randomUUID === "function" ? globalThis.crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+const isProduction = typeof process !== "undefined" && process.env?.NODE_ENV === "production";
+const isDevelopment = typeof process !== "undefined" && process.env?.NODE_ENV === "development";
+let warnedAboutTrustedHosts = false;
+function warnMissingTrustedHosts() {
+  if (!isDevelopment || warnedAboutTrustedHosts) return;
+  warnedAboutTrustedHosts = true;
+  console.warn(
+    "[next-fluent] trustedHosts is not configured, so redirect targets are built from the request's Host header. Set `trustedHosts: ['example.com']` in production to reject a foreign Host with 421 before any redirect is issued."
+  );
+}
 function hostMatchesTrustedList(requestHost, list) {
   const hostname = requestHost.replace(/:\d+$/, "");
   for (const raw of list) {
@@ -40,6 +50,10 @@ function resolveCookieConfig(localeCookie, cookieName) {
       path: "/",
       maxAge: 31536e3,
       sameSite: "lax",
+      // `Secure` in production by default: the cookie only carries the chosen
+      // locale, but sending it over plain HTTP is still needless exposure.
+      // Overridable with `localeCookie: { secure: false }`.
+      secure: isProduction,
       ...rest
     }
   };
@@ -191,7 +205,12 @@ function createI18nMiddleware(options) {
       }
       return response;
     };
+    const markDetected = (response) => {
+      if (localeDetection) response.headers.append("Vary", "Accept-Language, Cookie");
+      return response;
+    };
     const createRedirect = (targetUrl, targetLocale) => {
+      if (!trustedHosts || trustedHosts.length === 0) warnMissingTrustedHosts();
       const response = NextResponse.redirect(targetUrl);
       if (response.headers?.set) {
         response.headers.set(headerName, targetLocale);
@@ -246,38 +265,40 @@ function createI18nMiddleware(options) {
       if (!isRewriteSignal) {
         const canonical2 = canonicalPath(preferredLocale, pathname);
         if (canonical2 !== pathname) {
-          return createRedirect(
-            requestUrl(withBasePath(`${canonical2 === "/" ? "" : canonical2}${search}`)),
-            preferredLocale
+          return markDetected(
+            createRedirect(
+              requestUrl(withBasePath(`${canonical2 === "/" ? "" : canonical2}${search}`)),
+              preferredLocale
+            )
           );
         }
       }
       const route = internalPath(preferredLocale, pathname);
       const rewritePath = `/${preferredLocale}${route === "/" ? "" : route}${search}`;
-      return createSuccessResponse(preferredLocale, rewritePath);
+      return markDetected(createSuccessResponse(preferredLocale, rewritePath));
     }
     if (localePrefix === "as-needed") {
       if (matchedPrefix === defaultLocale) {
         if (isRewriteSignal) {
           return createSuccessResponse(matchedPrefix);
         }
-        const canonical2 = canonicalPath(defaultLocale, pathnameWithoutPrefix);
-        if (!isDocumentNavigation && isInternalTarget(defaultLocale, pathnameWithoutPrefix, canonical2)) {
+        const canonical3 = canonicalPath(defaultLocale, pathnameWithoutPrefix);
+        if (!isDocumentNavigation && isInternalTarget(defaultLocale, pathnameWithoutPrefix, canonical3)) {
           return createSuccessResponse(defaultLocale);
         }
-        const remainingPath = `${canonical2 === "/" ? "/" : canonical2}${search}`;
+        const remainingPath = `${canonical3 === "/" ? "/" : canonical3}${search}`;
         return createRedirect(requestUrl(withBasePath(remainingPath)), defaultLocale);
       }
       if (matchedPrefix) {
         if (!isRewriteSignal) {
-          const canonical2 = canonicalPath(matchedPrefix, pathnameWithoutPrefix);
-          if (!isDocumentNavigation && isInternalTarget(matchedPrefix, pathnameWithoutPrefix, canonical2)) {
+          const canonical3 = canonicalPath(matchedPrefix, pathnameWithoutPrefix);
+          if (!isDocumentNavigation && isInternalTarget(matchedPrefix, pathnameWithoutPrefix, canonical3)) {
             return createSuccessResponse(matchedPrefix);
           }
-          if (canonical2 !== pathnameWithoutPrefix || !publicPrefixMatch) {
+          if (canonical3 !== pathnameWithoutPrefix || !publicPrefixMatch) {
             const prefix = prefixForLocale(matchedPrefix, prefixConfig);
             return createRedirect(
-              requestUrl(withBasePath(`${prefix}${canonical2 === "/" ? "" : canonical2}${search}`)),
+              requestUrl(withBasePath(`${prefix}${canonical3 === "/" ? "" : canonical3}${search}`)),
               matchedPrefix
             );
           }
@@ -289,20 +310,23 @@ function createI18nMiddleware(options) {
       }
       if (preferredLocale === defaultLocale) {
         if (!isRewriteSignal) {
-          const canonical2 = canonicalPath(defaultLocale, pathname);
-          if (canonical2 !== pathname) {
-            return createRedirect(
-              requestUrl(withBasePath(`${canonical2 === "/" ? "" : canonical2}${search}`)),
-              defaultLocale
+          const canonical3 = canonicalPath(defaultLocale, pathname);
+          if (canonical3 !== pathname) {
+            return markDetected(
+              createRedirect(
+                requestUrl(withBasePath(`${canonical3 === "/" ? "" : canonical3}${search}`)),
+                defaultLocale
+              )
             );
           }
         }
         const route = internalPath(defaultLocale, pathname);
         const rewritePath = `/${defaultLocale}${route === "/" ? "" : route}${search}`;
-        return createSuccessResponse(defaultLocale, rewritePath);
+        return markDetected(createSuccessResponse(defaultLocale, rewritePath));
       }
-      const targetPath2 = `${prefixForLocale(preferredLocale, prefixConfig)}${pathname === "/" ? "" : pathname}${search}`;
-      return createRedirect(requestUrl(withBasePath(targetPath2)), preferredLocale);
+      const canonical2 = canonicalPath(preferredLocale, pathname);
+      const targetPath2 = `${prefixForLocale(preferredLocale, prefixConfig)}${canonical2 === "/" ? "" : canonical2}${search}`;
+      return markDetected(createRedirect(requestUrl(withBasePath(targetPath2)), preferredLocale));
     }
     if (matchedPrefix) {
       if (!isRewriteSignal) {
@@ -325,7 +349,7 @@ function createI18nMiddleware(options) {
     }
     const canonical = canonicalPath(preferredLocale, pathname);
     const targetPath = `${prefixForLocale(preferredLocale, prefixConfig)}${canonical === "/" ? "" : canonical}${search}`;
-    return createRedirect(requestUrl(withBasePath(targetPath)), preferredLocale);
+    return markDetected(createRedirect(requestUrl(withBasePath(targetPath)), preferredLocale));
   };
 }
 const createMiddleware = createI18nMiddleware;

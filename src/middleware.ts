@@ -38,6 +38,33 @@ const REWRITE_SIGNAL_TOKEN =
     ? globalThis.crypto.randomUUID()
     : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 
+/**
+ * Whether `process` is usable here. The middleware also runs on Web-standard
+ * platforms (and in the edge smoke test) where `process` does not exist, so it
+ * must never be dereferenced unguarded.
+ */
+const isProduction =
+  typeof process !== 'undefined' && process.env?.NODE_ENV === 'production';
+const isDevelopment =
+  typeof process !== 'undefined' && process.env?.NODE_ENV === 'development';
+
+let warnedAboutTrustedHosts = false;
+
+/**
+ * Emits one development-only warning when the middleware is about to build a
+ * redirect without `trustedHosts`: the `Location` origin then comes from the
+ * request's own `Host` header, which a proxy or a crafted request controls.
+ */
+function warnMissingTrustedHosts(): void {
+  if (!isDevelopment || warnedAboutTrustedHosts) return;
+  warnedAboutTrustedHosts = true;
+  console.warn(
+    '[next-fluent] trustedHosts is not configured, so redirect targets are built from the ' +
+      "request's Host header. Set `trustedHosts: ['example.com']` in production to reject a " +
+      'foreign Host with 421 before any redirect is issued.'
+  );
+}
+
 function hostMatchesTrustedList(requestHost: string, list: readonly string[]): boolean {
   const hostname = requestHost.replace(/:\d+$/, '');
   for (const raw of list) {
@@ -88,6 +115,10 @@ function resolveCookieConfig(
       path: '/',
       maxAge: 31536000,
       sameSite: 'lax',
+      // `Secure` in production by default: the cookie only carries the chosen
+      // locale, but sending it over plain HTTP is still needless exposure.
+      // Overridable with `localeCookie: { secure: false }`.
+      secure: isProduction,
       ...rest,
     },
   };
@@ -325,11 +356,25 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
       return response;
     };
 
+    /**
+     * Marks a response whose locale came from cookie/Accept-Language rather
+     * than from the URL. Shared caches must key such responses on both — a CDN
+     * that replays the first visitor's locale to everyone is the classic
+     * poisoning bug — so `Vary` is set exactly where detection decided.
+     */
+    const markDetected = <T extends { headers: { append(name: string, value: string): void } }>(
+      response: T
+    ): T => {
+      if (localeDetection) response.headers.append('Vary', 'Accept-Language, Cookie');
+      return response;
+    };
+
     const createRedirect = (targetUrl: URL | string, targetLocale: string) => {
       // Next.js re-parses the Location header of middleware responses and
       // requires it to be absolute. Cross-domain targets are built exclusively
       // from the trusted `domains` config; same-host targets derive from the
       // request origin. Host-header injection is mitigated by `trustedHosts`.
+      if (!trustedHosts || trustedHosts.length === 0) warnMissingTrustedHosts();
       const response = NextResponse.redirect(targetUrl);
       if (response.headers?.set) {
         response.headers.set(headerName, targetLocale);
@@ -423,15 +468,17 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
       if (!isRewriteSignal) {
         const canonical = canonicalPath(preferredLocale, pathname);
         if (canonical !== pathname) {
-          return createRedirect(
-            requestUrl(withBasePath(`${canonical === '/' ? '' : canonical}${search}`)),
-            preferredLocale
+          return markDetected(
+            createRedirect(
+              requestUrl(withBasePath(`${canonical === '/' ? '' : canonical}${search}`)),
+              preferredLocale
+            )
           );
         }
       }
       const route = internalPath(preferredLocale, pathname);
       const rewritePath = `/${preferredLocale}${route === '/' ? '' : route}${search}`;
-      return createSuccessResponse(preferredLocale, rewritePath);
+      return markDetected(createSuccessResponse(preferredLocale, rewritePath));
     }
 
     // Strategy 2: 'as-needed' (default locale without prefix rewritten, others with prefix)
@@ -475,19 +522,24 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
         if (!isRewriteSignal) {
           const canonical = canonicalPath(defaultLocale, pathname);
           if (canonical !== pathname) {
-            return createRedirect(
-              requestUrl(withBasePath(`${canonical === '/' ? '' : canonical}${search}`)),
-              defaultLocale
+            return markDetected(
+              createRedirect(
+                requestUrl(withBasePath(`${canonical === '/' ? '' : canonical}${search}`)),
+                defaultLocale
+              )
             );
           }
         }
         const route = internalPath(defaultLocale, pathname);
         const rewritePath = `/${defaultLocale}${route === '/' ? '' : route}${search}`;
-        return createSuccessResponse(defaultLocale, rewritePath);
+        return markDetected(createSuccessResponse(defaultLocale, rewritePath));
       }
-      // Preferred locale is non-default: redirect to /{preferredLocale}/path
-      const targetPath = `${prefixForLocale(preferredLocale, prefixConfig)}${pathname === '/' ? '' : pathname}${search}`;
-      return createRedirect(requestUrl(withBasePath(targetPath)), preferredLocale);
+      // Preferred locale is non-default: redirect straight to its canonical
+      // path. Canonicalizing only on the next pass cost a second 307
+      // (`/about-us` → `/ru/about-us` → `/ru/o-nas`).
+      const canonical = canonicalPath(preferredLocale, pathname);
+      const targetPath = `${prefixForLocale(preferredLocale, prefixConfig)}${canonical === '/' ? '' : canonical}${search}`;
+      return markDetected(createRedirect(requestUrl(withBasePath(targetPath)), preferredLocale));
     }
 
     // Strategy 3: 'always' (default: every path requires prefix)
@@ -513,7 +565,7 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
 
     const canonical = canonicalPath(preferredLocale, pathname);
     const targetPath = `${prefixForLocale(preferredLocale, prefixConfig)}${canonical === '/' ? '' : canonical}${search}`;
-    return createRedirect(requestUrl(withBasePath(targetPath)), preferredLocale);
+    return markDetected(createRedirect(requestUrl(withBasePath(targetPath)), preferredLocale));
   };
 }
 

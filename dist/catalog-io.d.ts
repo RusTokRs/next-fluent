@@ -13,6 +13,20 @@ export declare function isCatalogFile(name: string): boolean;
 export declare function collectCatalogFiles(target: string): string[];
 /** Reads a catalog file, converting JSON catalogs into FTL source. */
 export declare function readCatalog(file: string): string;
+/**
+ * Locale a catalog name belongs to: `en` → `en`, `en-app` → `en`.
+ *
+ * A flat `en-app.json` is a namespaced catalog for `en`, not a locale called
+ * `en-app` (`Intl` rejects that tag), and treating it as one made `check`
+ * compare the FTL catalogs against a JSON namespace file — and even elect it as
+ * the reference locale, because `en-app` sorts before `en`/`ru`. The locale is
+ * the longest valid tag prefix of the name; the remainder is a namespace label
+ * that only decides which files are merged.
+ *
+ * Names that are not locale-like at all keep their raw stem, so a catalog such
+ * as `__proto__.ftl` is still reported instead of being dropped or crashing.
+ */
+export declare function localeFromCatalogName(name: string): string;
 /** Groups catalogs by locale: `messages/en.ftl` or `messages/en/app.ftl` → `en`. */
 export declare function readCatalogsByLocale(dir: string): Record<string, string[]>;
 /**

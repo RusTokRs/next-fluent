@@ -41,7 +41,7 @@ jobs:
         run: npm run build
 
       - name: Verify build artifacts are in sync with source
-        run: git diff --ignore-space-at-eol --exit-code dist/
+        run: npm run check-dist
 
       - name: Run ESLint
         run: npm run lint

@@ -34,6 +34,16 @@ function computeSourceHash(source) {
 }
 const resourceCache = new LRUCache(MAX_RESOURCE_CACHE);
 const bundleCache = new LRUCache(MAX_BUNDLE_CACHE);
+const functionBundleCaches = /* @__PURE__ */ new WeakMap();
+let cacheGeneration = 0;
+function getFunctionBundleCache(functions) {
+  let cache = functionBundleCaches.get(functions);
+  if (!cache) {
+    cache = new LRUCache(MAX_BUNDLE_CACHE);
+    functionBundleCaches.set(functions, cache);
+  }
+  return cache;
+}
 function sameSource(a, b) {
   if (typeof a === "string" || typeof b === "string") return a === b;
   return a.length === b.length && a.every((item, index) => item === b[index]);
@@ -50,9 +60,10 @@ function getCachedFluentBundle(locale, ftlSource, options = {}) {
   const useIsolating = options.useIsolating ?? true;
   const hasCustomFunctions = options.functions && Object.keys(options.functions).length > 0;
   const sourceHash = computeSourceHash(ftlSource);
-  const cacheKey = `${locale}:iso=${useIsolating}:${sourceHash}`;
-  if (!hasCustomFunctions && !options.disableCache) {
-    const cached = bundleCache.get(cacheKey);
+  const cacheKey = `${locale}:iso=${useIsolating}:gen=${cacheGeneration}:${sourceHash}`;
+  const cache = options.disableCache ? void 0 : hasCustomFunctions ? getFunctionBundleCache(options.functions) : bundleCache;
+  if (cache) {
+    const cached = cache.get(cacheKey);
     if (cached && sameSource(cached.source, ftlSource)) {
       return cached.bundle;
     }
@@ -74,8 +85,8 @@ function getCachedFluentBundle(locale, ftlSource, options = {}) {
       console.warn(`[next-fluent] Warnings adding FTL resource for locale ${locale}:`, errors);
     }
   }
-  if (!hasCustomFunctions && !options.disableCache) {
-    bundleCache.set(cacheKey, {
+  if (cache) {
+    cache.set(cacheKey, {
       source: typeof ftlSource === "string" ? ftlSource : [...ftlSource],
       bundle
     });
@@ -83,6 +94,7 @@ function getCachedFluentBundle(locale, ftlSource, options = {}) {
   return bundle;
 }
 function clearBundleCache() {
+  cacheGeneration++;
   resourceCache.clear();
   bundleCache.clear();
 }

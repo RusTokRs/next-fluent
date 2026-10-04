@@ -36,6 +36,22 @@ function buildAlternateLinksHeader(options) {
   }
   const template = options.internalTemplate ?? match?.template;
   const params = match?.params ?? {};
+  const consumedParams = new Set(Object.keys(params));
+  const cleanSearch = (value) => {
+    if (consumedParams.size === 0 || !value) return value;
+    const query = new URLSearchParams(value.startsWith("?") ? value.slice(1) : value);
+    let removed = false;
+    for (const name of consumedParams) {
+      if (query.has(name)) {
+        query.delete(name);
+        removed = true;
+      }
+    }
+    if (!removed) return value;
+    const remaining = query.toString();
+    return remaining ? `?${remaining}` : "";
+  };
+  const sanitizedSearch = cleanSearch(search);
   const base = new URL(origin);
   const basePathname = (path) => `${basePath}${path === "/" && basePath ? "" : path}`;
   const variants = [];
@@ -47,7 +63,7 @@ function buildAlternateLinksHeader(options) {
     const path = withLocalePrefix(rendered, locale, domain?.defaultLocale ?? defaultLocale, targetPrefix);
     const url = domain ? new URL(`https://${domain.domain}`) : new URL(base);
     url.pathname = basePathname(path);
-    url.search = search;
+    url.search = sanitizedSearch;
     variants.push({ href: url.toString(), locale });
   }
   const counts = /* @__PURE__ */ new Map();
@@ -64,7 +80,7 @@ function buildAlternateLinksHeader(options) {
     );
     const url = new URL(base);
     url.pathname = basePathname(defaultPath);
-    url.search = search;
+    url.search = sanitizedSearch;
     if (unique.some(({ href }) => href === url.toString())) {
       links.push(`<${url.toString()}>; rel="alternate"; hreflang="x-default"`);
     }

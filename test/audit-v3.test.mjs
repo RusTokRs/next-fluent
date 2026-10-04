@@ -320,7 +320,10 @@ test('V3-04: localeDetection:false ignores cookie and Accept-Language', async ()
 
   const detecting = createI18nMiddleware(routing);
   const detected = await detecting(mockRequest('/about-us', { 'accept-language': 'ru' }));
-  assert.equal(new URL(detected.headers.get('location')).pathname, '/ru/about-us');
+  // Detection and slug canonicalization happen in one hop: the visitor asking
+  // for the generic `/about-us` while preferring Russian lands on the Russian
+  // slug directly instead of being redirected twice.
+  assert.equal(new URL(detected.headers.get('location')).pathname, '/ru/o-nas');
 });
 
 // ---------------------------------------------------------------------------
@@ -480,10 +483,22 @@ test('V3-19: a localized slug serves its own locale without a cookie', async () 
 test('V3-19b: the default locale slug does not override Accept-Language', async () => {
   // The default locale's slug is the generic form every visit can land on, so
   // it must not outrank detection — otherwise an ordinary Russian visitor
-  // asking for /about-us would be pinned to English.
+  // asking for /about-us would be pinned to English. The redirect goes straight
+  // to the Russian slug; two hops would cost every such visitor a round trip.
   const mw = createI18nMiddleware(routing);
   const response = await mw(mockRequest('/about-us', { 'accept-language': 'ru' }));
-  assert.equal(new URL(response.headers.get('location')).pathname, '/ru/about-us');
+  assert.equal(new URL(response.headers.get('location')).pathname, '/ru/o-nas');
+
+  const chain = [];
+  let current = '/about-us';
+  for (let hop = 0; hop < 3; hop++) {
+    const step = await mw(mockRequest(current, { 'accept-language': 'ru' }));
+    const location = step.headers.get('location');
+    chain.push(`${step.status}${location ? `->${new URL(location).pathname}` : ''}`);
+    if (!location || step.status !== 307) break;
+    current = new URL(location).pathname;
+  }
+  assert.deepEqual(chain, ['307->/ru/o-nas', '200'], 'a single redirect must reach the page');
 });
 
 test('V3-19c: an explicit locale cookie outranks the slug', async () => {

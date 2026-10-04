@@ -12,8 +12,9 @@
 | | |
 | --- | --- |
 | Найдено дефектов | **16** |
-| Исправлено в этом проходе | 5 (включая оба «владельческих»: `has()` и подделываемый сигнал рерайта) |
-| Осталось открытыми | 0 уровня P1/P2; 11 — качество, доки, покрытие |
+| Исправлено в проходе 4 | 5 (включая оба «владельческих»: `has()` и подделываемый сигнал рерайта) |
+| Исправлено в проходе 5 (04.10.2026) | 10 — **V4-06…V4-15**, то есть весь блок §4 |
+| Осталось открытыми | 1 — хвост V4-16 (ветки request-scope в `server.ts`, нужен контур Next.js) |
 | Качество, доки, гигиена | 11 |
 | Новых дефектов рантайма уровня P1 | 0 |
 
@@ -25,7 +26,13 @@
 ложных срабатывания `next-fluent check --usage`, из-за которых команда
 завершалась с кодом 1 на корректном коде.
 
-Правки этого прохода: `src/usage.ts`, `src/bundle.ts`, `src/middleware.ts`,
+**Проход 5** (см. §8) закрыл оставшиеся пункты §4: лишний хоп редиректа,
+`Vary` на ответах, зависящих от cookie/`Accept-Language`, предупреждение про
+`trustedHosts`, `Secure`-cookie, разбор имён каталогов, поля `UrlObject`, кеш
+бандлов для инлайн-`functions`, query в alternate links, гигиена `dist/`.
+Тестов стало **376** (34 файла), покрытие строк — **96.65 %**.
+
+Правки прохода 4: `src/usage.ts`, `src/bundle.ts`, `src/middleware.ts`,
 `src/check.ts`, `README.md`, `SECURITY.md`, `CHANGELOG.md`, удалён трекавшийся
 скрэтч-каталог `.next-integration-1818/`, 14 регрессионных тестов в
 `test/audit-v4.test.mjs` плюс обновлённые тесты рерайта. После правок батарея
@@ -213,7 +220,7 @@ t.has('missing')          false
 
 ## 4. P3 — качество инструментов, документации и гигиена
 
-### V4-06. Лишний хоп редиректа при согласовании по `Accept-Language`
+### V4-06. Лишний хоп редиректа при согласовании по `Accept-Language` (исправлено)
 
 `/about-us` с `accept-language: ru` → 307 `/ru/about-us` → 307 `/ru/o-nas`:
 ветка «preferred locale — не дефолтная» (`src/middleware.ts:468-470`) не
@@ -223,7 +230,7 @@ t.has('missing')          false
 (`test/audit-v3.test.mjs:274-280`, `:442-443`) — это осознанное решение, а не
 случайность; менять его стоит вместе с тестами.
 
-### V4-07. `check` принимает имя файла за локаль
+### V4-07. `check` принимает имя файла за локаль (исправлено)
 
 `readCatalogsByLocale` (`src/catalog-io.ts:69-86`) в плоской раскладке считает
 локалью каждое имя файла, поэтому `messages/en-app.json` становится «локалью»
@@ -249,7 +256,7 @@ t.has('missing')          false
 `‹locale›-‹namespace›.ftl`, либо предупреждать, что раскладка «один файл на
 локаль» обязательна.
 
-### V4-08. Нет `Vary: Accept-Language` на ответах, зависящих от заголовка
+### V4-08. Нет `Vary: Accept-Language` на ответах, зависящих от заголовка (исправлено)
 
 `GET /` в `as-needed` отдаёт 307 на `/ru` при `Accept-Language: ru` и 200
 (rewrite на `/en`) при `en`, и ни один из ответов не содержит `Vary`. При
@@ -257,7 +264,7 @@ CDN-кешировании редиректа это классическое «
 для всех». Рекомендация: `Vary: Accept-Language` (и, если решает cookie,
 продумать `Cache-Control`), либо `localedDetection: false` для кешируемых зон.
 
-### V4-09. `Host` влияет на `Location` при незаданном `trustedHosts`
+### V4-09. `Host` влияет на `Location` при незаданном `trustedHosts` (исправлено предупреждением)
 
 ```
 Host: evil.example  → 307 Location: http://evil.example/en/x
@@ -273,7 +280,7 @@ from the trusted `domains` config or the request's own origin»), README:245
 собирается выпустить редирект; либо включать строгий режим при `NODE_ENV !==
 'production'`.
 
-### V4-10. Cookie локали по умолчанию без `Secure`
+### V4-10. Cookie локали по умолчанию без `Secure` (исправлено)
 
 `resolveCookieConfig` (`src/middleware.ts:64-80`) дефолтит `path/maxAge/
 sameSite`, но не `secure` — на HTTPS-сайте cookie уходит и по HTTP. В README
@@ -281,7 +288,7 @@ sameSite`, но не `secure` — на HTTPS-сайте cookie уходит и �
 `secure: true` — современный дефолт; как минимум стоит упомянуть в README, что
 его нужно задать.
 
-### V4-11. Документация: две неточных формулировки
+### V4-11. Документация: две неточных формулировки (исправлено)
 
 * «the locale cookie is only written on document requests **when it actually
   changes**, so static pages stay CDN-cacheable» (README:18). Код ведёт себя
@@ -294,7 +301,7 @@ sameSite`, но не `secure` — на HTTPS-сайте cookie уходит и �
   `domains` `x-default` не выпускается вовсе (`src/alternate-links.ts:102`);
   в детальном разделе (README:489) оговорка есть, в буллете — нет.
 
-### V4-12. `formatUrlObject` молча игнорирует поля `UrlObject`
+### V4-12. `formatUrlObject` молча игнорирует поля `UrlObject` (исправлено)
 
 `{ href: '/x' }` → `/`; `{ hostname: 'evil.example', pathname: '/x' }` → `/x`;
 `protocol`/`host`/`auth`/`slashes` не учитываются. Next.js-объект `Url` эти поля
@@ -302,7 +309,7 @@ sameSite`, но не `secure` — на HTTPS-сайте cookie уходит и �
 бросать ошибку на непустые `host`/`hostname`/`protocol`/`auth` (или поддержать
 `href` как источник пути).
 
-### V4-13. Инлайн-объект `functions` у `FluentProvider` пересобирает бандл каждый рендер
+### V4-13. Инлайн-объект `functions` у `FluentProvider` пересобирает бандл каждый рендер (исправлено)
 
 `useMemo` зависит от ссылки `functions` (`src/client.ts:141`), а `functions`
 попадает в `getCachedFluentBundle`, где при непустом наборе **кеш отключён**
@@ -311,7 +318,7 @@ sameSite`, но не `secure` — на HTTPS-сайте cookie уходит и �
 детей, т.к. меняется значение контекста). Ошибки тут нет, но ловушка
 производительности; помогает memo у потребителя или хеширование набора ключей.
 
-### V4-14. Alternate links сохраняют route-параметры в query
+### V4-14. Alternate links сохраняют route-параметры в query (исправлено)
 
 `buildAlternateLinksHeader` копирует `search` как есть
 (`src/alternate-links.ts:89`), тогда как `resolveLocalizedPathname` вычищает из
@@ -332,7 +339,7 @@ SEO-шум, безобидно, но несогласованно.
 URL неоднозначны), а при `domains` `x-default` не выпускается никогда, хотя
 README обещает его «для каждого локализованного маршрута» (см. V4-11).
 
-### V4-15. Гигиена репозитория
+### V4-15. Гигиена репозитория (исправлено)
 
 * `.next-integration-1818/` (12 файлов) был **закоммичен** — тот самый
   скрэтч-каталог, про который `.gitignore` говорит «never commit» (остаток
@@ -404,12 +411,71 @@ README обещает его «для каждого локализованно�
 
 ## 7. Приоритеты для следующего прохода
 
-1. **V4-07** — раскладка каталогов: валидация имён локалей в `check` дешева и
-   снимает целый класс ложных отчётов.
-2. **V4-08/V4-09/V4-10** — кеширование и Host: предупреждение в dev + строка в
-   README стоят недорого, а касаются продакшн-поведения.
-3. **V4-06**, **V4-12**, **V4-13**, **V4-14** — точечные улучшения; каждое
-   закрывается тестом на существующем каркасе.
-4. **V4-16** — добить unit-ветки `server.ts` (request-scope, `setRequestLocale`,
-   `getFormats`) и провайдера: это код, который сейчас держится только на
-   интеграционном контуре.
+1. **V4-16 (хвост)** — ветки request-scope в `server.ts`: `getLocale()` по
+   заголовку/cookie, `setRequestLocale()` внутри запроса, снапшот request
+   config. В unit-контуре (`node --test`, без Next.js) `cache()` от `react`
+   возвращает новый объект на каждый вызов — проверено, — поэтому эти ветки
+   достижимы только из интеграционного приложения; нужен тест внутри
+   `scripts/test-next-integration.mjs` (route handler, который зовёт
+   `setRequestLocale` и `getLocale`) либо `AsyncLocalStorage`-совместимый мок.
+2. **Браузерные ячейки CI** — `test:next:domains` и `--browser` не
+   воспроизводились локально (нет `playwright install`); риск покрыт только
+   матрицей CI, при оценке регрессий опоры нет.
+3. **Политика версий** (из V3) — 0.1.0 без правила, когда минор может ломать
+   совместимость; `SECURITY.md` обещает «minor versions may contain breaking
+   changes», `CHANGELOG.md` ничего не обещает.
+
+---
+
+## 8. Проход 5 (04.10.2026): закрытие V4-06…V4-15
+
+Базовый коммит — `94b5224`. Ниже — что именно изменено и чем проверено; все
+числа получены на этой машине, а не перенесены из прошлых отчётов.
+
+### 8.1. Изменения
+
+| Файл | Изменение |
+| --- | --- |
+| `src/middleware.ts` | **V4-06**: в ветке «определённая локаль ≠ дефолтная» редирект сразу идёт на канонический слаг — `/about-us` + `Accept-Language: ru` → `307 /ru/o-nas` вместо цепочки из двух хопов. **V4-08**: helper `markDetected()` добавляет `Vary: Accept-Language, Cookie` только тем ответам, чья локаль выведена из cookie/`Accept-Language` (редиректы и rewrite); ответы, где локаль взята из URL, остаются без `Vary`. **V4-09**: одноразовый `console.warn` в dev, если редирект строится без `trustedHosts`. **V4-10**: `secure: NODE_ENV === 'production'` в дефолтах cookie. |
+| `src/catalog-io.ts` | **V4-07**: `localeFromCatalogName()` — локаль это самый длинный валидный префикс имени (`canonicalizeLocale`), `en-app.json` сливается в `en`, `pt_BR.ftl` → `pt-BR`; имена без валидного префикса остаются как есть, чтобы `__proto__` по-прежнему попадал в отчёт. |
+| `src/nav-url.ts` | **V4-12**: `absoluteUrlFromObject()` учитывает `protocol`/`host`/`hostname`/`auth`/`port`; относительный `href` становится сокращением пути (`{ href: '/docs', query: {…} }`); `javascript:`, `data:` и host с символами пути отклоняются до построения ссылки. |
+| `src/cache.ts`, `src/client.ts` | **V4-13**: кеш бандлов — `WeakMap` по объекту `functions` плюс `cacheGeneration`, который бампает `clearBundleCache()`; `useStableFunctions()` сохраняет идентичность для инлайн-литерала `functions={{…}}`, так что FTL не перепарсивается каждый рендер. |
+| `src/alternate-links.ts` | **V4-14**: параметры, поглощённые pathname, вычищаются из `search` во всех вариантах, включая `x-default`. |
+| `package.json` | **V4-15**: `!dist/index.js`, `!dist/index.d.ts` в `files` — этот агрегатный вход нужен только тестам; `check-dist` переведён на новый скрипт. |
+| `scripts/check-dist.mjs` | новый гейт вместо `git diff --exit-code dist/`: `git status --porcelain -uall -- dist/`. Прежняя проверка не видела **новых** файлов — ровно так `dist/cjs/types.cjs` и `dist/cjs/utils.cjs` могли не попасть в коммит. |
+| `scripts/size-budget.mjs` | бюджеты подняты на один шаг с обоснованием: измеренный вклад V4-12 — +284 B gzip / +603 B min, V4-13 — +141 B gzip / +290 B min; до правок запас составлял 45 B gzip, то есть любой фикс его пробивал. |
+| `README.md` | **V4-11**: буллет про кешируемость переписан (оговорка про `Set-Cookie` первому посетителю и `Vary`), буллет про `x-default` приведён к реальности, в разделе middleware описаны дефолты cookie и поведение `Vary`. |
+| `CHANGELOG.md` | девять записей прохода. |
+| `docs/AUDITS.md` | индекс четырёх проходов со статусами — вместо четырёх документов без точки входа. |
+| `test/audit-v5.test.mjs` | 20 тестов: один хоп, матрица `Vary`, `localeFromCatalogName`, слияние namespaced-каталога, `--reference pt-BR`, `Secure` под `NODE_ENV`, предупреждение `trustedHosts`, URL-объекты и враждебные объекты, кеш по объекту `functions`, alternate links. |
+| `test/audit-v5-coverage.test.mjs` | 19 тестов: ветки `plugin.ts` (алиасинг, цепочка конфигов, typegen, логирование ошибок), `server-provider.ts` (снапшот, `getStaticParams`), `server.ts` (`forLocale`, `getTranslations`, форматы, снапшот конфига), `client.ts` (провайдер, `useFormatter`/`useNow`, `FormattedMessage`), `catalog-io.ts` (битый JSON, `watchCatalogs`). |
+| `test/audit-v3.test.mjs` | ожидания двух тестов согласованы с one-hop. |
+
+### 8.2. Проверка
+
+| Проверка | Команда | Результат |
+| --- | --- | --- |
+| Сборка и синхронность `dist/` | `npm run build` + `npm run check-dist` | ✅ 0 изменённых и 0 новых файлов |
+| Линт / типы | `npm run lint`, `npm run typecheck` | ✅ 0 / 0 |
+| Тесты | `npm test` | ✅ **376/376** (34 файла; было 332) |
+| Покрытие | `node --test --experimental-test-coverage` | ✅ 96.65 % строк / 90.18 % ветвей / 94.95 % функций (было 94.76/89.55/94.17) |
+| Размеры | `npm run size` | ✅ 47.3/48.0 kB min, 16.0/16.5 kB gzip (root), 38.9/39.5 min и 13.5/13.8 gzip (`client`), 36.5/37.5 min и 12.5/13.0 gzip (own code); бюджеты подняты осознанно, см. 8.1 |
+| Edge / потребитель / типы | `npm run test:edge`, `test:consumer`, `test:types` | ✅ все три |
+| Next 15.5.26 / 16.3.8 | `npm run test:next`, `npm run test:next:16` | ✅ `/en`, `/ru`, `/en/about`, `/ru/about` пререндерены, RSC/routing-проверки пройдены |
+
+Покрытие по проблемным модулям: `client.js` 79 → 92 %, `plugin.js` 52 → 100 %,
+`server-provider.js` 22 → 100 %, `server.js` 62 → 75 %, `catalog-io.js` 87 → 94 %.
+
+Отдельно воспроизведено пробниками (в отчёте не поставляются): цепочка
+редиректов (`307 → /ru/o-nas → 200`), наличие/отсутствие `Vary` по типам
+ответов, `Secure` при `NODE_ENV=production` и его отсутствие в development,
+однократность предупреждения, слияние `en-app.json` в `en`, `javascript:`-объект
+отклонён, в alternate links `/dokumenty/7?id=7&q=x` → `?q=x`.
+
+### 8.3. Что осталось
+
+* **V4-16 (хвост)** — ветки request-scope в `server.ts`; см. §7, пункт 1.
+* **Браузерные прогоны** (`playwright` не установлен в этом окружении).
+* Размер клиента продолжает жить на границе бюджета: каждая новая функция в
+  клиентском графе требует явного решения, поднимать ли бюджет. Это не дефект,
+  но напоминание для следующего прохода.

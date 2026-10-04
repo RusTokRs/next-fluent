@@ -6,6 +6,15 @@ import type { NavigationConfig, Pathnames, UrlObject } from './types';
  */
 export declare function assertSafeHref(href: string): void;
 export declare function isExternalUrl(url: string): boolean;
+/**
+ * Absolute URL an object describes, when it carries its own origin.
+ *
+ * Next.js' `Url`/`UrlObject` may address another origin through `protocol` +
+ * `host`/`hostname` (+ `auth`/`port`), or through an absolute `href`. Dropping
+ * those fields silently rewrote the link to the current origin, so they are
+ * honoured instead — and validated, because `host` never comes from a catalog.
+ */
+export declare function absoluteUrlFromObject(urlObj: UrlObject): string | undefined;
 export declare function formatUrlObject(urlObj: UrlObject): {
     pathname: string;
     search: string;
