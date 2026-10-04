@@ -462,6 +462,8 @@ README обещает его «для каждого локализованно�
 | Размеры | `npm run size` | ✅ 47.3/48.0 kB min, 16.0/16.5 kB gzip (root), 38.9/39.5 min и 13.5/13.8 gzip (`client`), 36.5/37.5 min и 12.5/13.0 gzip (own code); бюджеты подняты осознанно, см. 8.1 |
 | Edge / потребитель / типы | `npm run test:edge`, `test:consumer`, `test:types` | ✅ все три |
 | Next 15.5.26 / 16.3.8 | `npm run test:next`, `npm run test:next:16` | ✅ `/en`, `/ru`, `/en/about`, `/ru/about` пререндерены, RSC/routing-проверки пройдены |
+| Публикация | `npm pack --dry-run --ignore-scripts` | ✅ 111 файлов, 140.0 kB packed; `dist/index.js` и `dist/index.d.ts` в пакет больше не попадают |
+| `dist/`-гейт на новых артефактах | незакоммиченные `dist/cjs/types.cjs`, `dist/cjs/utils.cjs` (до коммита) | ✅ exit 1 с перечислением файлов; старый `git diff` их не видел, а `npm pack` бы упаковал |
 
 Покрытие по проблемным модулям: `client.js` 79 → 92 %, `plugin.js` 52 → 100 %,
 `server-provider.js` 22 → 100 %, `server.js` 62 → 75 %, `catalog-io.js` 87 → 94 %.
