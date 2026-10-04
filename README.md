@@ -15,7 +15,7 @@ The high-performance Project Fluent alternative to `next-intl`.
 - **Full Type Safety**: Type generation powered by `@fluent/syntax` AST with TypeScript declaration merging (`declare global { interface FluentMessages extends AppMessages {} }`) and automatic namespace key autocompletion.
 - **Static Rendering**: `setRequestLocale()` keeps localized routes prerenderable (`●`/`○` in `next build`); the CI fixture asserts it.
 - **Production Error Handling**: `onError` / `getMessageFallback` with typed `FluentErrorCode`s instead of hard-coded `console` noise.
-- **Cacheable Responses**: the locale cookie is only written on document requests when it actually changes, and responses whose locale was *detected* (rather than spelled in the URL) carry `Vary: Accept-Language, Cookie` — so a shared cache never replays one visitor's language to the next. Prefixed pages like `/ru/about` stay plainly cacheable.
+- **Cacheable Responses**: the locale cookie is only written on document requests when the stored value changes — a returning visitor never invalidates a cached page — and responses whose locale was *detected* rather than spelled in the URL carry `Vary: Accept-Language, Cookie`, so a shared cache cannot replay one visitor's language to the next. The first hit from a cookie-less client does carry `Set-Cookie`; prefixed pages such as `/ru/about` stay shared-cacheable.
 - **SEO**: automatic `Link: <url>; rel="alternate"; hreflang="…"` headers for every localized route, `x-default` included when there is no domain routing.
 - **Bounded LRU Caching**: Resource and bundle caches verify exact source equality even when 32-bit hashes collide.
 - **Clean Standards**: Uses standard `NEXT_LOCALE` cookie and `x-next-locale` headers.
@@ -492,7 +492,7 @@ omitted; no header is emitted with fewer than two unambiguous variants, on
 redirects, or with `alternateLinks: false`. `x-default` is included only without
 domain routing and when the default URL is unambiguous.
 
-The cookie is only written for `Sec-Fetch-Dest: document` requests and only when the stored value changes, so prerendered pages keep `Cache-Control: s-maxage=…` instead of being invalidated on every hit. It is `Secure` in production by default.
+The cookie is only written for `Sec-Fetch-Dest: document` requests and only when the stored value changes, so a client that already has one keeps `Cache-Control: s-maxage=…` instead of invalidating the entry on every hit. A cookie-less client still receives `Set-Cookie` on its first response — that is why detection-derived responses vary on `Cookie` too — and the cookie is `Secure` in production by default.
 
 Requests whose locale comes from the cookie or `Accept-Language` (a prefix-less URL, or `/` in `as-needed`) are answered with `Vary: Accept-Language, Cookie`, because the same URL resolves differently per visitor. On a CDN this means such responses are cached per language rather than shared; if a route must be cached globally, either spell the locale in the URL or set `localeDetection: false` for that zone.
 
