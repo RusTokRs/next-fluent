@@ -101,6 +101,8 @@
   },
   "files": [
     "dist",
+    "!dist/index.js",
+    "!dist/index.d.ts",
     "bin",
     "plugin.d.cts",
     "src",
@@ -118,7 +120,7 @@
     "test:next:browser": "npm run build && node ./scripts/test-next-integration.mjs --browser",
     "test:next:domains": "npm run build && node ./scripts/test-domain-browser.mjs",
     "prepack": "npm run build",
-    "check-dist": "npm run build && git diff --ignore-space-at-eol --exit-code dist/",
+    "check-dist": "npm run build && node ./scripts/check-dist.mjs",
     "size": "node ./scripts/size-budget.mjs",
     "test:edge": "node ./scripts/check-edge-runtime.mjs",
     "ci": "npm run build && npm run check-dist && npm run lint && npm run typecheck && npm run test:edge && npm test && npm run test:consumer && npm run size",

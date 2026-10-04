@@ -430,74 +430,6 @@ export function createTranslator(
   };
 
   /**
-   * Returns every attribute of a message, in declaration order.
-   *
-   * `t('id')` only ever resolves the message value, so attributes such as
-   * `aria-label` or `title` needed `t('id.aria-label')` — one lookup per
-   * attribute, with the declaration order lost. Bidi isolation marks are
-   * stripped because attribute values end up in HTML attributes.
-   */
-  tFn.attrs = ((key: string, args?: FluentArgs): Record<string, string> => {
-    const built = buildFluentArgs(args as Record<string, unknown>);
-    const mergedArgs =
-      Object.keys(defaults.args).length > 0 || Object.keys(built.args).length > 0
-        ? { ...defaults.args, ...built.args }
-        : undefined;
-    const candidates = buildKeyCandidates(namespace, key, { strictNamespace });
-
-    for (const b of allBundles) {
-      for (const candidate of candidates) {
-        const msg = b.getMessage(candidate);
-        // A message without attributes must not shadow a fallback bundle that
-        // does define them.
-        if (!msg?.attributes || Object.keys(msg.attributes).length === 0) continue;
-
-        const result: Record<string, string> = {};
-        const errors: Error[] = [];
-        for (const [attrKey, pattern] of Object.entries(msg.attributes)) {
-          result[attrKey] = stripBidiIsolates(
-            b.formatPattern(pattern, mergedArgs, errors) as string
-          );
-        }
-        if (errors.length > 0) {
-          const details: FluentErrorDetails = built.rejected.length > 0
-            ? {
-                code: FluentErrorCode.INVALID_ARGUMENT,
-                key,
-                namespace,
-                locale: bundleLocale(b),
-                cause: { unsupportedArguments: built.rejected, errors },
-              }
-            : {
-                code: FluentErrorCode.FORMATTING_ERROR,
-                key,
-                namespace,
-                locale: bundleLocale(b),
-                cause: errors,
-              };
-          report(details);
-          return {};
-        }
-        return result;
-      }
-    }
-
-    report({ code: FluentErrorCode.MISSING_MESSAGE, key, namespace });
-    return {};
-  }) as Translations['attrs'];
-
-  /**
-   * Formats a message to plain text, dropping rich-text markers instead of
-   * throwing (unlike `t()`) or returning React nodes (unlike `t.rich()`).
-   * Useful for `aria-label`, `title`, `alt` and `<meta>` content where the
-   * catalog shares one rich message with the visible UI.
-   */
-  tFn.plain = ((key: string, args?: FluentArgs): string => {
-    const built = buildFluentArgs(args as Record<string, unknown>);
-    return stripRichText(formatKey(key, built.args, built.rejected));
-  }) as Translations['plain'];
-
-  /**
    * Every attribute of a message, in declaration order.
    *
    * `t('id')` resolves the message value, so attributes such as `aria-label`
@@ -571,11 +503,23 @@ export function createTranslator(
     return stripRichText(formatKey(key, built.args, built.rejected));
   }) as Translations['plain'];
 
+  /**
+   * Reports whether `t(key)` can render something for this key.
+   *
+   * A Fluent message may exist with attributes only and no value; `t()` cannot
+   * format such a message (it falls back to the key), so `has()` must not claim
+   * it is renderable — `FormattedMessage` uses the answer to decide whether to
+   * show its `fallback`. Attribute *paths* (`id.attr`) stay queryable: they are
+   * exactly what `t.attrs('id')`/`t.plain('id.attr')` render.
+   */
   tFn.has = (key: string): boolean => {
     const candidates = buildKeyCandidates(namespace, key, { strictNamespace });
     for (const candidate of candidates) {
       for (const b of allBundles) {
-        if (b.hasMessage(candidate)) return true;
+        const message = b.getMessage(candidate);
+        // `value` is null for a message that only carries attributes; every
+        // alias `t()` would try is already enumerated by buildKeyCandidates.
+        if (message?.value != null) return true;
         const lastDot = candidate.lastIndexOf('.');
         if (lastDot !== -1) {
           const msgId = candidate.slice(0, lastDot);

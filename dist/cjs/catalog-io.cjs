@@ -33,6 +33,7 @@ __export(catalog_io_exports, {
   collectCatalogFiles: () => collectCatalogFiles,
   collectSourceFiles: () => collectSourceFiles,
   isCatalogFile: () => isCatalogFile,
+  localeFromCatalogName: () => localeFromCatalogName,
   readCatalog: () => readCatalog,
   readCatalogsByLocale: () => readCatalogsByLocale,
   watchCatalogs: () => watchCatalogs,
@@ -43,6 +44,7 @@ var import_node_fs = __toESM(require("node:fs"), 1);
 var import_node_path = __toESM(require("node:path"), 1);
 var import_catalog = require("./catalog.cjs");
 var import_typegen = require("./typegen.cjs");
+var import_utils = require("./utils.cjs");
 const CATALOG_EXTENSIONS = [".ftl", ".json"];
 const DEFAULT_CATALOG_DIRS = ["messages", "locales", "src/messages", "src/locales"];
 function isCatalogFile(name) {
@@ -81,6 +83,17 @@ function readCatalog(file) {
     );
   }
 }
+function localeFromCatalogName(name) {
+  const direct = (0, import_utils.canonicalizeLocale)(name);
+  if (direct) return direct;
+  for (let index = name.length - 1; index > 0; index--) {
+    const separator = name[index];
+    if (separator !== "-" && separator !== "_" && separator !== ".") continue;
+    const candidate = (0, import_utils.canonicalizeLocale)(name.slice(0, index));
+    if (candidate) return candidate;
+  }
+  return name;
+}
 function readCatalogsByLocale(dir) {
   const catalogs = /* @__PURE__ */ Object.create(null);
   for (const entry of import_node_fs.default.readdirSync(dir, { withFileTypes: true }).sort(
@@ -89,9 +102,9 @@ function readCatalogsByLocale(dir) {
     const full = import_node_path.default.join(dir, entry.name);
     if (entry.isDirectory()) {
       const files = collectCatalogFiles(full);
-      if (files.length > 0) catalogs[entry.name] = files.map(readCatalog);
+      if (files.length > 0) catalogs[localeFromCatalogName(entry.name)] = files.map(readCatalog);
     } else if (entry.isFile() && isCatalogFile(entry.name)) {
-      const locale = import_node_path.default.basename(entry.name, import_node_path.default.extname(entry.name));
+      const locale = localeFromCatalogName(import_node_path.default.basename(entry.name, import_node_path.default.extname(entry.name)));
       (catalogs[locale] ??= []).push(readCatalog(full));
     }
   }
@@ -180,6 +193,18 @@ function watchCatalogs(input, output, handlers = {}) {
       clearTimeout(timer);
     };
   }
+  let stats;
+  try {
+    stats = import_node_fs.default.statSync(input, { throwIfNoEntry: false });
+  } catch {
+    stats = void 0;
+  }
+  if (!stats?.isDirectory()) {
+    handlers.onError?.(
+      new Error(`[next-fluent] Cannot watch ${input}: it is not a directory.`)
+    );
+    return () => clearTimeout(timer);
+  }
   let watcher;
   try {
     watcher = import_node_fs.default.watch(input, { recursive: true }, (_event, filename) => {
@@ -190,6 +215,7 @@ function watchCatalogs(input, output, handlers = {}) {
     handlers.onError?.(error);
     return () => clearTimeout(timer);
   }
+  watcher.on("error", (error) => handlers.onError?.(error));
   return () => {
     clearTimeout(timer);
     watcher.close();
@@ -202,6 +228,7 @@ function watchCatalogs(input, output, handlers = {}) {
   collectCatalogFiles,
   collectSourceFiles,
   isCatalogFile,
+  localeFromCatalogName,
   readCatalog,
   readCatalogsByLocale,
   watchCatalogs,

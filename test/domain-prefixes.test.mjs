@@ -319,9 +319,18 @@ for (const mode of ['always', 'as-needed', 'never']) {
     const publicPath = mode === 'always' ? '/english/shared' : '/shared';
     const result = await mw(request(publicPath, 'localhost:3000'));
     assert.equal(result.headers.get('x-middleware-rewrite'), 'http://localhost:3000/en/shared');
-    const second = await mw(request('/en/shared', 'localhost:3000', { 'x-next-fluent-rewrite': '/en/shared' }));
+    // The second pass replays the headers the first pass attached, including
+    // the per-process token.
+    const forwarded = result.request.headers;
+    const second = await mw(request('/en/shared', 'localhost:3000', {
+      'x-next-fluent-rewrite': forwarded.get('x-next-fluent-rewrite'),
+      'x-next-fluent-rewrite-token': forwarded.get('x-next-fluent-rewrite-token'),
+    }));
     assert.equal(second.headers.get('location'), null);
     assert.equal(second.headers.get('x-middleware-rewrite'), null);
+    // Guessing the pathname is not enough: a forged signal still canonicalizes.
+    const forged = await mw(request('/en/shared', 'localhost:3000', { 'x-next-fluent-rewrite': '/en/shared' }));
+    assert.equal(forged.headers.get('location'), `http://localhost:3000${publicPath}`);
     const router = await mw(request('/en/shared', 'localhost:3000', { 'sec-fetch-dest': 'empty' }));
     assert.equal(router.headers.get('location'), null);
     assert.equal(router.headers.get('x-middleware-rewrite'), null);

@@ -42,7 +42,7 @@ export interface SourceFile {
     path: string;
     content: string;
 }
-declare const CALL_METHODS: readonly ["rich", "attrs", "plain", "markup", "has", "exists"];
+declare const CALL_METHODS: readonly ["raw", "rich", "attrs", "plain", "has"];
 type CallMethod = (typeof CALL_METHODS)[number];
 /** Comment marker exempting a call site from the usage report. */
 export declare const IGNORE_MARKER = "next-fluent-ignore";

@@ -71,6 +71,26 @@ export function buildAlternateLinksHeader(options: AlternateLinksOptions): strin
   const template = options.internalTemplate ?? match?.template;
   const params = match?.params ?? {};
 
+  // Route parameters that also appear in the query were consumed by the
+  // pathname: `/dokumenty/7?id=7` must not advertise `?id=7` in the alternates
+  // any more than `resolveLocalizedPathname` keeps it in a navigation href.
+  const consumedParams = new Set(Object.keys(params));
+  const cleanSearch = (value: string): string => {
+    if (consumedParams.size === 0 || !value) return value;
+    const query = new URLSearchParams(value.startsWith('?') ? value.slice(1) : value);
+    let removed = false;
+    for (const name of consumedParams) {
+      if (query.has(name)) {
+        query.delete(name);
+        removed = true;
+      }
+    }
+    if (!removed) return value;
+    const remaining = query.toString();
+    return remaining ? `?${remaining}` : '';
+  };
+  const sanitizedSearch = cleanSearch(search);
+
   const base = new URL(origin);
   const basePathname = (path: string) => `${basePath}${path === '/' && basePath ? '' : path}`;
 
@@ -86,7 +106,7 @@ export function buildAlternateLinksHeader(options: AlternateLinksOptions): strin
     const path = withLocalePrefix(rendered, locale, domain?.defaultLocale ?? defaultLocale, targetPrefix);
     const url = domain ? new URL(`https://${domain.domain}`) : new URL(base);
     url.pathname = basePathname(path);
-    url.search = search;
+    url.search = sanitizedSearch;
     variants.push({ href: url.toString(), locale });
   }
 
@@ -108,7 +128,7 @@ export function buildAlternateLinksHeader(options: AlternateLinksOptions): strin
     );
     const url = new URL(base);
     url.pathname = basePathname(defaultPath);
-    url.search = search;
+    url.search = sanitizedSearch;
     if (unique.some(({ href }) => href === url.toString())) {
       links.push(`<${url.toString()}>; rel="alternate"; hreflang="x-default"`);
     }

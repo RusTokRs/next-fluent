@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { jsonToFluent } from './catalog';
 import { generateTypeDeclarations } from './typegen';
+import { canonicalizeLocale } from './utils';
 
 /**
  * Node-side catalog I/O shared by the CLI and the Next.js plugin.
@@ -65,6 +66,31 @@ export function readCatalog(file: string): string {
   }
 }
 
+/**
+ * Locale a catalog name belongs to: `en` → `en`, `en-app` → `en`.
+ *
+ * A flat `en-app.json` is a namespaced catalog for `en`, not a locale called
+ * `en-app` (`Intl` rejects that tag), and treating it as one made `check`
+ * compare the FTL catalogs against a JSON namespace file — and even elect it as
+ * the reference locale, because `en-app` sorts before `en`/`ru`. The locale is
+ * the longest valid tag prefix of the name; the remainder is a namespace label
+ * that only decides which files are merged.
+ *
+ * Names that are not locale-like at all keep their raw stem, so a catalog such
+ * as `__proto__.ftl` is still reported instead of being dropped or crashing.
+ */
+export function localeFromCatalogName(name: string): string {
+  const direct = canonicalizeLocale(name);
+  if (direct) return direct;
+  for (let index = name.length - 1; index > 0; index--) {
+    const separator = name[index];
+    if (separator !== '-' && separator !== '_' && separator !== '.') continue;
+    const candidate = canonicalizeLocale(name.slice(0, index));
+    if (candidate) return candidate;
+  }
+  return name;
+}
+
 /** Groups catalogs by locale: `messages/en.ftl` or `messages/en/app.ftl` → `en`. */
 export function readCatalogsByLocale(dir: string): Record<string, string[]> {
   // Null prototype: a catalog named `__proto__.ftl` must be a normal key, not a
@@ -76,9 +102,9 @@ export function readCatalogsByLocale(dir: string): Record<string, string[]> {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       const files = collectCatalogFiles(full);
-      if (files.length > 0) catalogs[entry.name] = files.map(readCatalog);
+      if (files.length > 0) catalogs[localeFromCatalogName(entry.name)] = files.map(readCatalog);
     } else if (entry.isFile() && isCatalogFile(entry.name)) {
-      const locale = path.basename(entry.name, path.extname(entry.name));
+      const locale = localeFromCatalogName(path.basename(entry.name, path.extname(entry.name)));
       (catalogs[locale] ??= []).push(readCatalog(full));
     }
   }
@@ -226,6 +252,23 @@ export function watchCatalogs(
     };
   }
 
+  // `fs.watch` does not fail consistently: on Linux/Node 22 a missing directory
+  // throws synchronously, but Node 24 and Windows hand back a watcher that never
+  // fires and never reports, leaving the dev watcher silently dead. Checking the
+  // target first turns that into the `onError` the callers already expect.
+  let stats: fs.Stats | undefined;
+  try {
+    stats = fs.statSync(input, { throwIfNoEntry: false });
+  } catch {
+    stats = undefined;
+  }
+  if (!stats?.isDirectory()) {
+    handlers.onError?.(
+      new Error(`[next-fluent] Cannot watch ${input}: it is not a directory.`)
+    );
+    return () => clearTimeout(timer);
+  }
+
   let watcher: fs.FSWatcher;
   try {
     watcher = fs.watch(input, { recursive: true }, (_event, filename) => {
@@ -236,6 +279,11 @@ export function watchCatalogs(
     handlers.onError?.(error as Error);
     return () => clearTimeout(timer);
   }
+
+  // Errors raised after the watcher exists (the directory disappears, the
+  // inotify limit is reached) are emitted asynchronously; without a listener
+  // Node treats them as uncaught exceptions.
+  watcher.on('error', (error) => handlers.onError?.(error as Error));
 
   return () => {
     clearTimeout(timer);

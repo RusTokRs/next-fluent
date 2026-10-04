@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, forwardRef, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, forwardRef, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import NextLink from 'next/link.js';
 import { domainLocalePrefix, findLocaleDomain } from './domain-routing';
 import type { FluentBundle, FluentFunction } from '@fluent/bundle';
@@ -53,6 +53,45 @@ const FluentContext = createContext<FluentContextValue>({
 
 /** Stable SSR/hydration fallback so `useNow()` never causes markup mismatch. */
 const STATIC_NOW = new Date(0);
+
+/**
+ * Keeps the identity of a `functions` prop stable across renders.
+ *
+ * `getCachedFluentBundle` disables the bundle cache whenever custom functions
+ * are present, and the provider memoizes on the `functions` reference — so the
+ * common `functions={{ plural }}` literal rebuilt the whole catalog (and every
+ * descendant translator) on each render. Comparing the entries lets the same
+ * functions keep one identity; genuinely new closures still rebuild, as they
+ * must.
+ */
+function useStableFunctions(
+  functions?: Record<string, FluentFunction>
+): Record<string, FluentFunction> | undefined {
+  const ref = useRef<{
+    keys: string[];
+    values: FluentFunction[];
+    stable: Record<string, FluentFunction>;
+  } | null>(null);
+
+  if (!functions) {
+    ref.current = null;
+    return undefined;
+  }
+
+  const keys = Object.keys(functions).sort();
+  const current = ref.current;
+  if (
+    current &&
+    current.keys.length === keys.length &&
+    keys.every((key, index) => current.keys[index] === key && current.values[index] === functions[key])
+  ) {
+    return current.stable;
+  }
+
+  const stable = { ...functions };
+  ref.current = { keys, values: keys.map((key) => functions[key]), stable };
+  return stable;
+}
 
 export interface FluentProviderProps {
   locale: string;
@@ -108,6 +147,8 @@ export function FluentProvider({
     [fallbackMessages]
   );
 
+  const stableFunctions = useStableFunctions(functions);
+
   // The hash is derived from `normalizedMessages`; the raw prop is only checked
   // for its shape, which cannot change without the normalized value changing.
   const messagesKey = useMemo(
@@ -134,21 +175,27 @@ export function FluentProvider({
   const bundle = useMemo<FluentBundle | null>(() => {
     if (!normalizedMessages) return null;
     if (typeof normalizedMessages === 'string' || Array.isArray(normalizedMessages)) {
-      return createFluentBundle(locale, normalizedMessages as string | readonly string[], { functions, useIsolating });
+      return createFluentBundle(locale, normalizedMessages as string | readonly string[], {
+        functions: stableFunctions,
+        useIsolating,
+      });
     }
     return normalizedMessages as FluentBundle;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [locale, bundleIdentity, functions, useIsolating]);
+  }, [locale, bundleIdentity, stableFunctions, useIsolating]);
 
   const fallbackBundle = useMemo<FluentBundle | null>(() => {
     if (!normalizedFallbackMessages) return null;
     const fLocale = fallbackLocale || 'en';
     if (typeof normalizedFallbackMessages === 'string' || Array.isArray(normalizedFallbackMessages)) {
-      return createFluentBundle(fLocale, normalizedFallbackMessages as string | readonly string[], { functions, useIsolating });
+      return createFluentBundle(fLocale, normalizedFallbackMessages as string | readonly string[], {
+        functions: stableFunctions,
+        useIsolating,
+      });
     }
     return normalizedFallbackMessages as FluentBundle;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fallbackLocale, fallbackBundleIdentity, functions, useIsolating]);
+  }, [fallbackLocale, fallbackBundleIdentity, stableFunctions, useIsolating]);
 
   const resolvedFallbackBundles = useMemo<readonly FluentBundle[] | undefined>(() => {
     if (fallbackBundles) {
@@ -173,7 +220,7 @@ export function FluentProvider({
       fallbackBundles: resolvedFallbackBundles,
       timeZone,
       now,
-      functions,
+      functions: stableFunctions,
       defaultTranslationValues,
       debug,
       strictNamespace,
@@ -190,7 +237,7 @@ export function FluentProvider({
       resolvedFallbackBundles,
       timeZone,
       now,
-      functions,
+      stableFunctions,
       defaultTranslationValues,
       debug,
       strictNamespace,

@@ -25,8 +25,30 @@ function assertSafeHref(href) {
 function isExternalUrl(url) {
   return /^(?:[a-zA-Z][a-zA-Z\d+\-.]*:|\/\/|\\\\)/.test(url);
 }
+function absoluteUrlFromObject(urlObj) {
+  const href = typeof urlObj.href === "string" && urlObj.href.length > 0 ? urlObj.href : void 0;
+  if (href && isExternalUrl(href)) return href;
+  const host = typeof urlObj.hostname === "string" && urlObj.hostname ? urlObj.hostname : typeof urlObj.host === "string" && urlObj.host ? urlObj.host : void 0;
+  const protocol = typeof urlObj.protocol === "string" ? urlObj.protocol.replace(/:$/, "") : "";
+  if (!host) return void 0;
+  if (!/^[^\s/?#@\\]+$/.test(host)) {
+    throw new Error("[next-fluent] URL object host must not contain path, query or control characters.");
+  }
+  if (protocol && protocol !== "http" && protocol !== "https") {
+    throw new Error(`[next-fluent] Unsupported URL object protocol: "${protocol}".`);
+  }
+  const port = urlObj.port !== void 0 && urlObj.port !== null && `${urlObj.port}`.length > 0 ? `:${urlObj.port}` : "";
+  const auth = typeof urlObj.auth === "string" && urlObj.auth ? `${urlObj.auth}@` : "";
+  const path = typeof urlObj.pathname === "string" && urlObj.pathname ? urlObj.pathname : "/";
+  const search = typeof urlObj.search === "string" ? urlObj.search : "";
+  const hash = typeof urlObj.hash === "string" ? urlObj.hash : "";
+  const url = `${protocol || "https"}://${auth}${host}${port}${path}${search}${hash}`;
+  assertSafeHref(url);
+  return url;
+}
 function formatUrlObject(urlObj) {
-  let pathname = urlObj.pathname ?? "/";
+  const relativeHref = typeof urlObj.href === "string" && urlObj.href.length > 0 && !isExternalUrl(urlObj.href) ? urlObj.href : void 0;
+  let pathname = urlObj.pathname ?? relativeHref ?? "/";
   let embeddedSearch = "";
   let embeddedHash = "";
   const hashIdx = pathname.indexOf("#");
@@ -109,9 +131,10 @@ function resolveLocalizedPathname(options, config) {
     rawPathname = searchIndex !== -1 ? pathAndSearch.slice(0, searchIndex) : pathAndSearch;
     search = searchIndex !== -1 ? pathAndSearch.slice(searchIndex) : "";
   } else if (href && typeof href === "object") {
-    if (href.href && isExternalUrl(href.href)) {
-      assertSafeHref(href.href);
-      return href.href;
+    const absolute = absoluteUrlFromObject(href);
+    if (absolute !== void 0) {
+      assertSafeHref(absolute);
+      return absolute;
     }
     const parts = formatUrlObject(href);
     rawPathname = parts.pathname;
@@ -197,6 +220,7 @@ function rewriteToInternalPath(pathname, locale, locales, pathnames) {
   return pathname;
 }
 export {
+  absoluteUrlFromObject,
   assertSafeHref,
   formatUrlObject,
   isExternalUrl,

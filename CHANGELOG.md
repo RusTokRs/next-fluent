@@ -136,6 +136,64 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **The catalog watcher reports an unwatchable directory.** `fs.watch` on a
+  missing path throws on Linux/Node 22 but returns a silent, never-firing
+  watcher on Node 24 and Windows — so `next dev` could stop regenerating types
+  without a word, and an asynchronous watcher error crashed the process because
+  nothing listened for it. `watchCatalogs` now stats the directory up front and
+  reports through `onError`, and the watcher has an `'error'` handler.
+- **One redirect instead of two when the locale is detected.** A visitor with
+  `Accept-Language: ru` asking for a shared slug (`/about-us`) was sent to
+  `/ru/about-us` and only then to the canonical `/ru/o-nas`. Detection and slug
+  canonicalization now happen in the same hop.
+- **Detection-derived responses carry `Vary: Accept-Language, Cookie`.** The
+  target of a prefix-less request depends on the cookie and the header, and a
+  shared cache that ignored them could replay one visitor's language to the
+  next. Prefixed URLs are unaffected and stay cacheable.
+- **`Secure` on the locale cookie in production.** The default cookie options
+  are now `{ path: '/', maxAge: 31536000, sameSite: 'lax', secure: NODE_ENV ===
+  'production' }` and remain overridable through `localeCookie`.
+- **`next dev` warns when `trustedHosts` is missing.** Redirect targets are
+  built from the request's `Host` header in that case; the warning fires once on
+  the first redirect and never in production.
+- **Catalog file names are locales again, not namespace labels.**
+  `messages/en-app.json` used to become a locale called `en-app` — it was
+  compared against the real locales, and because it sorted first it was even
+  elected as the reference. The locale is now the longest valid tag prefix of
+  the name (`en-app` → `en`, `pt_BR.ftl` → `pt-BR`), so a namespaced catalog
+  joins its locale, and `check` compares `en` with `ru`.
+- **URL objects keep the origin they were given.** `{ href: '/docs' }` used to
+  resolve to `/`, and `{ protocol, host/hostname }` was silently rewritten to the
+  current origin. A relative `href` is now a path shorthand, an absolute URL
+  object is honored, and an unsupported protocol (`javascript:`) or a host
+  carrying path characters is rejected instead of leaking.
+- **Bundles built with custom Fluent functions are cached per functions
+  object.** A module-level functions table (or the stable identity
+  `FluentProvider` now keeps) no longer re-parses the catalog on every render or
+  request; `clearBundleCache()` still invalidates them.
+- **Alternate links no longer repeat route parameters in the query.**
+  `/ru/dokumenty/7?id=7` advertised `?id=7` on every variant; parameters consumed
+  by the pathname are dropped, exactly like `resolveLocalizedPathname` does
+  for hrefs.
+
+- **`t.has()` answers whether the key is renderable.** A Fluent message may
+  define attributes only (`id =` with `.attr = …` and no value); `t()` cannot
+  format it, but `has()` used to report `true`, so `<FormattedMessage fallback>`
+  rendered the raw key instead of the fallback. `has()` now matches what `t()`
+  can resolve — `true` for messages with a value and for attribute paths,
+  `false` for value-less ids and missing keys. The usage analyzer already
+  treats `t.has()` probes as legitimate references.
+- **The middleware rewrite signal is no longer forgeable.** The second pass
+  Next.js performs after `NextResponse.rewrite()` is recognized by
+  `x-next-fluent-rewrite` **plus** a random per-process token, so a request that
+  merely guesses the pathname (`GET /en/about` with
+  `x-next-fluent-rewrite: /en/about`) can no longer pin the internal alias as a
+  non-canonical duplicate — it canonicalizes to `/about-us` again under both
+  Next 15 and Next 16. Loop prevention is unchanged: the genuine second pass
+  still carries the signal, and the `sec-fetch-dest` fast path still covers the
+  router fetches Next 16 performs for client-side navigations. The internal
+  headers never reach the application.
+
 - **Deeply immutable routing definitions.** `defineRouting()` copies and freezes
   supported nested settings instead of sharing mutable prefix maps, pathnames,
   domain entries, cookie options and trusted hosts with the caller. The copied

@@ -149,11 +149,42 @@ test('V3-02: a client-supplied rewrite header cannot skip canonicalization', asy
   assert.equal(new URL(always.headers.get('x-middleware-rewrite')).pathname, '/ru/about');
 });
 
+test('V3-02: the pathname header alone cannot pin a non-canonical URL', async () => {
+  // `/en/about` is the internal rewrite target of `/about-us`; serving it as a
+  // document would duplicate the canonical URL. Guessing the header value used
+  // to be enough, so it is now bound to a per-process token.
+  const mw = createI18nMiddleware(routing);
+  const forged = await mw(
+    mockRequest('/en/about', { 'x-next-fluent-rewrite': '/en/about' })
+  );
+  assert.equal(forged.status, 307);
+  assert.equal(new URL(forged.headers.get('location')).pathname, '/about-us');
+
+  const forgedWithBogusToken = await mw(
+    mockRequest('/en/about', {
+      'x-next-fluent-rewrite': '/en/about',
+      'x-next-fluent-rewrite-token': 'not-the-token',
+    })
+  );
+  assert.equal(forgedWithBogusToken.status, 307);
+  assert.equal(new URL(forgedWithBogusToken.headers.get('location')).pathname, '/about-us');
+});
+
 test('V3-02: the signal still prevents the as-needed default-locale redirect loop', async () => {
   const mw = createI18nMiddleware(routing);
-  // Second pass Next.js performs after rewriting /about-us -> /en/about.
+  // First pass: /about-us is served by rewriting to the internal /en/about.
+  const first = await mw(mockRequest('/about-us'));
+  assert.equal(new URL(first.headers.get('x-middleware-rewrite')).pathname, '/en/about');
+
+  // The second pass Next.js performs on that rewrite: it forwards the headers
+  // the first pass attached, including the token. Replaying them verbatim is
+  // what the runtime does, so the test exercises the real contract.
+  const forwarded = first.request.headers;
   const secondPass = await mw(
-    mockRequest('/en/about', { 'x-next-fluent-rewrite': '/en/about' })
+    mockRequest('/en/about', {
+      'x-next-fluent-rewrite': forwarded.get('x-next-fluent-rewrite'),
+      'x-next-fluent-rewrite-token': forwarded.get('x-next-fluent-rewrite-token'),
+    })
   );
   assert.equal(secondPass.headers.get('x-middleware-next'), '1');
   assert.equal(secondPass.headers.get('location'), null);
@@ -163,10 +194,16 @@ test('V3-02: the signal still prevents the as-needed default-locale redirect loo
 test('V3-02: the client-supplied signal header is never forwarded to the app', async () => {
   const mw = createI18nMiddleware(routing);
   const response = await mw(
-    mockRequest('/ru/o-nas', { 'x-next-fluent-rewrite': '/ru/o-nas' })
+    mockRequest('/ru/o-nas', {
+      'x-next-fluent-rewrite': '/ru/o-nas',
+      'x-next-fluent-rewrite-token': 'client-token',
+    })
   );
   const forwarded = response.request.headers;
   assert.equal(forwarded.get('x-next-fluent-rewrite'), '/ru/about');
+  const token = forwarded.get('x-next-fluent-rewrite-token');
+  assert.ok(token, 'the rewrite must carry its own token');
+  assert.notEqual(token, 'client-token', 'a client token must be replaced, not forwarded');
 });
 
 // ---------------------------------------------------------------------------
@@ -199,9 +236,15 @@ test('V3-06b: the canonical slug still resolves to the internal route', async ()
 test('V3-06c: the canonical redirect does not loop on the rewritten pathname', async () => {
   const mw = createI18nMiddleware(routing);
   // Next.js runs the middleware again for the internal pathname the rewrite
-  // points at. Without the signal header that pass would redirect back.
+  // points at, forwarding the headers the first pass attached. Without that
+  // signal the pass would redirect back.
+  const first = await mw(mockRequest('/ru/o-nas'));
+  const forwarded = first.request.headers;
   const response = await mw(
-    mockRequest('/ru/about', { 'x-next-fluent-rewrite': '/ru/about' })
+    mockRequest('/ru/about', {
+      'x-next-fluent-rewrite': forwarded.get('x-next-fluent-rewrite'),
+      'x-next-fluent-rewrite-token': forwarded.get('x-next-fluent-rewrite-token'),
+    })
   );
   assert.equal(response.status, 200);
   assert.equal(response.headers.get('location'), null);
@@ -277,7 +320,10 @@ test('V3-04: localeDetection:false ignores cookie and Accept-Language', async ()
 
   const detecting = createI18nMiddleware(routing);
   const detected = await detecting(mockRequest('/about-us', { 'accept-language': 'ru' }));
-  assert.equal(new URL(detected.headers.get('location')).pathname, '/ru/about-us');
+  // Detection and slug canonicalization happen in one hop: the visitor asking
+  // for the generic `/about-us` while preferring Russian lands on the Russian
+  // slug directly instead of being redirected twice.
+  assert.equal(new URL(detected.headers.get('location')).pathname, '/ru/o-nas');
 });
 
 // ---------------------------------------------------------------------------
@@ -437,10 +483,22 @@ test('V3-19: a localized slug serves its own locale without a cookie', async () 
 test('V3-19b: the default locale slug does not override Accept-Language', async () => {
   // The default locale's slug is the generic form every visit can land on, so
   // it must not outrank detection — otherwise an ordinary Russian visitor
-  // asking for /about-us would be pinned to English.
+  // asking for /about-us would be pinned to English. The redirect goes straight
+  // to the Russian slug; two hops would cost every such visitor a round trip.
   const mw = createI18nMiddleware(routing);
   const response = await mw(mockRequest('/about-us', { 'accept-language': 'ru' }));
-  assert.equal(new URL(response.headers.get('location')).pathname, '/ru/about-us');
+  assert.equal(new URL(response.headers.get('location')).pathname, '/ru/o-nas');
+
+  const chain = [];
+  let current = '/about-us';
+  for (let hop = 0; hop < 3; hop++) {
+    const step = await mw(mockRequest(current, { 'accept-language': 'ru' }));
+    const location = step.headers.get('location');
+    chain.push(`${step.status}${location ? `->${new URL(location).pathname}` : ''}`);
+    if (!location || step.status !== 307) break;
+    current = new URL(location).pathname;
+  }
+  assert.deepEqual(chain, ['307->/ru/o-nas', '200'], 'a single redirect must reach the page');
 });
 
 test('V3-19c: an explicit locale cookie outranks the slug', async () => {

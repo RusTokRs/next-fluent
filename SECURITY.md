@@ -33,6 +33,11 @@ The following are in scope and have been hardened explicitly:
 - **Open redirects and host-header injection.** Redirect targets come only from
   the trusted `domains` config or the request's own origin; `trustedHosts`
   rejects a foreign `Host` with `421 Misdirected Request` before any redirect.
+- **Canonical-URL pinning through the internal rewrite signal.** The headers the
+  middleware attaches to its own rewrites (`x-next-fluent-rewrite` and its
+  per-process token) cannot be forged from outside: guessing the pathname is not
+  enough to make a non-canonical URL such as `/en/about` render instead of
+  redirecting to `/about-us`, and neither header is forwarded to the app.
 - **`javascript:` and friends in hrefs.** `assertSafeHref` normalizes the way a
   browser does, so tab- and NUL-obfuscated schemes are rejected too.
 - **Path traversal and prototype pollution** in catalog loading, including

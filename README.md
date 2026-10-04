@@ -15,8 +15,8 @@ The high-performance Project Fluent alternative to `next-intl`.
 - **Full Type Safety**: Type generation powered by `@fluent/syntax` AST with TypeScript declaration merging (`declare global { interface FluentMessages extends AppMessages {} }`) and automatic namespace key autocompletion.
 - **Static Rendering**: `setRequestLocale()` keeps localized routes prerenderable (`●`/`○` in `next build`); the CI fixture asserts it.
 - **Production Error Handling**: `onError` / `getMessageFallback` with typed `FluentErrorCode`s instead of hard-coded `console` noise.
-- **Cacheable Responses**: the locale cookie is only written on document requests when it actually changes, so static pages stay CDN-cacheable.
-- **SEO**: automatic `Link: <url>; rel="alternate"; hreflang="…"` headers (including `x-default`) for every localized route.
+- **Cacheable Responses**: the locale cookie is only written on document requests when the stored value changes — a returning visitor never invalidates a cached page — and responses whose locale was *detected* rather than spelled in the URL carry `Vary: Accept-Language, Cookie`, so a shared cache cannot replay one visitor's language to the next. The first hit from a cookie-less client does carry `Set-Cookie`; prefixed pages such as `/ru/about` stay shared-cacheable.
+- **SEO**: automatic `Link: <url>; rel="alternate"; hreflang="…"` headers for every localized route, `x-default` included when there is no domain routing.
 - **Bounded LRU Caching**: Resource and bundle caches verify exact source equality even when 32-bit hashes collide.
 - **Clean Standards**: Uses standard `NEXT_LOCALE` cookie and `x-next-locale` headers.
 
@@ -242,7 +242,7 @@ export const config = {
 };
 ```
 
-> **Hardening**: pass `trustedHosts` (e.g. `createI18nMiddleware({ ...routing, trustedHosts: ['example.com', '*.example.com'] })`) to reject foreign `Host` headers with `421 Misdirected Request` before any redirect is issued — recommended when responses may be cached by shared caches or CDNs.
+> **Hardening**: pass `trustedHosts` (e.g. `createI18nMiddleware({ ...routing, trustedHosts: ['example.com', '*.example.com'] })`) to reject foreign `Host` headers with `421 Misdirected Request` before any redirect is issued — recommended when responses may be cached by shared caches or CDNs. Without it, redirect targets are built from the request's `Host` header, and `next dev` prints a one-time warning on the first redirect.
 
 ### 5. Root Layout (`app/[locale]/layout.tsx`)
 
@@ -377,6 +377,7 @@ const content = t.rich('welcome-banner', {
 - `t.rich(key, args?)` and `<FormattedMessage />` are the only APIs that produce React nodes. Tags in messages are **attribute-free** (`<link>docs</link>`, `<br/>`); attributes belong on the component you pass in. Unsupported markup such as `<a href="…">` is left as escaped text rather than turned into HTML.
 - `t.attrs(key, args?)` returns **every attribute of a message in declaration order** — `{ label, 'aria-label', title }` — for spreading onto an element. Bidi isolation marks are stripped, since attribute values belong in HTML attributes.
 - `t.plain(key, args?)` returns the message as **plain text**: rich-text markers (`<link>…</link>`, React element tokens) and bidi isolation marks are removed instead of throwing. Use it for `aria-label`, `title`, `alt` and `<meta>` content that shares a message with the visible UI — the marks are invisible but they do end up in the rendered attribute.
+- `t.has(key)` answers **whether `t(key)` can render something**: `true` for a message with a value and for an attribute path (`t.has('login.submit')`), `false` for an id that only carries attributes (Fluent allows `id =` with `.attr = …` but no value, and there is nothing to format) and for missing keys. `<FormattedMessage fallback>` uses it, so a caller-supplied fallback is shown instead of the raw key.
 - `raw('title')` → `string`, `raw('title', { $name: 'Ada' })` → interpolated `string`, `raw('list')` → ordered `string[]` (both Fluent `[]`-lists and JSON arrays). Missing messages fall back to the key; formatting errors are ignored and the literal `{$placeholders}` remain.
 - Message arguments accept strings, numbers, booleans (`true` → `"true"`, Fluent has no boolean type), `Date`, `bigint` and `FluentType` values. `null`/`undefined` and non-Fluent objects are reported through `onError` as `INVALID_ARGUMENT` instead of being silently dropped.
 
@@ -475,6 +476,8 @@ Fluent wraps placeables in U+2068/U+2069 bidi isolates — correct for HTML, noi
 createI18nMiddleware({
   ...routing,
   trustedHosts: ['example.com', '*.example.com'], // 421 for foreign Host headers
+  // Defaults: { name: cookieName, path: '/', maxAge: 31536000, sameSite: 'lax',
+  //             secure: process.env.NODE_ENV === 'production' }
   localeCookie: { name: 'NEXT_LOCALE', sameSite: 'lax', secure: true, maxAge: 31536000 },
   // localeCookie: false  → never write the cookie (URL-only locale)
   localeDetection: true,  // false → ignore cookie + Accept-Language
@@ -489,7 +492,9 @@ omitted; no header is emitted with fewer than two unambiguous variants, on
 redirects, or with `alternateLinks: false`. `x-default` is included only without
 domain routing and when the default URL is unambiguous.
 
-The cookie is only written for `Sec-Fetch-Dest: document` requests and only when the stored value changes, so prerendered pages keep `Cache-Control: s-maxage=…` instead of being invalidated on every hit.
+The cookie is only written for `Sec-Fetch-Dest: document` requests and only when the stored value changes, so a client that already has one keeps `Cache-Control: s-maxage=…` instead of invalidating the entry on every hit. A cookie-less client still receives `Set-Cookie` on its first response — that is why detection-derived responses vary on `Cookie` too — and the cookie is `Secure` in production by default.
+
+Requests whose locale comes from the cookie or `Accept-Language` (a prefix-less URL, or `/` in `as-needed`) are answered with `Vary: Accept-Language, Cookie`, because the same URL resolves differently per visitor. On a CDN this means such responses are cached per language rather than shared; if a route must be cached globally, either spell the locale in the URL or set `localeDetection: false` for that zone.
 
 ---
 
@@ -534,7 +539,7 @@ npx next-fluent check --input messages --reference en
 #   ru:
 #     [missing] "checkout-total" is missing.
 #   de:
-#     [duplicate] "nav-home" is defined more than once; Fluent keeps the first definition.
+#     [duplicate] "nav-home" is defined more than once; Fluent keeps the last definition.
 # [next-fluent] 2 issue(s) found.
 ```
 
@@ -569,7 +574,7 @@ npx next-fluent check --input messages --src app --usage
 | Finding | Meaning | Severity |
 | --- | --- | --- |
 | `missing` | a literal key is used but absent from the reference locale | fails the command |
-| `missing-attributes` | `t.attrs(k)` / `t.plain(k)` on a message with no attributes | fails the command |
+| `missing-attributes` | `t.attrs(k)` on a message with no attributes, or `t.plain(k)` on a message with no value | fails the command |
 | `dynamic` | `t(key)` or `` t(`x-${id}`) `` — unverifiable statically, listed for review | advisory |
 | `unused` | a catalog key no call site references — a safe-delete candidate | advisory |
 

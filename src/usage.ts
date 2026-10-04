@@ -51,7 +51,10 @@ export interface SourceFile {
   content: string;
 }
 
-const CALL_METHODS = ['rich', 'attrs', 'plain', 'markup', 'has', 'exists'] as const;
+// Every method of `Translations` that takes a key. `raw` used to be missing,
+// so `t.raw('key')` was invisible to the analyzer and its key was reported as
+// unused — a false positive that fails `--strict-usage`.
+const CALL_METHODS = ['raw', 'rich', 'attrs', 'plain', 'has'] as const;
 type CallMethod = (typeof CALL_METHODS)[number];
 
 /** Translator factories whose result is called with a message key. */
@@ -448,9 +451,20 @@ export function collectCallSites(file: SourceFile): {
 }
 
 interface CatalogIndex {
+  /** Every addressable key: message values and `id.attribute` paths. */
   keys: Set<string>;
   /** Message ids that define at least one attribute. */
   withAttributes: Set<string>;
+  /** Message ids that define a value (not attribute-only). */
+  withValue: Set<string>;
+  /**
+   * Message ids that exist only because they carry attributes.
+   *
+   * The runtime address them through `t.attrs()` / `t.raw()`, but `t()` /
+   * `t.rich()` / `t.plain()` cannot render a value that does not exist. They are
+   * kept apart from `keys` so a call that can never resolve is still reported.
+   */
+  attributeOnly: Set<string>;
 }
 
 function indexCatalog(source: MessageSource): CatalogIndex {
@@ -459,27 +473,50 @@ function indexCatalog(source: MessageSource): CatalogIndex {
   const resource = parse(text, { withSpans: false });
   const keys = new Set<string>();
   const withAttributes = new Set<string>();
+  const withValue = new Set<string>();
+  const attributeOnly = new Set<string>();
 
   for (const entry of resource.body as Entry[]) {
     if (entry.type !== 'Message') continue;
-    if (entry.value) keys.add(entry.id.name);
+    if (entry.value) {
+      keys.add(entry.id.name);
+      withValue.add(entry.id.name);
+    } else if (entry.attributes.length > 0) {
+      attributeOnly.add(entry.id.name);
+    }
     for (const attr of entry.attributes) {
       keys.add(`${entry.id.name}.${attr.id.name}`);
       withAttributes.add(entry.id.name);
     }
   }
 
-  return { keys, withAttributes };
+  return { keys, withAttributes, withValue, attributeOnly };
 }
 
 /**
  * Matches a bare key against every namespace: `total` finds `checkout-total`
  * and `checkout.total`. Used only when the namespace is unknown.
  */
-function findInAnyNamespace(keys: Set<string>, key: string): string | undefined {
-  if (keys.has(key)) return key;
-  for (const candidate of keys) {
-    if (candidate.endsWith(`.${key}`) || candidate.endsWith(`-${key}`)) return candidate;
+function findInAnyNamespace(
+  index: CatalogIndex,
+  key: string,
+  accept: (candidate: string) => boolean
+): string | undefined {
+  const consider = (candidate: string): string | undefined => {
+    if (!accept(candidate)) return undefined;
+    if (candidate === key || candidate.endsWith(`.${key}`) || candidate.endsWith(`-${key}`)) {
+      return candidate;
+    }
+    return undefined;
+  };
+
+  for (const candidate of index.keys) {
+    const hit = consider(candidate);
+    if (hit) return hit;
+  }
+  for (const candidate of index.attributeOnly) {
+    const hit = consider(candidate);
+    if (hit) return hit;
   }
   return undefined;
 }
@@ -508,7 +545,14 @@ export function analyzeUsage(
     );
   }
 
-  const index = referenceLocale ? indexCatalog(catalogs[referenceLocale]) : { keys: new Set<string>(), withAttributes: new Set<string>() };
+  const index: CatalogIndex = referenceLocale
+    ? indexCatalog(catalogs[referenceLocale])
+    : {
+        keys: new Set<string>(),
+        withAttributes: new Set<string>(),
+        withValue: new Set<string>(),
+        attributeOnly: new Set<string>(),
+      };
   const ignore = options.ignore ?? [];
 
   const usedKeys = new Set<string>();
@@ -554,31 +598,62 @@ export function analyzeUsage(
         continue;
       }
 
+      // `t.attrs(key)` and `t.raw(key)` render attribute-only messages, and
+      // `t.has(key)` is a legitimate probe for them (it answers false).
+      // Value-reading calls cannot use such an id, so the method decides
+      // whether it counts as resolved.
+      const readsAttributes =
+        site.method === 'attrs' || site.method === 'raw' || site.method === 'has';
+      const accept = (candidate: string): boolean =>
+        index.keys.has(candidate) ||
+        (readsAttributes && index.attributeOnly.has(candidate));
+
       const resolved = site.namespaceKnown
-        ? buildKeyCandidates(site.namespace, key).find((candidate) => index.keys.has(candidate))
-        : findInAnyNamespace(index.keys, key);
+        ? buildKeyCandidates(site.namespace, key).find(accept)
+        : findInAnyNamespace(index, key, accept);
       if (resolved) {
         usedKeys.add(resolved);
-        // `t.attrs(key)` reads every attribute at once, so all of them count as
-        // used — otherwise the report flags attributes the app does render.
-        if (site.method === 'attrs') {
+        // `t.attrs(key)` reads every attribute at once, and so does `t.raw(key)`
+        // for a message that has no value (it returns their values as a list),
+        // so all of them count as used — otherwise the report flags attributes
+        // the app does render.
+        if (site.method === 'attrs' || (site.method === 'raw' && !index.withValue.has(resolved))) {
           for (const candidate of index.keys) {
             if (candidate.startsWith(`${resolved}.`)) usedKeys.add(candidate);
           }
         }
-        if ((site.method === 'attrs' || site.method === 'plain') && !index.withAttributes.has(resolved)) {
+        if (site.method === 'attrs' && !index.withAttributes.has(resolved)) {
           issues.push({
             kind: 'missing-attributes',
             key: resolved,
             file: file.path,
             line: site.line,
-            message: `t.${site.method}("${key}") was called, but "${resolved}" defines no attributes.`,
+            message: `t.attrs("${key}") was called, but "${resolved}" defines no attributes.`,
           });
         }
         continue;
       }
 
       if (site.ignored) continue;
+
+      // The id exists, but only as an attribute carrier. Reporting it as a key
+      // that is absent from the catalog would be wrong: it is there, it simply
+      // has no value for a value-reading call to render.
+      const attributeOnlyHit = site.namespaceKnown
+        ? buildKeyCandidates(site.namespace, key).find((candidate) => index.attributeOnly.has(candidate))
+        : findInAnyNamespace(index, key, (candidate) => index.attributeOnly.has(candidate));
+      if (attributeOnlyHit !== undefined) {
+        issues.push({
+          kind: 'missing-attributes',
+          key: attributeOnlyHit,
+          file: file.path,
+          line: site.line,
+          message:
+            `${site.method ? `t.${site.method}` : 't'}("${key}") resolves to ` +
+            `"${attributeOnlyHit}", which defines only attributes and no value, so it cannot be rendered as text.`,
+        });
+        continue;
+      }
 
       if (!site.namespaceKnown) {
         dynamicSites++;
