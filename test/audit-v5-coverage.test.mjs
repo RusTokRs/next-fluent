@@ -20,11 +20,15 @@ test('the plugin aliases next-fluent/config for webpack and turbopack', () => {
   const withPlugin = createNextFluentPlugin('./src/i18n/request.ts');
   const config = withPlugin({ turbopack: { resolveAlias: { other: './other.ts' } } });
 
-  assert.ok(config.turbopack.resolveAlias['next-fluent/config'].endsWith('src/i18n/request.ts'));
+  // Webpack receives an absolute native path and turbopack a relative POSIX one;
+  // assert the destination, not the separator style.
+  const pointsAtRequestConfig = (value) =>
+    value.split(path.sep).join('/').endsWith('src/i18n/request.ts');
+  assert.ok(pointsAtRequestConfig(config.turbopack.resolveAlias['next-fluent/config']));
   assert.equal(config.turbopack.resolveAlias.other, './other.ts', 'existing aliases must survive');
 
   const webpackConfig = config.webpack({ resolve: { alias: { keep: 'keep' } } }, {});
-  assert.ok(webpackConfig.resolve.alias['next-fluent/config'].endsWith('src/i18n/request.ts'));
+  assert.ok(pointsAtRequestConfig(webpackConfig.resolve.alias['next-fluent/config']));
   assert.equal(webpackConfig.resolve.alias.keep, 'keep');
   // The plugin owns the aliases it was asked to add, not the whole config.
   assert.equal(config.webpack({}, {}).resolve.alias.keep, undefined);
