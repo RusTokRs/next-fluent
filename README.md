@@ -534,7 +534,7 @@ npx next-fluent check --input messages --reference en
 #   ru:
 #     [missing] "checkout-total" is missing.
 #   de:
-#     [duplicate] "nav-home" is defined more than once; Fluent keeps the first definition.
+#     [duplicate] "nav-home" is defined more than once; Fluent keeps the last definition.
 # [next-fluent] 2 issue(s) found.
 ```
 
@@ -569,7 +569,7 @@ npx next-fluent check --input messages --src app --usage
 | Finding | Meaning | Severity |
 | --- | --- | --- |
 | `missing` | a literal key is used but absent from the reference locale | fails the command |
-| `missing-attributes` | `t.attrs(k)` / `t.plain(k)` on a message with no attributes | fails the command |
+| `missing-attributes` | `t.attrs(k)` on a message with no attributes, or `t.plain(k)` on a message with no value | fails the command |
 | `dynamic` | `t(key)` or `` t(`x-${id}`) `` — unverifiable statically, listed for review | advisory |
 | `unused` | a catalog key no call site references — a safe-delete candidate | advisory |
 

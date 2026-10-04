@@ -56,7 +56,11 @@ function checkCatalogs(catalogs, options = {}) {
         kind: "duplicate",
         locale,
         key,
-        message: `"${key}" is defined more than once; Fluent keeps the first definition.`
+        // `addResource({ allowOverrides: true })` is what the runtime uses, and
+        // it keeps the *last* definition — matching `typegen`, which also lets
+        // the last one win. Saying "first" pointed translators at the wrong
+        // entry to delete.
+        message: `"${key}" is defined more than once; Fluent keeps the last definition.`
       });
     }
     if (locale === referenceLocale) continue;

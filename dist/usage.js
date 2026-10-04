@@ -1,7 +1,7 @@
 import { parse } from "@fluent/syntax";
 import { buildKeyCandidates } from "./utils.js";
 import { toFluentSource } from "./catalog.js";
-const CALL_METHODS = ["rich", "attrs", "plain", "markup", "has", "exists"];
+const CALL_METHODS = ["raw", "rich", "attrs", "plain", "has"];
 const FACTORIES = ["useTranslations", "getTranslations", "createTranslator"];
 const IGNORE_MARKER = "next-fluent-ignore";
 function readFirstArgument(code, openParen) {
@@ -303,20 +303,38 @@ function indexCatalog(source) {
   const resource = parse(text, { withSpans: false });
   const keys = /* @__PURE__ */ new Set();
   const withAttributes = /* @__PURE__ */ new Set();
+  const withValue = /* @__PURE__ */ new Set();
+  const attributeOnly = /* @__PURE__ */ new Set();
   for (const entry of resource.body) {
     if (entry.type !== "Message") continue;
-    if (entry.value) keys.add(entry.id.name);
+    if (entry.value) {
+      keys.add(entry.id.name);
+      withValue.add(entry.id.name);
+    } else if (entry.attributes.length > 0) {
+      attributeOnly.add(entry.id.name);
+    }
     for (const attr of entry.attributes) {
       keys.add(`${entry.id.name}.${attr.id.name}`);
       withAttributes.add(entry.id.name);
     }
   }
-  return { keys, withAttributes };
+  return { keys, withAttributes, withValue, attributeOnly };
 }
-function findInAnyNamespace(keys, key) {
-  if (keys.has(key)) return key;
-  for (const candidate of keys) {
-    if (candidate.endsWith(`.${key}`) || candidate.endsWith(`-${key}`)) return candidate;
+function findInAnyNamespace(index, key, accept) {
+  const consider = (candidate) => {
+    if (!accept(candidate)) return void 0;
+    if (candidate === key || candidate.endsWith(`.${key}`) || candidate.endsWith(`-${key}`)) {
+      return candidate;
+    }
+    return void 0;
+  };
+  for (const candidate of index.keys) {
+    const hit = consider(candidate);
+    if (hit) return hit;
+  }
+  for (const candidate of index.attributeOnly) {
+    const hit = consider(candidate);
+    if (hit) return hit;
   }
   return void 0;
 }
@@ -331,7 +349,12 @@ function analyzeUsage(catalogs, sources, options = {}) {
       `[next-fluent] Reference locale "${referenceLocale}" is not part of the analyzed catalogs (${locales.join(", ")}).`
     );
   }
-  const index = referenceLocale ? indexCatalog(catalogs[referenceLocale]) : { keys: /* @__PURE__ */ new Set(), withAttributes: /* @__PURE__ */ new Set() };
+  const index = referenceLocale ? indexCatalog(catalogs[referenceLocale]) : {
+    keys: /* @__PURE__ */ new Set(),
+    withAttributes: /* @__PURE__ */ new Set(),
+    withValue: /* @__PURE__ */ new Set(),
+    attributeOnly: /* @__PURE__ */ new Set()
+  };
   const ignore = options.ignore ?? [];
   const usedKeys = /* @__PURE__ */ new Set();
   const issues = [];
@@ -363,26 +386,39 @@ function analyzeUsage(catalogs, sources, options = {}) {
         });
         continue;
       }
-      const resolved = site.namespaceKnown ? buildKeyCandidates(site.namespace, key).find((candidate) => index.keys.has(candidate)) : findInAnyNamespace(index.keys, key);
+      const readsAttributes = site.method === "attrs" || site.method === "raw" || site.method === "has";
+      const accept = (candidate) => index.keys.has(candidate) || readsAttributes && index.attributeOnly.has(candidate);
+      const resolved = site.namespaceKnown ? buildKeyCandidates(site.namespace, key).find(accept) : findInAnyNamespace(index, key, accept);
       if (resolved) {
         usedKeys.add(resolved);
-        if (site.method === "attrs") {
+        if (site.method === "attrs" || site.method === "raw" && !index.withValue.has(resolved)) {
           for (const candidate of index.keys) {
             if (candidate.startsWith(`${resolved}.`)) usedKeys.add(candidate);
           }
         }
-        if ((site.method === "attrs" || site.method === "plain") && !index.withAttributes.has(resolved)) {
+        if (site.method === "attrs" && !index.withAttributes.has(resolved)) {
           issues.push({
             kind: "missing-attributes",
             key: resolved,
             file: file.path,
             line: site.line,
-            message: `t.${site.method}("${key}") was called, but "${resolved}" defines no attributes.`
+            message: `t.attrs("${key}") was called, but "${resolved}" defines no attributes.`
           });
         }
         continue;
       }
       if (site.ignored) continue;
+      const attributeOnlyHit = site.namespaceKnown ? buildKeyCandidates(site.namespace, key).find((candidate) => index.attributeOnly.has(candidate)) : findInAnyNamespace(index, key, (candidate) => index.attributeOnly.has(candidate));
+      if (attributeOnlyHit !== void 0) {
+        issues.push({
+          kind: "missing-attributes",
+          key: attributeOnlyHit,
+          file: file.path,
+          line: site.line,
+          message: `${site.method ? `t.${site.method}` : "t"}("${key}") resolves to "${attributeOnlyHit}", which defines only attributes and no value, so it cannot be rendered as text.`
+        });
+        continue;
+      }
       if (!site.namespaceKnown) {
         dynamicSites++;
         issues.push({
