@@ -136,6 +136,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **The catalog watcher reports an unwatchable directory.** `fs.watch` on a
+  missing path throws on Linux/Node 22 but returns a silent, never-firing
+  watcher on Node 24 and Windows — so `next dev` could stop regenerating types
+  without a word, and an asynchronous watcher error crashed the process because
+  nothing listened for it. `watchCatalogs` now stats the directory up front and
+  reports through `onError`, and the watcher has an `'error'` handler.
 - **One redirect instead of two when the locale is detected.** A visitor with
   `Accept-Language: ru` asking for a shared slug (`/about-us`) was sent to
   `/ru/about-us` and only then to the canonical `/ru/o-nas`. Detection and slug

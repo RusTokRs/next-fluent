@@ -151,6 +151,18 @@ function watchCatalogs(input, output, handlers = {}) {
       clearTimeout(timer);
     };
   }
+  let stats;
+  try {
+    stats = fs.statSync(input, { throwIfNoEntry: false });
+  } catch {
+    stats = void 0;
+  }
+  if (!stats?.isDirectory()) {
+    handlers.onError?.(
+      new Error(`[next-fluent] Cannot watch ${input}: it is not a directory.`)
+    );
+    return () => clearTimeout(timer);
+  }
   let watcher;
   try {
     watcher = fs.watch(input, { recursive: true }, (_event, filename) => {
@@ -161,6 +173,7 @@ function watchCatalogs(input, output, handlers = {}) {
     handlers.onError?.(error);
     return () => clearTimeout(timer);
   }
+  watcher.on("error", (error) => handlers.onError?.(error));
   return () => {
     clearTimeout(timer);
     watcher.close();

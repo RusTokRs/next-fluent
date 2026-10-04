@@ -252,6 +252,23 @@ export function watchCatalogs(
     };
   }
 
+  // `fs.watch` does not fail consistently: on Linux/Node 22 a missing directory
+  // throws synchronously, but Node 24 and Windows hand back a watcher that never
+  // fires and never reports, leaving the dev watcher silently dead. Checking the
+  // target first turns that into the `onError` the callers already expect.
+  let stats: fs.Stats | undefined;
+  try {
+    stats = fs.statSync(input, { throwIfNoEntry: false });
+  } catch {
+    stats = undefined;
+  }
+  if (!stats?.isDirectory()) {
+    handlers.onError?.(
+      new Error(`[next-fluent] Cannot watch ${input}: it is not a directory.`)
+    );
+    return () => clearTimeout(timer);
+  }
+
   let watcher: fs.FSWatcher;
   try {
     watcher = fs.watch(input, { recursive: true }, (_event, filename) => {
@@ -262,6 +279,11 @@ export function watchCatalogs(
     handlers.onError?.(error as Error);
     return () => clearTimeout(timer);
   }
+
+  // Errors raised after the watcher exists (the directory disappears, the
+  // inotify limit is reached) are emitted asynchronously; without a listener
+  // Node treats them as uncaught exceptions.
+  watcher.on('error', (error) => handlers.onError?.(error as Error));
 
   return () => {
     clearTimeout(timer);

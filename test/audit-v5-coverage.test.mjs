@@ -350,10 +350,15 @@ test('watchCatalogs regenerates on change and reports a missing directory', asyn
     stop();
   }
 
+  // `fs.watch` on a missing directory throws on Linux/Node 22 but stays silent
+  // on Node 24 and Windows, so the check must not depend on the platform.
   const errors = [];
-  const failed = watchCatalogs(path.join(dir, 'missing'), output, {
+  const missing = path.join(dir, 'missing');
+  const failed = watchCatalogs(missing, output, {
     onError: (error) => errors.push(error.message),
   });
   failed();
   assert.equal(errors.length, 1, 'watching a missing directory must report through onError');
+  assert.match(errors[0], /not a directory/);
+  assert.ok(errors[0].includes(missing), 'the message names the directory');
 });
