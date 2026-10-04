@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
@@ -199,7 +199,7 @@ test('--reference matches a canonicalized file name', () => {
 // ---------------------------------------------------------------------------
 
 const middlewareProbe = `
-import { createI18nMiddleware } from ${JSON.stringify(path.join(ROOT, 'dist', 'middleware.js'))};
+import { createI18nMiddleware } from ${JSON.stringify(pathToFileURL(path.join(ROOT, 'dist', 'middleware.js')).href)};
 const mw = createI18nMiddleware({ locales: ['en', 'ru'], defaultLocale: 'en', localePrefix: 'as-needed' });
 const request = (pathname) => ({
   url: 'http://localhost:3000' + pathname,

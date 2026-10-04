@@ -59,7 +59,18 @@ jobs:
         run: npm run test:consumer
 
       - name: Run test suite
-        run: npm test
+        shell: bash
+        # Job logs live behind a separate CDN; annotations are readable from the
+        # API, so a failing test names itself in the check output.
+        run: |
+          if ! npm test > test-output.log 2>&1; then
+            tail -n 40 test-output.log
+            grep -E '^(not ok|✖)' test-output.log | head -20 | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+            exit 1
+          fi
+          tail -n 3 test-output.log
 
       - name: Verify edge runtime compatibility
         run: npm run test:edge

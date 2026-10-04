@@ -19,3 +19,6 @@ deep-research-report.md
 # The integration harness copies the fixture here and removes it afterwards, but
 # a crash leaves it behind — and it contains a symlinked node_modules.
 .next-integration-*/
+
+# CI failure dump (see .github/workflows/ci.yml)
+test-output.log
