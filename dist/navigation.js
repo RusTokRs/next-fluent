@@ -78,11 +78,10 @@ function createNavigation(config) {
           return router.replace(target, routerOptions);
         },
         prefetch(href, options) {
-          if (options?.locale && domainLocalePrefix(
-            locales,
-            config.localePrefix,
-            findLocaleDomain(config.domains, options.locale)
-          ).mode !== "always") return;
+          if (options?.locale && config.domains) {
+            const domain = findLocaleDomain(config.domains, options.locale);
+            if (domain && domainLocalePrefix(locales, config.localePrefix, domain).mode !== "always") return;
+          }
           const targetLocale = options?.locale ?? currentLocale ?? defaultLocale;
           const target = getPathname({
             href,

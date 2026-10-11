@@ -18,6 +18,17 @@ export type MessageSource = string | readonly string[] | JsonCatalog;
 export type JsonCatalog = Record<string, unknown>;
 /** Type guard distinguishing a JSON catalog from a `FluentBundle` instance. */
 export declare function isJsonCatalog(value: unknown): value is JsonCatalog;
+/**
+ * Removes a leading UTF-8 byte-order mark from catalog text.
+ *
+ * Neither Fluent parser treats U+FEFF as whitespace, so a catalog saved by a
+ * Windows editor (or produced by a tool that emits a BOM) silently loses its
+ * *first* message: the parser skips the line and only the remaining entries show
+ * up. JSON.parse strips the mark, `fs.readFileSync(path, 'utf8')` does not, so
+ * the robust place to remove it is here — in the shared funnel every catalog
+ * source passes through.
+ */
+export declare function stripCatalogBom(source: string): string;
 /** Renders a value as an inline pattern or an indented block pattern. */
 export declare function renderFluentPattern(text: string): string;
 /** Converts a JSON catalog object into FTL source. */

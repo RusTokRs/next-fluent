@@ -148,7 +148,8 @@ function parseAcceptLanguageEntry(entry: string): { tag: string; quality: number
     paramStart = nextSeparator + 1;
   }
 
-  if (quality <= 0) return undefined;
+  // `q=0` is reported rather than dropped: RFC 9110 §12.5.4 makes it an explicit
+  // "not acceptable", which the wildcard branch has to respect.
   return { tag, quality };
 }
 
@@ -165,21 +166,36 @@ export function resolveAcceptLanguage(
   // auxiliary memory regardless of candidate count.
   let bestLocale: string | undefined;
   let bestQuality = Number.NEGATIVE_INFINITY;
+  let bestIsWildcard = false;
   let entryStart = 0;
+  /**
+   * Locales the client explicitly refused with `q=0`. Allocated only when such
+   * an entry appears, so the common header costs nothing extra.
+   */
+  let refused: Set<string> | undefined;
 
   while (entryStart <= header.length) {
     const separator = header.indexOf(',', entryStart);
     const entryEnd = separator === -1 ? header.length : separator;
     const candidate = parseAcceptLanguageEntry(header.slice(entryStart, entryEnd));
 
-    if (candidate && candidate.quality > bestQuality) {
-      const matched = candidate.tag === '*'
-        ? (preferred ? matchSupportedLocale(preferred, locales) : undefined) ?? locales[0]
-        : matchSupportedLocale(candidate.tag, locales);
-
-      if (matched) {
-        bestLocale = matched;
+    if (candidate && candidate.quality === 0) {
+      const matched = matchSupportedLocale(candidate.tag, locales);
+      if (matched) (refused ??= new Set()).add(matched);
+    } else if (candidate && candidate.quality > bestQuality) {
+      if (candidate.tag === '*') {
+        // Resolved after the scan: a `q=0` entry further right still applies to
+        // the wildcard, and the header has to be read to the end to know.
+        bestIsWildcard = true;
         bestQuality = candidate.quality;
+        bestLocale = undefined;
+      } else {
+        const matched = matchSupportedLocale(candidate.tag, locales);
+        if (matched) {
+          bestIsWildcard = false;
+          bestLocale = matched;
+          bestQuality = candidate.quality;
+        }
       }
     }
 
@@ -187,7 +203,27 @@ export function resolveAcceptLanguage(
     entryStart = separator + 1;
   }
 
+  if (bestIsWildcard) return wildcardMatch(preferred, locales, refused);
   return bestLocale;
+}
+
+/**
+ * `*` selects the preferred locale, falling back to the first supported one —
+ * skipping locales the header refused with `q=0`, which is what the wildcard
+ * means: any language, except the ones named as unacceptable.
+ */
+function wildcardMatch(
+  preferred: string | undefined,
+  locales: readonly string[],
+  refused: Set<string> | undefined
+): string | undefined {
+  const preferredMatch = preferred ? matchSupportedLocale(preferred, locales) : undefined;
+  if (preferredMatch && !refused?.has(preferredMatch)) return preferredMatch;
+  if (!refused) return preferredMatch ?? locales[0];
+  for (const locale of locales) {
+    if (!refused.has(locale)) return locale;
+  }
+  return undefined;
 }
 
 export interface BaseI18nConfig {

@@ -1,4 +1,4 @@
-import type { FluentFunction } from '@fluent/bundle';
+import type { FluentFunction, FluentValue } from '@fluent/bundle';
 import { LRUCache } from './lru';
 
 /**
@@ -17,8 +17,42 @@ export function unwrapFluentValue(val: unknown): unknown {
 
 const numberFormatCache = new LRUCache<Intl.NumberFormat>(200);
 
+/**
+ * Argument sets `Intl` refused, already reported.
+ *
+ * A Fluent function runs inside `formatPattern`, where the pattern's own error
+ * channel only sees what Fluent itself rejects — a function that catches its
+ * own `Intl` failure reports nothing at all. `CURRENCY($price, currencyDisplay:
+ * "nope")` therefore rendered `12.5 USD` in complete silence: a number that
+ * looks deliberate, produced by a configuration that was never applied. The
+ * formatter reports the same class of failure for `number` and `dateTime`, and
+ * this is the FTL-side half of that contract.
+ */
+const refusedNumberFormats = new Set<string>();
+const MAX_REFUSED_REPORTS = 200;
+
+function warnRefusedFormat(
+  name: string,
+  locale: string,
+  named: Record<string, FluentValue>,
+  fallback: string
+): void {
+  const key = `${name}::${locale}::${Object.entries(named)
+    .map(([k, v]) => `${k}=${String(unwrapFluentValue(v))}`)
+    .sort()
+    .join(',')}`;
+  if (refusedNumberFormats.has(key)) return;
+  if (refusedNumberFormats.size >= MAX_REFUSED_REPORTS) refusedNumberFormats.clear();
+  refusedNumberFormats.add(key);
+  console.warn(
+    `[next-fluent] Intl refused the options of ${name}() for "${locale}" ` +
+      `(${key.split('::').slice(2).join('::')}); the value was rendered as ${JSON.stringify(fallback)}.`
+  );
+}
+
 export function clearFunctionsCache(): void {
   numberFormatCache.clear();
+  refusedNumberFormats.clear();
 }
 
 function getCachedNumberFormat(locale: string, options: Intl.NumberFormatOptions): Intl.NumberFormat {
@@ -66,7 +100,9 @@ export function createDefaultFunctions(locale: string): Record<string, FluentFun
           maximumFractionDigits: maxFraction,
         }).format(num);
       } catch {
-        return `${num} ${currency}`;
+        const fallback = `${num} ${currency}`;
+        warnRefusedFormat('CURRENCY', locale, named, fallback);
+        return fallback;
       }
     },
 
@@ -93,7 +129,9 @@ export function createDefaultFunctions(locale: string): Record<string, FluentFun
           maximumFractionDigits: maxFraction,
         }).format(num);
       } catch {
-        return `${num * 100}%`;
+        const fallback = `${num * 100}%`;
+        warnRefusedFormat('PERCENT', locale, named, fallback);
+        return fallback;
       }
     },
   };

@@ -1,5 +1,6 @@
+import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { execSync } from 'node:child_process';
@@ -45,19 +46,22 @@ for (const name of entryNames) {
   }
 }
 
-// Keep React's client boundary intact when importing from the package root.
-// These small facades re-export the separately built entries instead of
-// inlining them into a server or browser bundle.
+// The package root is a facade: `src/index-browser.ts` and `src/index-server.ts`
+// re-export the separately built entries instead of inlining them, so importing
+// `next-fluent` keeps React's client boundary intact and never drags a server
+// module into a browser bundle.
+//
+// They are ordinary sources and are transpiled by the step above like every
+// other module — the facade is written down once, in `src/`. It used to be
+// written down twice: this script held a second copy as a string literal and
+// overwrote the transpiled file with it. Editing `src/index-browser.ts` then
+// changed nothing that shipped, and no gate noticed, because the two copies
+// agreed.
+//
 // Build-time tools (`pseudo.js`, `typegen.js`) and the catalog analyzer
 // (`pick-messages.js`, `check.js`) pull in @fluent/syntax — a full FTL parser.
 // They are exposed through their own export paths instead of the app entries so
 // the browser bundle never pays for a parser it cannot use.
-const sharedExports = `export * from './client.js';\nexport * from './navigation.js';\nexport * from './routing.js';\nexport * from './bundle.js';\nexport * from './utils.js';\nexport * from './catalog.js';\nexport {createDefaultFunctions, unwrapFluentValue} from './functions.js';\n`;
-await writeFile(resolve(dist, 'index-browser.js'), sharedExports);
-await writeFile(
-  resolve(dist, 'index-server.js'),
-  `export * from './server.js';\nexport * from './server-provider.js';\nexport * from './pick-messages.js';\nexport * from './check.js';\n${sharedExports}`
-);
 
 // `next.config.js` is CommonJS in most apps, and Node's `require()` of an ESM
 // module returns the module *namespace*. So the natural
@@ -144,6 +148,29 @@ await writeFile(
 module.exports = Object.assign(module.exports.default, module.exports);
 `
 );
+
+// Every relative import in the built output must point at a file that exists.
+// The CJS closure is derived by scanning `src/plugin.ts` for `from './x'`, which
+// cannot see an `export … from './x'` or a dynamic `import('./x')`; without this
+// check such a module would be missing from `dist/cjs/` and the failure would
+// surface as a `MODULE_NOT_FOUND` inside a consumer's `next.config.js`, one
+// release away from the edit that caused it.
+const emitted = [
+  ...entryNames.map((name) => resolve(dist, `${name}.js`)),
+  ...cjsNames.map((name) => resolve(cjsDir, `${name}.cjs`)),
+];
+for (const file of emitted) {
+  const code = await readFile(file, 'utf8');
+  for (const [, spec] of code.matchAll(/(?:from|require\()\s*['"](\.\.?\/[^'"]+)['"]/g)) {
+    const target = resolve(dirname(file), spec);
+    if (!existsSync(target)) {
+      throw new Error(
+        `[next-fluent] ${relative(root, file)} imports "${spec}", which was not emitted. ` +
+          'A module reachable from this entry is missing from dist/.'
+      );
+    }
+  }
+}
 
 const tscBin = resolve(root, 'node_modules/typescript/bin/tsc');
 execSync(

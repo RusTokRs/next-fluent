@@ -52,27 +52,47 @@ let warnedAboutTrustedHosts = false;
 
 /**
  * Emits one development-only warning when the middleware is about to build a
- * redirect without `trustedHosts`: the `Location` origin then comes from the
- * request's own `Host` header, which a proxy or a crafted request controls.
+ * public URL without `trustedHosts`: the `Location` of a redirect and the
+ * alternates of the `Link` header then take their origin from the request's own
+ * `Host` header, which a proxy or a crafted request controls.
  */
 function warnMissingTrustedHosts(): void {
   if (!isDevelopment || warnedAboutTrustedHosts) return;
   warnedAboutTrustedHosts = true;
   console.warn(
-    '[next-fluent] trustedHosts is not configured, so redirect targets are built from the ' +
-      "request's Host header. Set `trustedHosts: ['example.com']` in production to reject a " +
-      'foreign Host with 421 before any redirect is issued.'
+    '[next-fluent] trustedHosts is not configured, so public URLs (redirect `Location`, ' +
+      "alternate `Link`) are built from the request's Host header. Set " +
+      "`trustedHosts: ['example.com']` in production to reject a foreign Host with 421."
   );
 }
 
+/** `localhost`, `127.0.0.1` and `[::1]`, with or without a port. */
+const LOOPBACK_HOST = /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i;
+
+/**
+ * `example.com.` is the absolute spelling of `example.com` — the same host to
+ * every resolver — and clients, health checks and proxies do send it. Comparing
+ * the two spellings as different hosts rejected the absolute form with 421 and
+ * silently skipped domain routing for it.
+ */
+export function normalizeHostForMatching(host: string): string {
+  return host.endsWith('.') ? host.slice(0, -1) : host;
+}
+
 function hostMatchesTrustedList(requestHost: string, list: readonly string[]): boolean {
-  const hostname = requestHost.replace(/:\d+$/, '');
+  const hostAndPort = normalizeHostForMatching(requestHost);
+  const hostname = normalizeHostForMatching(hostAndPort.replace(/:\d+$/, ''));
   for (const raw of list) {
-    const entry = raw.toLowerCase();
-    if (entry === requestHost || entry === hostname) return true;
+    const entry = normalizeHostForMatching(raw.toLowerCase());
+    if (entry === hostAndPort || entry === hostname) return true;
     if (entry.startsWith('*.')) {
       const base = entry.slice(2);
-      if (hostname === base || hostname.endsWith(`.${base}`)) return true;
+      // Subdomains only: `*.example.org` is the certificate-style spelling and
+      // does not cover the apex. An allow-list that quietly accepts a host the
+      // operator did not write down is the wrong default for a control whose
+      // whole job is rejecting foreign Host values; list the apex explicitly
+      // (`['example.org', '*.example.org']`) when it is served too.
+      if (hostname.endsWith(`.${base}`)) return true;
     }
   }
   return false;
@@ -142,7 +162,18 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
     alternateLinks = true,
   } = options;
 
-  const cookieConfig = resolveCookieConfig(options.localeCookie, cookieName);
+  /**
+   * With `localeDetection: false` the locale comes from the URL and middleware
+   * never reads the cookie back, so the default write only put a `Set-Cookie`
+   * on the first response of every visitor and made the document uncacheable
+   * for no one's benefit. An explicit `localeCookie` config is an opt-in and
+   * still wins — that is the supported way to keep `getLocale()` working on the
+   * routes the matcher excludes.
+   */
+  const cookieConfig = resolveCookieConfig(
+    !localeDetection && options.localeCookie === undefined ? false : options.localeCookie,
+    cookieName
+  );
   const globalPrefixConfig = normalizeLocalePrefix(allLocales, options.localePrefix);
   const internalPrefixConfig = normalizeLocalePrefix(allLocales);
   const domainPrefixes = new Map(domains?.map((domain) => [
@@ -163,18 +194,50 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
     const directHost = request.headers.get('host');
     const forwardedHost = request.headers.get('x-forwarded-host');
     const trustedForwardedHost = forwardedHost && (
-      forwardedHost.toLowerCase() === directHost?.toLowerCase() ||
-      domains?.some((item) => item.domain.toLowerCase() === forwardedHost.toLowerCase()) ||
-      /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(forwardedHost)
+      normalizeHostForMatching(forwardedHost.toLowerCase()) ===
+        (directHost === null ? undefined : normalizeHostForMatching(directHost.toLowerCase())) ||
+      (
+        domains?.some(
+          (item) => normalizeHostForMatching(item.domain.toLowerCase()) ===
+            normalizeHostForMatching(forwardedHost.toLowerCase())
+        ) === true &&
+        // A domain-matching forwarded host is how a proxy that does not rewrite
+        // `Host` still names the public origin — but `x-forwarded-host` is a
+        // request header, so a client can send it too. Letting it choose the
+        // host would hand it the very pick `trustedHosts` exists to prevent:
+        // `Host: evil.com` was rejected with 421, yet `Host: evil.com` plus
+        // `x-forwarded-host: <a configured domain>` was served, and the 421 was
+        // then decided against the attacker-chosen host. The host the request
+        // actually arrived for therefore has to be trusted on its own.
+        (trustedHosts === undefined || trustedHosts.length === 0 ||
+          (directHost !== null && hostMatchesTrustedList(directHost, trustedHosts)))
+      ) ||
+      // A loopback forwarded host is what a local development proxy sends. It
+      // is honoured only when the connection itself came from loopback: a
+      // public request that merely claims `x-forwarded-host: localhost:3000`
+      // must not make every public URL point at localhost.
+      (LOOPBACK_HOST.test(forwardedHost) && directHost !== null && LOOPBACK_HOST.test(directHost))
     );
     const rawHost = trustedForwardedHost ? forwardedHost : directHost;
     if (rawHost && /^[^\s/?#@\\]+$/.test(rawHost)) {
       try {
         const parsedHost = new URL(`${requestOrigin.protocol}//${rawHost}`);
-        if (parsedHost.host === rawHost.toLowerCase()) replaceUrlHost(requestOrigin, parsedHost.host);
+        // The header has to survive the parser unchanged, or it names something
+        // else: `a.test/b` parses to host `a.test`, and `//evil.test` resolves
+        // to another origin. The one difference that is *not* a different
+        // authority is the scheme's default port, which the parser drops —
+        // `Host: a.test:443` on an https request is the same host as `a.test`,
+        // and reading it as "did not round-trip" left the origin untouched, so
+        // `trustedHosts: ['a.test']` answered 421 to the site's own name.
+        const defaultPort = requestOrigin.protocol === 'https:' ? '443' : '80';
+        const sameAuthority =
+          parsedHost.host === rawHost.toLowerCase() ||
+          (parsedHost.port === '' &&
+            rawHost.toLowerCase() === `${parsedHost.hostname.toLowerCase()}:${defaultPort}`);
+        if (sameAuthority) replaceUrlHost(requestOrigin, parsedHost.host);
       } catch { /* Keep NextRequest's origin for an invalid Host header. */ }
     }
-    const requestHost = requestOrigin.host.toLowerCase();
+    const requestHost = normalizeHostForMatching(requestOrigin.host.toLowerCase());
     if (trustedHosts && trustedHosts.length > 0 && !hostMatchesTrustedList(requestHost, trustedHosts)) {
       // Misdirected/foreign Host: never emit redirects that a poisoned cache
       // could replay on the real origin.
@@ -189,7 +252,12 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
       const url = new URL(normalizeLeadingSlashes(path), requestOrigin);
       return url.origin === requestOrigin.origin ? url : new URL('/', requestOrigin);
     };
-    const domain = domains?.find((item) => item.domain.toLowerCase() === requestHost);
+    // `requestHost` is normalized (lowercase, trailing dot removed), so the
+    // configured spellings must be too — otherwise `domains: [{ domain:
+    // 'example.com.' }]` silently stops applying to every request.
+    const domain = domains?.find(
+      (item) => normalizeHostForMatching(item.domain.toLowerCase()) === requestHost
+    );
     const locales = domain
       ? allLocales.filter((locale) => matchSupportedLocale(locale, domain.locales ?? [domain.defaultLocale]))
       : allLocales;
@@ -335,6 +403,7 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
       if (response.headers?.set) {
         response.headers.set(headerName, effectiveLocale);
         if (alternateLinks) {
+          if (!trustedHosts || trustedHosts.length === 0) warnMissingTrustedHosts();
           const header = buildAlternateLinksHeader({
             locales: allLocales,
             defaultLocale: configuredDefaultLocale,

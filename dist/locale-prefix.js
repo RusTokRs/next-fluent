@@ -1,8 +1,13 @@
 import { matchSupportedLocale, validateLocalePrefix } from "./utils.js";
 const LEADING_SLASH_RUN = /^[/\\]{2,}/;
+function stripUrlDiscardedControls(path) {
+  if (!path.includes("	") && !path.includes("\n") && !path.includes("\r")) return path;
+  return path.replace(/[\u0009\u000a\u000d]/g, "");
+}
 function normalizeLeadingSlashes(path) {
-  if (!LEADING_SLASH_RUN.test(path)) return path;
-  return `/${path.replace(LEADING_SLASH_RUN, "")}`;
+  const clean = stripUrlDiscardedControls(path);
+  if (!LEADING_SLASH_RUN.test(clean)) return clean;
+  return `/${clean.replace(LEADING_SLASH_RUN, "")}`;
 }
 function normalizeLocalePrefix(locales, localePrefix) {
   const mode = typeof localePrefix === "object" && localePrefix !== null ? localePrefix.mode ?? "always" : localePrefix ?? "always";

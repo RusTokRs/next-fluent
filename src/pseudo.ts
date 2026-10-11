@@ -7,7 +7,7 @@ import {
   TextElement,
   type Pattern,
 } from '@fluent/syntax';
-import { parseFtl } from './ftl-parse';
+import { junkEntries, parseFtl, unparsableCatalogError } from './ftl-parse';
 
 const CHAR_MAP: Record<string, string> = {
   a: 'å', b: 'ƀ', c: 'ç', d: 'ð', e: 'é', f: 'ƒ', g: 'ĝ', h: 'ĥ', i: 'î',
@@ -173,6 +173,13 @@ function wrapPatternEdges(pattern: Pattern, options: PseudoOptions): void {
  */
 export function pseudoLocalizeFtl(ftlContent: string, options: PseudoOptions = {}): string {
   const resource = parseFtl(ftlContent, 'The catalog');
+  // `FluentSerializer` drops `Junk` entries, so a message the parser could not
+  // read would silently disappear from the generated pseudo locale — the
+  // layout test would then pass with text missing instead of failing loudly.
+  const broken = junkEntries(resource);
+  if (broken.length > 0) {
+    throw unparsableCatalogError(broken, 'The catalog');
+  }
   const textOptions: PseudoOptions = { ...options, prefix: '', suffix: '' };
   class PseudoVisitor extends Visitor {
     visitTextElement(node: TextElement): void {

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { jsonToFluent } from './catalog';
+import { jsonToFluent, stripCatalogBom } from './catalog';
 import { generateTypeDeclarations } from './typegen';
 import { canonicalizeLocale } from './utils';
 
@@ -51,7 +51,10 @@ export function collectCatalogFiles(target: string): string[] {
 
 /** Reads a catalog file, converting JSON catalogs into FTL source. */
 export function readCatalog(file: string): string {
-  const raw = fs.readFileSync(file, 'utf8');
+  // `JSON.parse` throws on a byte-order mark ("Unexpected token") and neither
+  // Fluent parser treats it as whitespace, so a BOM left in place by the editor
+  // that saved the file turns a healthy catalog into a broken one.
+  const raw = stripCatalogBom(fs.readFileSync(file, 'utf8'));
   if (!file.toLowerCase().endsWith('.json')) return raw;
   try {
     return jsonToFluent(JSON.parse(raw));
@@ -102,7 +105,16 @@ export function readCatalogsByLocale(dir: string): Record<string, string[]> {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       const files = collectCatalogFiles(full);
-      if (files.length > 0) catalogs[localeFromCatalogName(entry.name)] = files.map(readCatalog);
+      if (files.length > 0) {
+        // Merged, like the flat namespaced files beside it. Assigning here
+        // dropped whatever had already been collected for this locale, so a
+        // directory whose name sorts after a flat file (`messages/en-x.ftl`
+        // beside `messages/en-z/`) silently erased that file. The reference
+        // locale then held fewer keys than the project actually ships, and
+        // `check` reported "no issues" for translations that were missing.
+        const locale = localeFromCatalogName(entry.name);
+        (catalogs[locale] ??= []).push(...files.map(readCatalog));
+      }
     } else if (entry.isFile() && isCatalogFile(entry.name)) {
       const locale = localeFromCatalogName(path.basename(entry.name, path.extname(entry.name)));
       (catalogs[locale] ??= []).push(readCatalog(full));
@@ -123,16 +135,42 @@ const SKIPPED_SOURCE_DIRS = new Set([
   '.turbo',
 ]);
 
-const SOURCE_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
+// `.mts`/`.cts` are the ESM/CJS TypeScript extensions a monorepo with
+// `"type": "module"` ends up with, and `.mdx` is a first-party Next plugin whose
+// pages run code like any other. Leaving them out did not make those call sites
+// unknown — it made every message used only there look dead.
+const SOURCE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs', '.mdx'];
+
+/** Declaration files hold types, never call sites — in every TypeScript flavour. */
+const DECLARATION_FILE = /\.d\.[cm]?ts$/;
+
+/** The real path of `target`, or `null` when it cannot be resolved. */
+function realPathOrNull(target: string): string | null {
+  try {
+    return fs.realpathSync(target);
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Collects source files worth scanning for message usage.
  *
  * Deliberately shallow about file *types*: `.d.ts` files are skipped because
  * they contain no call sites, only declarations.
+ *
+ * Symlinks are followed, which `collectCatalogFiles` deliberately does not do
+ * for directories: a linked *directory* is a monorepo's `app/components →
+ * packages/ui`, and every message used only there was reported as dead —
+ * a false accusation that `check --usage` is expected to lead people to act
+ * on. The cost is that a cycle becomes possible (`app/components → .. → app`),
+ * so the real path of every visited directory and every collected file is
+ * remembered: a repeat is skipped rather than walked or counted twice.
  */
 export function collectSourceFiles(dir: string): string[] {
   const found: string[] = [];
+  const visitedDirs = new Set<string>();
+  const seenFiles = new Set<string>();
   const walk = (current: string): void => {
     let entries: fs.Dirent[];
     try {
@@ -142,17 +180,42 @@ export function collectSourceFiles(dir: string): string[] {
     }
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
       const full = path.join(current, entry.name);
-      if (entry.isDirectory()) {
+      let isDir = entry.isDirectory();
+      let isFile = entry.isFile();
+      if (entry.isSymbolicLink()) {
+        // A symlink is neither isFile() nor isDirectory(); classify it through
+        // the link. A broken link throws, and there is nothing to collect.
+        try {
+          const linked = fs.statSync(full);
+          isFile = linked.isFile();
+          isDir = linked.isDirectory();
+        } catch {
+          continue;
+        }
+      }
+      if (isDir) {
         if (SKIPPED_SOURCE_DIRS.has(entry.name) || entry.name.startsWith('.')) continue;
+        const real = realPathOrNull(full);
+        if (real === null || visitedDirs.has(real)) continue;
+        visitedDirs.add(real);
         walk(full);
         continue;
       }
-      if (!entry.isFile()) continue;
-      if (entry.name.endsWith('.d.ts')) continue;
+      if (!isFile) continue;
+      if (DECLARATION_FILE.test(entry.name)) continue;
       if (!SOURCE_EXTENSIONS.includes(path.extname(entry.name))) continue;
+      // The same file behind two links is still one file: reporting it twice
+      // would count its call sites twice.
+      const real = realPathOrNull(full);
+      if (real !== null) {
+        if (seenFiles.has(real)) continue;
+        seenFiles.add(real);
+      }
       found.push(full);
     }
   };
+  const root = realPathOrNull(dir);
+  if (root !== null) visitedDirs.add(root);
   walk(dir);
   return found;
 }

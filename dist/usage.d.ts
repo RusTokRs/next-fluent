@@ -52,15 +52,21 @@ interface CallSite {
     argument: string;
     line: number;
 }
+/** A call site plus everything the analyzer learned about it while scanning. */
+export interface CollectedSite extends CallSite {
+    namespace?: string;
+    namespaceKnown: boolean;
+    ambiguous: boolean;
+    /** Where a non-`t(…)` site came from, e.g. `<FormattedMessage>`. */
+    origin?: string;
+    /** Why a namespace the file *does* bind could not be determined. */
+    namespaceNote?: string;
+    ignored: boolean;
+}
 /** Finds translator bindings and the call sites that use them. */
 export declare function collectCallSites(file: SourceFile): {
     bindings: Map<string, string | undefined>;
-    sites: (CallSite & {
-        namespace?: string;
-        namespaceKnown: boolean;
-        ambiguous: boolean;
-        ignored: boolean;
-    })[];
+    sites: CollectedSite[];
 };
 /**
  * Compares a catalog against the call sites found in `sources`.

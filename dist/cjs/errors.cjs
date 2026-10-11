@@ -32,9 +32,7 @@ const FluentErrorCode = {
   /** An argument passed to `t()` is not a valid Fluent variable. */
   INVALID_ARGUMENT: "INVALID_ARGUMENT",
   /** A React element was interpolated through a string-only API. */
-  UNSUPPORTED_VALUE: "UNSUPPORTED_VALUE",
-  /** A less specific locale had to be used for the request. */
-  ENVIRONMENT_FALLBACK: "ENVIRONMENT_FALLBACK"
+  UNSUPPORTED_VALUE: "UNSUPPORTED_VALUE"
 };
 class FluentError extends Error {
   code;
@@ -68,8 +66,6 @@ function describe(details) {
       return `[next-fluent] Invalid argument for message "${path}"${localeSuffix(details.locale)}`;
     case FluentErrorCode.UNSUPPORTED_VALUE:
       return `[next-fluent] Unsupported value for message "${path}"${localeSuffix(details.locale)}`;
-    case FluentErrorCode.ENVIRONMENT_FALLBACK:
-      return `[next-fluent] Environment fallback for message "${path}"${localeSuffix(details.locale)}`;
     default:
       return `[next-fluent] Localization error for "${path}"`;
   }

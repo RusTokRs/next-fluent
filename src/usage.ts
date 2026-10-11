@@ -1,4 +1,5 @@
-import { parse, type Entry } from '@fluent/syntax';
+import { type Entry } from '@fluent/syntax';
+import { parseFtl } from './ftl-parse';
 import { buildKeyCandidates } from './utils';
 import { toFluentSource, type MessageSource } from './catalog';
 
@@ -70,47 +71,224 @@ interface CallSite {
   line: number;
 }
 
-/** Reads the first argument of a call starting at the opening parenthesis. */
-function readFirstArgument(code: string, openParen: number): string | undefined {
-  let depth = 0;
+/** A call site plus everything the analyzer learned about it while scanning. */
+export interface CollectedSite extends CallSite {
+  namespace?: string;
+  namespaceKnown: boolean;
+  ambiguous: boolean;
+  /** Where a non-`t(…)` site came from, e.g. `<FormattedMessage>`. */
+  origin?: string;
+  /** Why a namespace the file *does* bind could not be determined. */
+  namespaceNote?: string;
+  ignored: boolean;
+}
+
+/**
+ * Reads a call's argument list as source text, one entry per argument.
+ *
+ * Comments are dropped from the returned text. A block comment between a
+ * literal key and the next comma is ordinary code, and keeping the comment in
+ * the argument made it unreadable: the key was then reported as `dynamic` *and*
+ * as unused — exactly the two false verdicts this analyzer exists to avoid.
+ * Quotes, brackets and template literals are tracked, so a comma inside any of
+ * them does not split an argument (which matters when a call's *later*
+ * arguments are read, e.g. `createTranslator(bundle, { namespace: 'ns' })`).
+ *
+ * Returns `undefined` when the call is never closed.
+ */
+function readArgumentList(code: string, openParen: number): string[] | undefined {
+  const args: string[] = [];
+  let buffer = '';
+  let depth = 1;
   let quote: string | undefined;
-  for (let i = openParen; i < code.length; i++) {
+  let comment: 'line' | 'block' | undefined;
+
+  for (let i = openParen + 1; i < code.length; i++) {
     const ch = code[i];
+    if (comment === 'line') {
+      if (ch === '\n') comment = undefined;
+      continue;
+    }
+    if (comment === 'block') {
+      if (ch === '*' && code[i + 1] === '/') {
+        comment = undefined;
+        i++;
+      }
+      continue;
+    }
     if (quote) {
-      if (ch === '\\') i++;
-      else if (ch === quote) quote = undefined;
+      buffer += ch;
+      if (ch === '\\') {
+        buffer += code[i + 1] ?? '';
+        i++;
+        continue;
+      }
+      if (ch === quote) quote = undefined;
+      continue;
+    }
+    if (ch === '/' && code[i + 1] === '/') {
+      comment = 'line';
+      i++;
+      continue;
+    }
+    if (ch === '/' && code[i + 1] === '*') {
+      comment = 'block';
+      i++;
       continue;
     }
     if (ch === '"' || ch === "'" || ch === '`') {
       quote = ch;
+      buffer += ch;
       continue;
     }
-    if (ch === '(') depth++;
-    else if (ch === ')') {
-      depth--;
-      if (depth === 0) return code.slice(openParen + 1, i).trim();
-    } else if (depth === 1 && ch === ',') {
-      return code.slice(openParen + 1, i).trim();
+    if (ch === '(' || ch === '{' || ch === '[') {
+      depth++;
+      buffer += ch;
+      continue;
     }
+    if (ch === ')' || ch === '}' || ch === ']') {
+      depth--;
+      if (depth === 0) {
+        args.push(buffer.trim());
+        return args;
+      }
+      buffer += ch;
+      continue;
+    }
+    if (ch === ',' && depth === 1) {
+      args.push(buffer.trim());
+      buffer = '';
+      continue;
+    }
+    buffer += ch;
   }
   return undefined;
 }
 
 /** Unwraps a plain string literal (single, double or static template). */
-function staticString(argument: string): string | undefined {
-  const match = /^(['"`])([\s\S]*)\1$/.exec(argument);
-  if (!match) return undefined;
-  // A template with an interpolation is not a static key.
-  if (match[1] === '`' && match[2].includes('${')) return undefined;
-  return match[2];
+/**
+ * Index just past the string literal that starts at `start`, or `-1`.
+ *
+ * A template literal with an interpolation is not a static string and ends the
+ * scan as well: its value is only known at runtime.
+ */
+function scanStringLiteral(text: string, start: number): number {
+  const quote = text[start];
+  if (quote !== '"' && quote !== "'" && quote !== '`') return -1;
+  for (let i = start + 1; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '\\') {
+      i++;
+      continue;
+    }
+    if (ch === quote) return i + 1;
+    if (quote === '`' && ch === '$' && text[i + 1] === '{') return -1;
+  }
+  return -1;
 }
 
-function namespaceOf(argument: string | undefined): string | undefined {
-  if (!argument) return undefined;
-  const literal = staticString(argument);
-  if (literal !== undefined) return literal || undefined;
-  const named = /namespace\s*:\s*(['"`])([^'"`]*)\1/.exec(argument);
-  return named?.[2] || undefined;
+/**
+ * The key a call site passes, when the argument really is a string literal.
+ *
+ * The literal has to be the entire argument, apart from type-level syntax that
+ * the compiler erases and that therefore cannot change the value: `t('key' as
+ * const)` and `t('key' satisfies Key)` use exactly the same key as `t('key')`,
+ * and reporting them as unverifiable was simply wrong.
+ *
+ * Anything else is not a literal. A greedy quote-to-quote match used to read
+ * `t('k-' + 'one')` as the literal `k-' + 'one` — a key no catalog can contain,
+ * reported as *missing*, with the real keys also called unused. Both verdicts
+ * were false; an expression is now unverifiable (a dynamic site), which is what
+ * it is.
+ */
+function staticString(argument: string): string | undefined {
+  const text = argument.trim();
+  const end = scanStringLiteral(text, 0);
+  if (end === -1) return undefined;
+  const rest = text.slice(end).trim();
+  if (rest !== '' && rest !== '!' && !/^(?:as|satisfies)\s+[\s\S]+$/.test(rest)) return undefined;
+  return text.slice(1, end - 1);
+}
+
+/** `namespace: 'x'` inside an options object. */
+const NAMESPACE_PROPERTY = /namespace\s*:\s*(['"`])([^'"`]*)\1/;
+
+/** The argument index a factory's namespace may start at. */
+const NAMESPACE_ARGUMENT: Record<string, number> = {
+  useTranslations: 0,
+  getTranslations: 0,
+  // `createTranslator(bundle, namespaceOrFallbackOrOpts?, maybeNamespace?)`: the
+  // bundle always comes first, and the namespace may be the second argument, a
+  // `namespace` property in it, or — when that argument is a fallback bundle —
+  // the third one.
+  createTranslator: 1,
+};
+
+/** A `namespace` property in an options object, whatever its value. */
+const NAMESPACE_KEY = /(?:^|[{,\s])namespace\s*:/;
+/** A spread in an options object: which properties it carries cannot be read. */
+const OBJECT_SPREAD = /(?:^|[{,\s])\.\.\./;
+/** An argument that is an object literal — the argument reader balances braces. */
+const OBJECT_LITERAL = /^\{[\s\S]*\}$/;
+
+/**
+ * The namespace a translator factory was called with, and whether it could be
+ * read at all.
+ *
+ * Which argument carries it depends on the factory (see `NAMESPACE_ARGUMENT`):
+ * `useTranslations('checkout')` passes it first, `createTranslator(bundle,
+ * 'checkout')` and `createTranslator(bundle, { namespace: 'checkout' })` after
+ * the bundle. Reading only the first argument made every `createTranslator`
+ * binding look global — a correctly namespaced `t('total')` was reported as a
+ * missing key and failed the command.
+ *
+ * Three outcomes, not two:
+ *
+ * - a literal namespace — the keys are verified against it;
+ * - nothing that could carry a namespace — `useTranslations()`,
+ *   `createTranslator(bundle)`, `createTranslator(bundle, { fallbackBundles })`
+ *   — a *global* translator, verifiable as such, so an unknown key under it is
+ *   reported as missing, which is correct;
+ * - an argument that exists but cannot be read (`useTranslations(NS.checkout)`,
+ *   `createTranslator(bundle, {...opts})`) — the keys cannot be verified against
+ *   one namespace, so they are matched against every namespace and an unmatched
+ *   one is reported as unverifiable rather than missing.
+ */
+function factoryNamespace(name: string, args: readonly string[]): { namespace?: string; known: boolean } {
+  let namespace: string | undefined;
+  let literal = false;
+  let unreadable = false;
+
+  for (const arg of args.slice(NAMESPACE_ARGUMENT[name] ?? 0)) {
+    const text = arg.trim();
+    // An explicit "no options" value is the same as passing none.
+    if (text === '' || text === 'null' || text === 'undefined') continue;
+
+    const value = staticString(text);
+    if (value !== undefined) {
+      literal = true;
+      namespace = value || undefined;
+      continue;
+    }
+
+    const named = NAMESPACE_PROPERTY.exec(text);
+    if (named) {
+      literal = true;
+      namespace = named[2] || undefined;
+      continue;
+    }
+
+    if (OBJECT_LITERAL.test(text)) {
+      // An options object that declares neither a namespace nor a spread cannot
+      // hide one, so it leaves the translator global.
+      if (NAMESPACE_KEY.test(text) || OBJECT_SPREAD.test(text)) unreadable = true;
+      continue;
+    }
+
+    unreadable = true;
+  }
+
+  return literal || !unreadable ? { namespace, known: true } : { namespace: undefined, known: false };
 }
 
 /**
@@ -239,7 +417,10 @@ function maskNonCode(source: string): string {
     if (top === 'template') {
       if (ch === '\\') {
         out[i] = ' ';
-        out[i + 1] = ' ';
+        // A backslash followed by a line break is a line continuation: the new
+        // line has to survive, or every later line number in the file is off
+        // by one (`blank` above preserves them for the same reason).
+        if (source[i + 1] !== '\n') out[i + 1] = ' ';
         i += 2;
         continue;
       }
@@ -343,15 +524,88 @@ function createLineCounter(masked: string): (index: number) => number {
   };
 }
 
+/**
+ * The `<FormattedMessage>` component: a message the JSX renders, not a `t()`
+ * call.
+ *
+ * It is the documented way to render a message from a component, and its `id`
+ * is a literal key like any other — but nothing looked at JSX, so a message used
+ * *only* through `<FormattedMessage id="…" />` was reported as unused, and
+ * `--strict-usage` failed a correct project. A non-literal `id` is reported like
+ * any other unresolvable call site, so the key gets an explanation instead of a
+ * silent verdict.
+ *
+ * The id is matched against every namespace, the way a translator this file does
+ * not create is: the component resolves its translator globally, so a short
+ * namespaced key is a runtime bug, but `<FormattedMessage fallback>` makes a key
+ * that resolves nowhere a legitimate pattern and a `missing` verdict would be
+ * wrong for it.
+ */
+const JSX_COMPONENT = /<FormattedMessage(?![A-Za-z0-9_$])/g;
+const JSX_ORIGIN = '<FormattedMessage>';
+
+/**
+ * The raw `id` attribute of the JSX tag starting at `tagStart`, or `undefined`
+ * when the tag has none.
+ *
+ * Attribute *names* are read from the masked copy (string literals there are
+ * blank, so `data-id="…"` cannot pose as `id="…"`), the value from the original
+ * text, because the masked copy no longer holds the key.
+ */
+function jsxIdArgument(content: string, masked: string, tagStart: number): string | undefined {
+  let depth = 0;
+  let end = masked.length;
+  for (let i = tagStart; i < masked.length; i++) {
+    const ch = masked[i];
+    if (ch === '{') depth++;
+    else if (ch === '}') depth = Math.max(0, depth - 1);
+    else if (ch === '>' && depth === 0) {
+      end = i;
+      break;
+    }
+  }
+
+  const tag = masked.slice(tagStart, end);
+  const attribute = /(?:^|\s)id\s*=/.exec(tag);
+  if (!attribute) return undefined;
+
+  let i = tagStart + attribute.index + attribute[0].length;
+  while (i < content.length && /\s/.test(content[i])) i++;
+  const first = content[i];
+
+  if (first === '{') {
+    let braces = 0;
+    let quote: string | undefined;
+    for (let j = i; j < content.length; j++) {
+      const ch = content[j];
+      if (quote) {
+        if (ch === '\\') j++;
+        else if (ch === quote) quote = undefined;
+        continue;
+      }
+      if (ch === '"' || ch === "'" || ch === '`') {
+        quote = ch;
+        continue;
+      }
+      if (ch === '{') braces++;
+      else if (ch === '}') {
+        braces--;
+        if (braces === 0) return content.slice(i + 1, j).trim();
+      }
+    }
+    return undefined;
+  }
+
+  if (first === '"' || first === "'") return content.slice(i, skipLiteral(content, i));
+
+  // A bare attribute value (`id=key`): not a literal, handled as a dynamic site.
+  return /^[^\s/>]+/.exec(content.slice(i))?.[0];
+}
+
 /** Finds translator bindings and the call sites that use them. */
 export function collectCallSites(file: SourceFile): {
   bindings: Map<string, string | undefined>;
-  sites: (CallSite & {
-    namespace?: string;
-    namespaceKnown: boolean;
-    ambiguous: boolean;
-    ignored: boolean;
-  })[];
+  sites: CollectedSite[];
 } {
   const { content } = file;
   // Patterns run on the masked copy so comments, strings and regex literals
@@ -359,13 +613,10 @@ export function collectCallSites(file: SourceFile): {
   const masked = maskNonCode(content);
   const lineAt = createLineCounter(masked);
   const bindings = new Map<string, string | undefined>();
-  const sites: (CallSite & {
-    namespace?: string;
-    namespaceKnown: boolean;
-    ambiguous: boolean;
-    ignored: boolean;
-  })[] = [];
+  const sites: CollectedSite[] = [];
   const suppressed = ignoredLines(content);
+  /** Sites in source order; line numbers are resolved once, in one pass. */
+  const found: { index: number; site: Omit<CollectedSite, 'line' | 'ignored'> }[] = [];
 
   // 1. Bindings: `const t = useTranslations('ns')`, optionally awaited, and the
   //    object form `getTranslations({ namespace: 'ns', locale })`.
@@ -380,12 +631,20 @@ export function collectCallSites(file: SourceFile): {
    * a different namespace. Keeping only the last binding made an earlier call
    * resolve against the wrong namespace and report a key as missing.
    */
-  const bindingList: { index: number; name: string; namespace: string | undefined }[] = [];
+  const bindingList: {
+    index: number;
+    name: string;
+    namespace: string | undefined;
+    known: boolean;
+  }[] = [];
   for (let match = factoryPattern.exec(masked); match; match = factoryPattern.exec(masked)) {
     const openParen = match.index + match[0].length - 1;
     const name = match[1];
-    const namespace = namespaceOf(readFirstArgument(content, openParen));
-    bindingList.push({ index: match.index, name, namespace });
+    // Which argument carries the namespace depends on the *factory* (group 2),
+    // not on the variable it is assigned to.
+    const args = readArgumentList(content, openParen);
+    const { namespace, known } = factoryNamespace(match[2], args ?? []);
+    bindingList.push({ index: match.index, name, namespace, known });
     bindings.set(name, namespace);
   }
 
@@ -403,10 +662,15 @@ export function collectCallSites(file: SourceFile): {
     if (own.length === 0) return { namespace: undefined, known: false, ambiguous: false };
     const preceding = own.filter((entry) => entry.index < index);
     if (preceding.length > 0) {
-      return { namespace: preceding[preceding.length - 1].namespace, known: true, ambiguous: false };
+      const binding = preceding[preceding.length - 1];
+      return { namespace: binding.namespace, known: binding.known, ambiguous: false };
     }
-    const distinct = new Set(own.map((entry) => entry.namespace ?? ''));
-    if (distinct.size === 1) return { namespace: own[0].namespace, known: true, ambiguous: false };
+    const distinct = new Set(
+      own.map((entry) => `${entry.known ? 'readable' : 'unreadable'}:${entry.namespace ?? ''}`)
+    );
+    if (distinct.size === 1) {
+      return { namespace: own[0].namespace, known: own[0].known, ambiguous: false };
+    }
     // Bound to several namespaces and the call precedes all of them: guessing
     // would produce a false missing-key failure, and matching against every
     // namespace would silently hide a genuine typo. Report it as unresolvable.
@@ -420,8 +684,13 @@ export function collectCallSites(file: SourceFile): {
   const bareNames = ['t', 'translate'];
   const names = new Set([...bindings.keys(), ...bareNames]);
   const methodAlternatives = CALL_METHODS.join('|');
+  // `t('key')`, `t.rich('key')` and every optional-call spelling of them —
+  // `t?.('key')`, `t?.rich('key')`, `t.rich?.('key')`. The optional chain used
+  // to be invisible wherever it stood, so a key used only that way was reported
+  // as unused.
   const callPattern = new RegExp(
-    `\\b(${[...names].map((name) => name.replace(/\$/g, '\\$')).join('|')})\\s*(?:\\.\\s*(${methodAlternatives}))?\\s*\\(`,
+    `\\b(${[...names].map((name) => name.replace(/\$/g, '\\$')).join('|')})` +
+      `(?:\\s*\\?\\.\\s*|\\s*\\.\\s*)?(${methodAlternatives})?\\s*(?:\\?\\.)?\\s*\\(`,
     'g'
   );
 
@@ -429,22 +698,54 @@ export function collectCallSites(file: SourceFile): {
     const name = match[1];
     if ((FACTORIES as string[]).includes(name)) continue;
     const openParen = match.index + match[0].length - 1;
-    const argument = readFirstArgument(content, openParen);
-    if (argument === undefined) continue;
+    const args = readArgumentList(content, openParen);
+    if (args === undefined) continue;
+    const argument = args[0] ?? '';
     const { namespace, known, ambiguous } = namespaceAt(name, match.index);
     // An unattributed call with a non-string argument (`const t = 5; t(3)`) is
     // not evidence of a translator at all — skip it instead of reporting noise.
     if (!known && staticString(argument) === undefined) continue;
-    const line = lineAt(match.index);
-    sites.push({
-      method: match[2] as CallMethod | undefined,
-      argument,
-      line,
-      namespace,
-      namespaceKnown: known,
-      ambiguous,
-      ignored: suppressed.has(line),
+    found.push({
+      index: match.index,
+      site: {
+        method: match[2] as CallMethod | undefined,
+        argument,
+        namespace,
+        namespaceKnown: known,
+        ambiguous,
+        namespaceNote:
+          !known && !ambiguous && bindings.has(name)
+            ? `"${name}" is created with a namespace argument that is not a string literal, ` +
+              'so the key cannot be verified against one namespace.'
+            : undefined,
+      },
     });
+  }
+
+  // 3. `<FormattedMessage id="…" />`. The component resolves its translator
+  //    globally, so the id is treated like a call the file does not create.
+  JSX_COMPONENT.lastIndex = 0;
+  for (let match = JSX_COMPONENT.exec(masked); match; match = JSX_COMPONENT.exec(masked)) {
+    const argument = jsxIdArgument(content, masked, match.index);
+    if (argument === undefined || argument === '') continue;
+    found.push({
+      index: match.index,
+      site: {
+        method: undefined,
+        argument,
+        namespaceKnown: false,
+        ambiguous: false,
+        origin: JSX_ORIGIN,
+      },
+    });
+  }
+
+  // Both scans jumped around the file, and line numbers are resolved in one
+  // forward pass, so the candidates are ordered before they are numbered.
+  found.sort((a, b) => a.index - b.index);
+  for (const { index, site } of found) {
+    const line = lineAt(index);
+    sites.push({ ...site, line, ignored: suppressed.has(line) });
   }
 
   return { bindings, sites };
@@ -470,7 +771,7 @@ interface CatalogIndex {
 function indexCatalog(source: MessageSource): CatalogIndex {
   const combined = toFluentSource(source);
   const text = typeof combined === 'string' ? combined : combined.join('\n');
-  const resource = parse(text, { withSpans: false });
+  const resource = parseFtl(text, 'The catalog');
   const keys = new Set<string>();
   const withAttributes = new Set<string>();
   const withValue = new Set<string>();
@@ -572,7 +873,9 @@ export function analyzeUsage(
             kind: 'dynamic',
             file: file.path,
             line: site.line,
-            message: `Key is not a string literal and cannot be checked statically.`,
+            message:
+              'Key is not a string literal and cannot be checked statically' +
+              `${site.origin ? ` (${site.origin})` : ''}.`,
           });
         }
         continue;
@@ -661,9 +964,13 @@ export function analyzeUsage(
           kind: 'dynamic',
           file: file.path,
           line: site.line,
-          message:
-            `"${key}" is used through a translator this file does not create, ` +
-            'so its namespace cannot be verified.',
+          message: site.namespaceNote
+            ? `"${key}" is used where the namespace cannot be read: ${site.namespaceNote}`
+            : site.origin
+              ? `"${key}" is rendered by ${site.origin} and matches no catalog key ` +
+                '(every namespace was searched), so it cannot be verified.'
+              : `"${key}" is used through a translator this file does not create, ` +
+                'so its namespace cannot be verified.',
         });
         continue;
       }

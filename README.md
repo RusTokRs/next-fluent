@@ -71,6 +71,11 @@ the same integration fixture, which covers the `middleware.ts` → `proxy.ts` re
 and Turbopack being the default bundler for `next build`. Locally, `npm run check`
 runs the fixture against both majors in one go (`test:next` then `test:next:16`).
 
+The package's own versioning rule (patch fixes, minor may break while the major
+is 0, 1.0.0 switches to strict SemVer) is in
+[`SECURITY.md`](./SECURITY.md#supported-versions); releases are cut by the
+Publish workflow described under [Releasing](#releasing).
+
 The floor is the **oldest version that still receives updates**, not the newest
 one available: Node.js 20 reached end of life on 2026-04-30, so 22 is the oldest
 supported LTS, and Next.js 15.3 is where the top-level `turbopack` config landed
@@ -242,7 +247,26 @@ export const config = {
 };
 ```
 
-> **Hardening**: pass `trustedHosts` (e.g. `createI18nMiddleware({ ...routing, trustedHosts: ['example.com', '*.example.com'] })`) to reject foreign `Host` headers with `421 Misdirected Request` before any redirect is issued — recommended when responses may be cached by shared caches or CDNs. Without it, redirect targets are built from the request's `Host` header, and `next dev` prints a one-time warning on the first redirect.
+> **Hardening**: pass `trustedHosts` (e.g. `createI18nMiddleware({ ...routing, trustedHosts: ['example.com', '*.example.com'] })`) to reject foreign `Host` headers with `421 Misdirected Request` before any public URL is issued — recommended when responses may be cached by shared caches or CDNs. Without it, both redirect targets and the alternate `Link` header are built from the request's `Host` header, and `next dev` prints a one-time warning as soon as such a URL is built. The wildcard lists subdomains only: `*.example.com` does **not** cover the apex, so list `example.com` as well when it is served.
+
+#### Telling the server which locales exist
+
+`getLocale()` prefers, in order: the locale forwarded by the middleware, the locale cookie, `Accept-Language`, and finally `defaultLocale`. The last two need a list of locales to choose *from* — without one the browser's preference is never consulted and every request falls back to the default. Declare the list once, in a module only the server imports:
+
+```typescript
+// src/i18n/server-config.ts
+import { configureServerI18n } from 'next-fluent/server';
+import { routing } from './routing';
+
+configureServerI18n({ locales: routing.locales, defaultLocale: routing.defaultLocale });
+```
+
+Two rules make this work:
+
+- It has to run **before the first `getLocale()` of the request** — that call resolves `next/headers` and every module it imports along the way. An import-time call at the top of `request.ts` is too late by that point, and `routing.ts` is wrong outright because the client imports it too.
+- Keep it in its own server-only module, imported from the root layout or the middleware — not from `request.ts` or `routing.ts`.
+
+Without this module, `Accept-Language` detection is silently inert and `createI18nMiddleware`'s own negotiation is the only thing that honours the browser's preference.
 
 ### 5. Root Layout (`app/[locale]/layout.tsx`)
 
@@ -352,6 +376,12 @@ export function Navigation() {
 }
 ```
 
+`useNow()` follows the request snapshot: it returns the `now` of the request
+config (or of `<FluentServerProvider>`), so server and client render the same
+instant. Without one — a bare `FluentProvider` with no `now` — the server-side
+render uses the epoch (`1970-01-01T00:00:00Z`, hydration-safe) and the live clock
+starts right after mount; pass `now` when the SSR HTML has to show the real date.
+
 ### Rich Text & React Node Interpolation
 
 Pass React components directly into variables or map interactive markup tags:
@@ -395,14 +425,25 @@ Mapping rules:
 
 | JSON | FTL |
 | --- | --- |
-| `{ "nav": { "home": "Home" } }` | `nav-home = Home` (addressable as `t('nav.home')` or `t('nav-home')`) |
+| `{ "nav": { "home": "Home" } }` | `nav-home = Home` (addressable as `t('nav.home')` or `t('nav-home')`) — a dashes key is looked up first, so `t('nav.home')` finds the message `nav-home` before any `nav` message's `.home` attribute |
 | `{ "hello": "Hi {name}!" }` / `{ $name }` | `hello = Hi { $name }!` |
 | `{ "btn": { "": "OK", "aria-label": "Confirm" } }` | `btn = OK` + `.aria-label = Confirm` |
+| `{ "btn": { "": "OK", ".aria-label": "Confirm" } }` | same — a leading dot is accepted, since that is how FTL spells an attribute |
 | numbers / booleans | stringified |
-| arrays, `null` | rejected with an actionable error (Fluent uses selectors, not lists) |
+| arrays, `null`, empty objects | rejected with an actionable error (Fluent uses selectors, not lists; an empty object is an unwritten message, and dropping it would leave every lookup of it to miss) |
 
 Braces, quotes, backslashes, padding and newlines are escaped so a converted
-catalog round-trips byte for byte.
+catalog round-trips byte for byte. `\{` and `\}` are literal braces — the escape
+hatch for prose that is not a placeholder:
+
+```json
+{ "json-hint": "Wrap keys in \\{braces\\}" }
+```
+
+Without the escape `{braces}` would become a reference to a variable nobody
+passes, and the message would render as its own key. A catalog that declares the
+same message id twice (say `"nav-home"` and `{ "nav": { "home": … } }`) is
+rejected instead of quietly letting one definition win.
 
 ### Sending a client component only what it renders
 
@@ -415,9 +456,18 @@ import { pickMessages } from 'next-fluent/messages';
 />
 ```
 
-`pickMessages` prunes the catalog to one namespace — plus the shared Fluent
-terms (`-brand`) that namespace references — so the serialized payload scales
-with the page instead of the app.
+`pickMessages` prunes the catalog to one namespace — plus everything those
+messages reference: the shared Fluent terms (`-brand`) and the messages they
+interpolate (`{ common-greeting }`, followed transitively). A reference is part
+of a message's meaning, so dropping it would leave the client bundle with a
+placeable that cannot be resolved and the key rendered in its place. Pass
+`{ keepTerms: false }` to leave the shared terms behind; message references are
+always kept.
+
+An entry the FTL parser cannot read is not silently pruned: if it belongs to the
+requested namespace, `pickMessages` throws a `FluentError` naming its first
+line, so a broken catalog fails where it is visible instead of shipping a
+payload with missing text.
 
 ### Error handling (`onError` / `getMessageFallback`)
 
@@ -439,6 +489,15 @@ export default setRequestConfig(async ({ locale }) => ({
   },
 }));
 ```
+
+The error carries `code`, `key`, `namespace`, `locale`, `path` (the namespaced key) and, where there is one, a `cause`:
+
+| `code` | `cause` |
+| --- | --- |
+| `FORMATTING_ERROR` | the `Error[]` Fluent collected, e.g. `ReferenceError: Unknown variable: $name` |
+| `INVALID_ARGUMENT` | `{ unsupportedArguments: string[], errors: Error[] }` — the keys that could not be used, and why |
+
+`MISSING_MESSAGE` and `UNSUPPORTED_VALUE` have no cause: there is nothing underneath them. Fluent's errors are native `Error` objects, whose `message` is not enumerable — log the error itself rather than `JSON.stringify(error.cause)`, which yields `[{}]`.
 
 Missing and formatting errors are logged by default (`console.warn` / `console.error`); pass `onError() {}` to silence them completely. A throwing handler can never break a render. `debug: true` on `getTranslations()`/`createTranslator()` keeps the development-friendly `[MISSING: namespace.key]` output.
 
@@ -466,6 +525,11 @@ format.number(0.19, 'percent');            // → "19%"
 format.dateTime(new Date(), { dateStyle: 'full' }); // raw Intl options still work
 ```
 
+An unknown format name or an unknown IANA `timeZone` is reported once (listing the
+name and the config option it belongs to) instead of silently degrading; date/time
+output keeps formatting in the runtime's zone rather than turning into an ISO
+string, so a typo in the config is visible but never breaks the page.
+
 ### Non-HTML output (`useIsolating`)
 
 Fluent wraps placeables in U+2068/U+2069 bidi isolates — correct for HTML, noise in `<title>`, meta tags, JSON APIs or plain-text emails. Turn them off per request (or per call) with `useIsolating: false` in the request config or in `getTranslations()` options. `t.raw()` always strips them.
@@ -485,6 +549,13 @@ createI18nMiddleware({
 });
 ```
 
+`trustedHosts` entries are host names, optionally with a port; `*.example.com`
+matches subdomains and `example.com` matches the apex — list both when both are
+served. The absolute spelling `example.com.` is treated as the same host, and so
+is `x-forwarded-host`, which is only honoured when it matches `Host`, a
+configured domain, or when both it and the connection are loopback (a local
+development proxy). Anything else keeps the request's own origin.
+
 Alternate links use each destination domain's prefix rules and include locales
 served on other domains. They also work in `never` mode when domains or localized
 pathnames give the languages distinct URLs. URLs shared by multiple locales are
@@ -492,7 +563,7 @@ omitted; no header is emitted with fewer than two unambiguous variants, on
 redirects, or with `alternateLinks: false`. `x-default` is included only without
 domain routing and when the default URL is unambiguous.
 
-The cookie is only written for `Sec-Fetch-Dest: document` requests and only when the stored value changes, so a client that already has one keeps `Cache-Control: s-maxage=…` instead of invalidating the entry on every hit. A cookie-less client still receives `Set-Cookie` on its first response — that is why detection-derived responses vary on `Cookie` too — and the cookie is `Secure` in production by default.
+The cookie is only written for `Sec-Fetch-Dest: document` requests and only when the stored value changes, so a client that already has one keeps `Cache-Control: s-maxage=…` instead of invalidating the entry on every hit. A cookie-less client still receives `Set-Cookie` on its first response — that is why detection-derived responses vary on `Cookie` too — and the cookie is `Secure` in production by default. With `localeDetection: false` nothing reads the cookie back, so the middleware does not write it either and documents stay cacheable; pass an explicit `localeCookie` config (not `false`) if you want it maintained for `getLocale()` on routes your matcher excludes.
 
 Requests whose locale comes from the cookie or `Accept-Language` (a prefix-less URL, or `/` in `as-needed`) are answered with `Vary: Accept-Language, Cookie`, because the same URL resolves differently per visitor. On a CDN this means such responses are cached per language rather than shared; if a route must be cached globally, either spell the locale in the URL or set `localeDetection: false` for that zone.
 
@@ -531,6 +602,13 @@ declare global {
 
 Once declared, `useTranslations('namespace')` and `getTranslations('namespace')` **automatically autocomplete message keys and validate arguments** across your entire project!
 
+Arguments follow the runtime's key resolution, including the corner where a
+message is named like another message's dotted attribute (`greeting-formal`
+next to `greeting` with `.formal`): `t('greeting.formal')` formats the message,
+so the key carries that message's variables, and the generated file lists the
+shadowed attribute together with its `t.attrs()` path. Unparsable catalog
+entries fail the generator instead of silently disappearing from the types.
+
 ### Catalog consistency in CI
 
 ```bash
@@ -547,6 +625,23 @@ Missing, extra, duplicated and unparsable keys are reported per locale and the
 command exits non-zero, so translation gaps fail the build instead of shipping a
 fallback string. The same engine is available programmatically as
 `checkCatalogs()` from `next-fluent/check`.
+
+The server runtime reports the same class of problem from the other side: Fluent's
+runtime parser drops a message it cannot read *without any error*, so the only
+symptom used to be a `MISSING_MESSAGE` for a key the catalog defines. `next-fluent`
+now compares the entries a catalog declares with the ones the parser kept and warns
+once per catalog, naming the lost ids. The same check covers a catalog a client
+component hands to `FluentProvider` (FTL text or a JSON payload parsed in the
+browser) — there it runs in development only, since the scan has no place in the
+bytes every visitor downloads; production builds drop it together with the code
+that performs it (`npm run size` fails if that ever stops being true). That
+command reports two client numbers: what an app using the documented client API
+downloads (a hand-written fixture) and a ceiling generated from the package's own
+exports — the total cost of everything a browser can reach. Both are budgets, and
+both are raised only by a recorded measurement. A UTF-8
+byte-order mark (a catalog saved by an editor that writes one) is stripped before
+parsing, so it no longer costs the first entry — and a BOM in a `.json` catalog no
+longer fails with a bare "Unexpected token".
 
 ### Finding dead messages
 
@@ -588,6 +683,39 @@ and anything it cannot resolve is reported as `dynamic` rather than guessed at.
 A single call site can be exempted with a `// next-fluent-ignore` comment, whole
 namespaces with `--ignore-unused <prefix>`.
 
+**What it scans.** `--src` is walked recursively through `.ts`, `.tsx`, `.mts`,
+`.cts`, `.js`, `.jsx`, `.mjs`, `.cjs` and `.mdx`; `.d.ts`/`.d.mts`/`.d.cts` are
+skipped because they hold no call sites, and so are `node_modules`, `.next`,
+`dist`, `out`, `build`, `coverage`, `.git`, `.turbo` and dotted directories.
+Symbolic links **are** followed — `app/components → ../../packages/ui` is where a
+monorepo keeps half its call sites — with the real path of every visited
+directory and file remembered, so a link that reaches its own ancestor terminates
+and a file behind two links is counted once, not twice. A file outside the
+default list is not scanned, so a message used only from one will be reported as
+unused; `--allow-unused` silences that report if your project needs it.
+
+What it reads: every call shape of a translator — `t()`, `t?.()`, `t.rich()`,
+`t.rich?.()`, `t.attrs()`, `t.raw()`, `t.has()`, `t.plain()` — the factories that
+create one (`useTranslations`, `getTranslations` and `createTranslator`,
+including the namespace in its options argument), and
+`<FormattedMessage id="checkout-title" />`, which counts as a render of that key.
+A literal may carry a type-level suffix (`t('key' as const)` or
+`t('key' satisfies Key)`): the compiler erases it, so the key is still known. An
+argument that is an *expression* (`t('key-' + suffix)`) is unverifiable rather
+than guessed at, and so is a namespace the file does not spell out literally
+(`useTranslations(NAMESPACES.checkout)`): "no key matches" cannot be concluded
+from "the namespace could not be read".
+
+Where a call site is listed as `dynamic` depends on whether the file creates the
+translator itself. A non-literal key is listed when `t` was bound earlier in the
+same file by `useTranslations()` / `getTranslations()` — the key is unreadable,
+but the call site is real. When the file does not create the translator (a
+component that receives `t` from props, a callback parameter, an import), an
+expression argument is left alone: a name like `t` may not be a translator at all,
+and `const t = 5; t(3)` must not appear in the report. A *literal* key through
+such a translator is still matched against every namespace, and if it matches
+nothing it is reported as `dynamic` — never as `missing`.
+
 The analyzer never writes to a catalog. It is also available programmatically as
 `analyzeUsage()` / `formatUsageReport()` from `next-fluent/usage`.
 
@@ -621,6 +749,20 @@ The analyzer never writes to a catalog. It is also available programmatically as
 | — | `pickMessages()` | prune a catalog to one namespace for client payloads |
 | — | `next-fluent check` | cross-locale missing/extra/duplicate/parse report |
 | Message extraction from source | ✅ by design | not needed: the catalog is the source of truth, so `t('unknown')` is a compile error. `next-fluent check --usage` covers the other direction — dead keys and unverifiable call sites |
+
+## Releasing
+
+Releases are cut from `main` by publishing a GitHub Release (or running the
+**Publish** workflow manually, which defaults to `npm publish --dry-run`). The
+workflow runs the full gate — `npm run check`, i.e. build, `dist` freshness,
+lint, types, edge bundle, unit tests, consumer contract, size budgets, typegen
+types and both Next integrations — and only then publishes with provenance.
+Authentication is either the `NPM_TOKEN` secret or npm trusted publishing
+(OIDC) when the repository is configured as a trusted publisher for the package.
+
+The versioning rule lives in [`SECURITY.md`](./SECURITY.md#supported-versions):
+patches fix, minors may break while the major is 0, and every breaking change
+gets its own heading in `CHANGELOG.md`.
 
 ## License
 

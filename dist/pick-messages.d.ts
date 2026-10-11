@@ -1,6 +1,10 @@
 import { type MessageSource } from './catalog';
 export interface PickMessagesOptions {
-    /** Keep messages outside the namespace that the namespace's terms reference. */
+    /**
+     * Keep the shared terms (`-brand`) the namespace references. Defaults to
+     * `true`; message references (`{ other-message }`) are always kept, because a
+     * message without them cannot be formatted at all.
+     */
     keepTerms?: boolean;
 }
 /**

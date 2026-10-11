@@ -4,20 +4,36 @@ import { LRUCache } from './lru';
 
 const MAX_CACHE_SIZE = 200;
 
-function stringifySorted(obj: unknown): string {
+/**
+ * Stable serialization of `Intl` options for the formatter cache keys.
+ *
+ * `seen` tracks the objects on the current path so a cyclic options object
+ * (any object graph a caller reuses as a cache key can contain one) cannot
+ * recurse until the stack overflows mid-render.
+ */
+function stringifySorted(obj: unknown, seen?: Set<object>): string {
   if (obj === null || typeof obj !== 'object') {
     return JSON.stringify(obj);
   }
-  if (Array.isArray(obj)) {
-    return `[${obj.map(stringifySorted).join(',')}]`;
+  const path = seen ?? new Set<object>();
+  if (path.has(obj)) {
+    return '"[circular]"';
   }
-  const keys = Object.keys(obj as Record<string, unknown>).sort();
-  return `{${keys
-    .map(
-      (k) =>
-        `${JSON.stringify(k)}:${stringifySorted((obj as Record<string, unknown>)[k])}`
-    )
-    .join(',')}}`;
+  path.add(obj);
+  try {
+    if (Array.isArray(obj)) {
+      return `[${obj.map((item) => stringifySorted(item, path)).join(',')}]`;
+    }
+    const keys = Object.keys(obj as Record<string, unknown>).sort();
+    return `{${keys
+      .map(
+        (k) =>
+          `${JSON.stringify(k)}:${stringifySorted((obj as Record<string, unknown>)[k], path)}`
+      )
+      .join(',')}}`;
+  } finally {
+    path.delete(obj);
+  }
 }
 
 const dtfCache = new LRUCache<Intl.DateTimeFormat>(MAX_CACHE_SIZE);
@@ -31,11 +47,25 @@ export function clearFormatterCache(): void {
   rtfCache.clear();
   lfCache.clear();
   warnedFormats.clear();
+  warnedDateTimes.clear();
+  warnedIntlRefusals.clear();
 }
 
 /** Unknown format names already reported, so a list render cannot spam logs. */
 const warnedFormats = new Set<string>();
+/** Unusable `dateTime` configurations already reported, keyed by locale + cause. */
+const warnedDateTimes = new Set<string>();
+/** Configurations `Intl` refused, already reported, keyed by locale + kind + options. */
+const warnedIntlRefusals = new Set<string>();
 const MAX_WARNED_FORMATS = 200;
+
+/** Reports a formatter misconfiguration once per key, with a bounded key set. */
+function warnOnce(store: Set<string>, key: string, message: string): void {
+  if (store.has(key)) return;
+  if (store.size >= MAX_WARNED_FORMATS) store.clear();
+  store.add(key);
+  console.warn(message);
+}
 
 /**
  * Resolves a named format (`'short'`) against the configured presets, or passes
@@ -50,19 +80,59 @@ function resolveFormat<T>(
   if (options === undefined || typeof options !== 'string') return options;
   const preset = presets?.[options];
   if (!preset) {
-    const warnKey = `${kind}::${options}`;
-    if (!warnedFormats.has(warnKey)) {
-      // Bounded: a runaway key set is cleared rather than grown without limit,
-      // at the cost of a repeated warning.
-      if (warnedFormats.size >= MAX_WARNED_FORMATS) warnedFormats.clear();
-      warnedFormats.add(warnKey);
-      console.warn(
-        `[next-fluent] Unknown ${kind} format "${options}". Configure it in the request config "formats" option.`
-      );
-    }
+    warnOnce(
+      warnedFormats,
+      `${kind}::${options}`,
+      `[next-fluent] Unknown ${kind} format "${options}". Configure it in the request config "formats" option.`
+    );
     return undefined;
   }
   return preset;
+}
+
+/**
+ * Whether `Intl` accepts this time zone on its own.
+ *
+ * `new Intl.DateTimeFormat` throws for a zone that does not exist *and* for an
+ * option combination it refuses, so the two have to be told apart before the
+ * zone is blamed: `"UTC"` is a perfectly usable zone that
+ * `Intl.supportedValuesOf('timeZone')` does not even list. The probe runs only
+ * on the error path.
+ */
+function usableTimeZone(locale: string, timeZone: string): boolean {
+  try {
+    return Boolean(new Intl.DateTimeFormat(locale, { timeZone }));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Reports, once per locale and option set, that `Intl` refused the options of
+ * `number` or `relativeTime` and what was rendered instead.
+ *
+ * The message names what was refused and what came out, never a cause: `Intl`
+ * throws the same `RangeError` for an unknown currency code, a non-existent
+ * unit and an out-of-range fraction-digit count, so an explanation guessing
+ * between them would send the reader after the wrong option. Without it the
+ * failure is invisible — `number(1234.5, { style: 'currency' })` renders
+ * `1234.5`, which reads like a correct number rather than like a currency that
+ * was never formatted. This is the `dateTime` contract (audit pass 8) applied to
+ * the two formatters that were still degrading silently.
+ */
+function warnIntlRefusal(
+  kind: 'number' | 'relativeTime',
+  locale: string,
+  options: Intl.NumberFormatOptions | Intl.RelativeTimeFormatOptions | undefined,
+  fallback: string
+): void {
+  warnOnce(
+    warnedIntlRefusals,
+    `${kind}::${locale}::${stringifySorted(options ?? {})}`,
+    `[next-fluent] Intl refused these ${kind} options for "${locale}" ` +
+      `(${Object.keys(options ?? {}).join(', ')}); the value was rendered as ` +
+      `${JSON.stringify(fallback)}.`
+  );
 }
 
 export function createFormatter(optionsOrLocale: string | FormatterOptions): Formatter {
@@ -100,12 +170,75 @@ export function createFormatter(optionsOrLocale: string | FormatterOptions): For
       const cacheKey = `${locale}::${stringifySorted(mergedOptions)}`;
       let formatter = dtfCache.get(cacheKey);
       if (!formatter) {
+        let candidate: Intl.DateTimeFormat | undefined;
         try {
-          formatter = new Intl.DateTimeFormat(locale, mergedOptions);
-          dtfCache.set(cacheKey, formatter);
+          candidate = new Intl.DateTimeFormat(locale, mergedOptions);
         } catch {
-          return date.toISOString();
+          // An unusable configuration used to degrade silently to an ISO string:
+          // machine-readable output in the UI with no diagnostic at all. A typo
+          // in `timeZone` is by far the common case (and the one `formats`
+          // presets cannot cover, because the zone comes from the config), so it
+          // is reported and retried without the zone — the text stays localized
+          // instead of turning into `2026-01-02T03:04:05.000Z`.
+          const requestedTimeZone = mergedOptions.timeZone;
+          if (requestedTimeZone === undefined) return date.toISOString();
+
+          if (usableTimeZone(locale, requestedTimeZone)) {
+            // The zone is fine, so what Intl refused is the options. One
+            // combination is forbidden outright: a `dateStyle` or `timeStyle`
+            // next to any component option (`{ dateStyle, timeZoneName }` throws
+            // a TypeError that names neither). Dropping the style is the retry
+            // that keeps a localized value, and the warning is emitted only when
+            // that retry succeeds — so neither message is a guess about the
+            // cause. Intl errors with no such rescue (an out-of-range
+            // `hourCycle`, say) are reported as refused rather than explained.
+            const { dateStyle, timeStyle, ...components } = mergedOptions;
+            let withoutStyle: Intl.DateTimeFormat | undefined;
+            if (
+              (dateStyle !== undefined || timeStyle !== undefined) &&
+              Object.keys(components).length > 0
+            ) {
+              try {
+                withoutStyle = new Intl.DateTimeFormat(locale, components);
+              } catch {
+                withoutStyle = undefined;
+              }
+            }
+            if (withoutStyle) {
+              candidate = withoutStyle;
+              warnOnce(
+                warnedDateTimes,
+                `options::${locale}::${stringifySorted(mergedOptions)}`,
+                `[next-fluent] Intl refused these dateTime options for "${locale}" ` +
+                  `(${Object.keys(mergedOptions).join(', ')}): \`dateStyle\` and \`timeStyle\` ` +
+                  'cannot be combined with any other component option, so the style was ignored.'
+              );
+            } else {
+              warnOnce(
+                warnedDateTimes,
+                `options::${locale}::${stringifySorted(mergedOptions)}`,
+                `[next-fluent] Intl refused these dateTime options for "${locale}" ` +
+                  `(${Object.keys(mergedOptions).join(', ')}); the value was rendered as an ISO string.`
+              );
+              return date.toISOString();
+            }
+          } else {
+            warnOnce(
+              warnedDateTimes,
+              `timeZone::${locale}::${requestedTimeZone}`,
+              `[next-fluent] Unknown time zone "${requestedTimeZone}" ` +
+                '(see `requestConfig.timeZone`); using the runtime zone.'
+            );
+            const { timeZone: _ignored, ...withoutZone } = mergedOptions;
+            try {
+              candidate = new Intl.DateTimeFormat(locale, withoutZone);
+            } catch {
+              return date.toISOString();
+            }
+          }
         }
+        formatter = candidate;
+        dtfCache.set(cacheKey, formatter);
       }
 
       try {
@@ -127,6 +260,7 @@ export function createFormatter(optionsOrLocale: string | FormatterOptions): For
           formatter = new Intl.NumberFormat(locale, nfOptions);
           nfCache.set(cacheKey, formatter);
         } catch {
+          warnIntlRefusal('number', locale, nfOptions, String(value));
           return String(value);
         }
       }
@@ -134,6 +268,9 @@ export function createFormatter(optionsOrLocale: string | FormatterOptions): For
       try {
         return formatter.format(value);
       } catch {
+        // A value `Intl.NumberFormat.format` rejects is the caller's data, not
+        // a misconfiguration: `NaN`, `Infinity` and `-0` are all formattable, so
+        // there is no option set to report and nothing to fix in the config.
         return String(value);
       }
     },
@@ -151,7 +288,9 @@ export function createFormatter(optionsOrLocale: string | FormatterOptions): For
           formatter = new Intl.RelativeTimeFormat(locale, rtfOptions);
           rtfCache.set(cacheKey, formatter);
         } catch {
-          return `${value} ${unit}`;
+          const fallback = `${value} ${unit}`;
+          warnIntlRefusal('relativeTime', locale, rtfOptions, fallback);
+          return fallback;
         }
       }
 

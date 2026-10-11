@@ -102,6 +102,60 @@ interface BuiltArgs {
 }
 
 /**
+ * A `FluentType`-shaped value Fluent can format: it wraps a primitive in
+ * `value` and exposes it through `valueOf`.
+ *
+ * Fluent itself only accepts values that are `instanceof` *its* `FluentType`, so
+ * a `FluentNumber` from a second copy of `@fluent/bundle` (or an application
+ * value object such as a `Money` type) is rejected with "Variable type not
+ * supported" even though it carries everything needed to format it. Such values
+ * are unwrapped to the primitive they wrap, which the local copy formats
+ * exactly. A plain data object (`{ value: 1 }` without its own `valueOf`) does
+ * not qualify: it is a caller mistake, and reporting the argument name is more
+ * useful than handing Fluent an opaque object.
+ */
+function unwrapFluentValueObject(value: object): unknown {
+  if (!('value' in value)) return undefined;
+  const valueOf = (value as { valueOf?: unknown }).valueOf;
+  if (typeof valueOf !== 'function' || valueOf === Object.prototype.valueOf) {
+    return undefined;
+  }
+  try {
+    return (valueOf as () => unknown).call(value);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The Fluent argument for a primitive value, or `undefined` when Fluent cannot
+ * represent it. `null`/`undefined` never reach this call.
+ */
+function toFluentArgument(value: unknown): FluentVariable | undefined {
+  if (typeof value === 'string' || typeof value === 'number' || value instanceof Date) {
+    return value as FluentVariable;
+  }
+  // Fluent has no boolean type, so booleans are stringified instead of being
+  // dropped — dropping them turned every message that used the variable into an
+  // unresolvable reference.
+  if (typeof value === 'boolean') return String(value);
+  if (typeof value === 'bigint') {
+    // `Number(v)` rounds past 2^53, so a 64-bit id lost its last digit, and it
+    // overflows to Infinity for anything larger — both silently. Keep the exact
+    // digits instead: Intl.NumberFormat formats numeric strings exactly. Past
+    // the double range even Intl cannot represent the value, and the raw digits
+    // beat rendering "∞".
+    const digits = value.toString();
+    // The typings declare `FluentNumber(number)`, but it forwards the value to
+    // Intl.NumberFormat, which formats numeric strings exactly (ES2023
+    // Intl.NumberFormat v3). A test pins the exact digits, so a change upstream
+    // cannot silently reintroduce the rounding.
+    return Number.isFinite(Number(digits)) ? new FluentNumber(digits as unknown as number) : digits;
+  }
+  return undefined;
+}
+
+/**
  * Converts user-facing translation values into Fluent arguments.
  *
  * React elements become placeholder tokens that `parseRichText` resolves later.
@@ -123,43 +177,28 @@ function buildFluentArgs(values: Record<string, unknown> | undefined): BuiltArgs
       rejected.push(k);
       continue;
     }
-    if (typeof v === 'string' || typeof v === 'number' || v instanceof Date) {
+    const primitive = toFluentArgument(v);
+    if (primitive !== undefined) {
+      args[k] = primitive;
+      continue;
+    }
+    if (v instanceof FluentType) {
       args[k] = v as FluentVariable;
       continue;
     }
-    if (typeof v === 'boolean') {
-      args[k] = String(v);
-      continue;
-    }
-    if (typeof v === 'bigint') {
-      // `Number(v)` rounds past 2^53, so a 64-bit id lost its last digit, and
-      // it overflows to Infinity for anything larger — both silently. Keep the
-      // exact digits instead: Intl.NumberFormat formats numeric strings
-      // exactly. Past the double range even Intl cannot represent the value,
-      // and the raw digits beat rendering "∞".
-      const digits = v.toString();
-      // The typings declare `FluentNumber(number)`, but it forwards the value
-      // to Intl.NumberFormat, which formats numeric strings exactly (ES2023
-      // Intl.NumberFormat v3). A test pins the exact digits, so a change
-      // upstream cannot silently reintroduce the rounding.
-      args[k] = Number.isFinite(Number(digits))
-        ? new FluentNumber(digits as unknown as number)
-        : digits;
-      continue;
-    }
-    if (
-      v instanceof FluentType ||
-      (typeof v === 'object' &&
-        'value' in v &&
-        typeof (v as { valueOf?: unknown }).valueOf === 'function')
-    ) {
-      // FluentType instances (FluentNumber/FluentDateTime/…) carry `value` and
-      // `valueOf`, not `type`, so the previous `'type' in v` test never matched
-      // and every one was rejected as an invalid argument. `instanceof` covers
-      // the common case; the shape check keeps working when a project ends up
-      // with two copies of @fluent/bundle.
-      args[k] = v as FluentVariable;
-      continue;
+    if (typeof v === 'object') {
+      // A FluentType-shaped value Fluent cannot use directly (see
+      // `unwrapFluentValueObject`), or an application value object.
+      const unwrapped = unwrapFluentValueObject(v);
+      const argument = toFluentArgument(unwrapped);
+      if (argument !== undefined) {
+        args[k] = argument;
+        continue;
+      }
+      if (unwrapped instanceof FluentType) {
+        args[k] = unwrapped as FluentVariable;
+        continue;
+      }
     }
     rejected.push(k);
   }
@@ -464,14 +503,23 @@ export function createTranslator(
           );
         }
         if (errors.length > 0) {
+          // `formatKey` reports the rejected names from the per-call *and* the
+          // default values; reading only the per-call ones reported
+          // FORMATTING_ERROR and dropped `unsupportedArguments` for exactly the
+          // same message and error that `t('id.attr')` classified as
+          // INVALID_ARGUMENT.
+          const unsupported = [
+            ...defaults.rejected,
+            ...built.rejected,
+          ];
           report(
-            built.rejected.length > 0
+            unsupported.length > 0
               ? {
                   code: FluentErrorCode.INVALID_ARGUMENT,
                   key,
                   namespace,
                   locale: bundleLocale(b),
-                  cause: { unsupportedArguments: built.rejected, errors },
+                  cause: { unsupportedArguments: unsupported, errors },
                 }
               : {
                   code: FluentErrorCode.FORMATTING_ERROR,

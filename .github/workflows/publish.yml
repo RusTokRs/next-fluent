@@ -1,0 +1,75 @@
+name: Publish
+
+# Releases are cut from `main` by publishing a GitHub Release; the workflow runs
+# the full gate (`npm run check`) and only then publishes to npm with
+# provenance. `workflow_dispatch` defaults to a dry run, so the workflow can be
+# exercised without pushing a version.
+#
+# Authentication: with the repository's `NPM_TOKEN` secret set, that token is
+# used. Without it, npm's trusted publishing (OIDC) is used — configure this
+# repository as a trusted publisher for the package on npmjs.com and no secret
+# is needed at all.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Run `npm publish --dry-run` instead of publishing
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for provenance and for npm trusted publishing (OIDC).
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: npm ci
+
+      # build, check-dist, lint, typecheck, test:edge, unit tests, consumer
+      # contract, size budgets, typegen types, Next 15 + Next 16 integration.
+      #
+      # This step is deliberately not the only gate: `npm publish` below runs
+      # `prepublishOnly` (→ the same `npm run check`) and `prepack` (→ the
+      # build), so the gate is re-run on the exact tree being packed. Keep both:
+      # the explicit step turns a failure into a red *step* instead of a publish
+      # failure, and the publish-time run is what guarantees the tarball was
+      # built from the checked-out source. Never add `--ignore-scripts` to the
+      # publish commands — that would drop both guarantees to save a few minutes.
+      - name: Run the full check
+        run: npm run check
+
+      - name: Publish (dry run)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run }}
+        run: npm publish --dry-run
+
+      - name: Publish
+        if: ${{ github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && !inputs.dry-run) }}
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "${NPM_TOKEN}" ]; then
+            echo "Publishing with the NPM_TOKEN secret."
+            NODE_AUTH_TOKEN="${NPM_TOKEN}" npm publish --provenance --access public
+          else
+            echo "No NPM_TOKEN secret: publishing through npm trusted publishing (OIDC)."
+            npm publish --provenance --access public
+          fi

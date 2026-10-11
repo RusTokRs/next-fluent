@@ -1,45 +1,137 @@
-import { parse } from "@fluent/syntax";
+import { parseFtl } from "./ftl-parse.js";
 import { buildKeyCandidates } from "./utils.js";
 import { toFluentSource } from "./catalog.js";
 const CALL_METHODS = ["raw", "rich", "attrs", "plain", "has"];
 const FACTORIES = ["useTranslations", "getTranslations", "createTranslator"];
 const IGNORE_MARKER = "next-fluent-ignore";
-function readFirstArgument(code, openParen) {
-  let depth = 0;
+function readArgumentList(code, openParen) {
+  const args = [];
+  let buffer = "";
+  let depth = 1;
   let quote;
-  for (let i = openParen; i < code.length; i++) {
+  let comment;
+  for (let i = openParen + 1; i < code.length; i++) {
     const ch = code[i];
+    if (comment === "line") {
+      if (ch === "\n") comment = void 0;
+      continue;
+    }
+    if (comment === "block") {
+      if (ch === "*" && code[i + 1] === "/") {
+        comment = void 0;
+        i++;
+      }
+      continue;
+    }
     if (quote) {
-      if (ch === "\\") i++;
-      else if (ch === quote) quote = void 0;
+      buffer += ch;
+      if (ch === "\\") {
+        buffer += code[i + 1] ?? "";
+        i++;
+        continue;
+      }
+      if (ch === quote) quote = void 0;
+      continue;
+    }
+    if (ch === "/" && code[i + 1] === "/") {
+      comment = "line";
+      i++;
+      continue;
+    }
+    if (ch === "/" && code[i + 1] === "*") {
+      comment = "block";
+      i++;
       continue;
     }
     if (ch === '"' || ch === "'" || ch === "`") {
       quote = ch;
+      buffer += ch;
       continue;
     }
-    if (ch === "(") depth++;
-    else if (ch === ")") {
-      depth--;
-      if (depth === 0) return code.slice(openParen + 1, i).trim();
-    } else if (depth === 1 && ch === ",") {
-      return code.slice(openParen + 1, i).trim();
+    if (ch === "(" || ch === "{" || ch === "[") {
+      depth++;
+      buffer += ch;
+      continue;
     }
+    if (ch === ")" || ch === "}" || ch === "]") {
+      depth--;
+      if (depth === 0) {
+        args.push(buffer.trim());
+        return args;
+      }
+      buffer += ch;
+      continue;
+    }
+    if (ch === "," && depth === 1) {
+      args.push(buffer.trim());
+      buffer = "";
+      continue;
+    }
+    buffer += ch;
   }
   return void 0;
 }
-function staticString(argument) {
-  const match = /^(['"`])([\s\S]*)\1$/.exec(argument);
-  if (!match) return void 0;
-  if (match[1] === "`" && match[2].includes("${")) return void 0;
-  return match[2];
+function scanStringLiteral(text, start) {
+  const quote = text[start];
+  if (quote !== '"' && quote !== "'" && quote !== "`") return -1;
+  for (let i = start + 1; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "\\") {
+      i++;
+      continue;
+    }
+    if (ch === quote) return i + 1;
+    if (quote === "`" && ch === "$" && text[i + 1] === "{") return -1;
+  }
+  return -1;
 }
-function namespaceOf(argument) {
-  if (!argument) return void 0;
-  const literal = staticString(argument);
-  if (literal !== void 0) return literal || void 0;
-  const named = /namespace\s*:\s*(['"`])([^'"`]*)\1/.exec(argument);
-  return named?.[2] || void 0;
+function staticString(argument) {
+  const text = argument.trim();
+  const end = scanStringLiteral(text, 0);
+  if (end === -1) return void 0;
+  const rest = text.slice(end).trim();
+  if (rest !== "" && rest !== "!" && !/^(?:as|satisfies)\s+[\s\S]+$/.test(rest)) return void 0;
+  return text.slice(1, end - 1);
+}
+const NAMESPACE_PROPERTY = /namespace\s*:\s*(['"`])([^'"`]*)\1/;
+const NAMESPACE_ARGUMENT = {
+  useTranslations: 0,
+  getTranslations: 0,
+  // `createTranslator(bundle, namespaceOrFallbackOrOpts?, maybeNamespace?)`: the
+  // bundle always comes first, and the namespace may be the second argument, a
+  // `namespace` property in it, or — when that argument is a fallback bundle —
+  // the third one.
+  createTranslator: 1
+};
+const NAMESPACE_KEY = /(?:^|[{,\s])namespace\s*:/;
+const OBJECT_SPREAD = /(?:^|[{,\s])\.\.\./;
+const OBJECT_LITERAL = /^\{[\s\S]*\}$/;
+function factoryNamespace(name, args) {
+  let namespace;
+  let literal = false;
+  let unreadable = false;
+  for (const arg of args.slice(NAMESPACE_ARGUMENT[name] ?? 0)) {
+    const text = arg.trim();
+    if (text === "" || text === "null" || text === "undefined") continue;
+    const value = staticString(text);
+    if (value !== void 0) {
+      literal = true;
+      namespace = value || void 0;
+      continue;
+    }
+    const named = NAMESPACE_PROPERTY.exec(text);
+    if (named) {
+      literal = true;
+      namespace = named[2] || void 0;
+      continue;
+    }
+    if (OBJECT_LITERAL.test(text)) {
+      if (NAMESPACE_KEY.test(text) || OBJECT_SPREAD.test(text)) unreadable = true;
+      continue;
+    }
+    unreadable = true;
+  }
+  return literal || !unreadable ? { namespace, known: true } : { namespace: void 0, known: false };
 }
 function ignoredLines(content) {
   const ignored = /* @__PURE__ */ new Set();
@@ -146,7 +238,7 @@ function maskNonCode(source) {
     if (top === "template") {
       if (ch === "\\") {
         out[i] = " ";
-        out[i + 1] = " ";
+        if (source[i + 1] !== "\n") out[i + 1] = " ";
         i += 2;
         continue;
       }
@@ -239,6 +331,51 @@ function createLineCounter(masked) {
     return line;
   };
 }
+const JSX_COMPONENT = /<FormattedMessage(?![A-Za-z0-9_$])/g;
+const JSX_ORIGIN = "<FormattedMessage>";
+function jsxIdArgument(content, masked, tagStart) {
+  let depth = 0;
+  let end = masked.length;
+  for (let i2 = tagStart; i2 < masked.length; i2++) {
+    const ch = masked[i2];
+    if (ch === "{") depth++;
+    else if (ch === "}") depth = Math.max(0, depth - 1);
+    else if (ch === ">" && depth === 0) {
+      end = i2;
+      break;
+    }
+  }
+  const tag = masked.slice(tagStart, end);
+  const attribute = /(?:^|\s)id\s*=/.exec(tag);
+  if (!attribute) return void 0;
+  let i = tagStart + attribute.index + attribute[0].length;
+  while (i < content.length && /\s/.test(content[i])) i++;
+  const first = content[i];
+  if (first === "{") {
+    let braces = 0;
+    let quote;
+    for (let j = i; j < content.length; j++) {
+      const ch = content[j];
+      if (quote) {
+        if (ch === "\\") j++;
+        else if (ch === quote) quote = void 0;
+        continue;
+      }
+      if (ch === '"' || ch === "'" || ch === "`") {
+        quote = ch;
+        continue;
+      }
+      if (ch === "{") braces++;
+      else if (ch === "}") {
+        braces--;
+        if (braces === 0) return content.slice(i + 1, j).trim();
+      }
+    }
+    return void 0;
+  }
+  if (first === '"' || first === "'") return content.slice(i, skipLiteral(content, i));
+  return /^[^\s/>]+/.exec(content.slice(i))?.[0];
+}
 function collectCallSites(file) {
   const { content } = file;
   const masked = maskNonCode(content);
@@ -246,6 +383,7 @@ function collectCallSites(file) {
   const bindings = /* @__PURE__ */ new Map();
   const sites = [];
   const suppressed = ignoredLines(content);
+  const found = [];
   const factoryPattern = new RegExp(
     `(?:const|let|var)\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*(?:await\\s+)?(${FACTORIES.join("|")})\\s*\\(`,
     "g"
@@ -254,8 +392,9 @@ function collectCallSites(file) {
   for (let match = factoryPattern.exec(masked); match; match = factoryPattern.exec(masked)) {
     const openParen = match.index + match[0].length - 1;
     const name = match[1];
-    const namespace = namespaceOf(readFirstArgument(content, openParen));
-    bindingList.push({ index: match.index, name, namespace });
+    const args = readArgumentList(content, openParen);
+    const { namespace, known } = factoryNamespace(match[2], args ?? []);
+    bindingList.push({ index: match.index, name, namespace, known });
     bindings.set(name, namespace);
   }
   const namespaceAt = (name, index) => {
@@ -263,44 +402,71 @@ function collectCallSites(file) {
     if (own.length === 0) return { namespace: void 0, known: false, ambiguous: false };
     const preceding = own.filter((entry) => entry.index < index);
     if (preceding.length > 0) {
-      return { namespace: preceding[preceding.length - 1].namespace, known: true, ambiguous: false };
+      const binding = preceding[preceding.length - 1];
+      return { namespace: binding.namespace, known: binding.known, ambiguous: false };
     }
-    const distinct = new Set(own.map((entry) => entry.namespace ?? ""));
-    if (distinct.size === 1) return { namespace: own[0].namespace, known: true, ambiguous: false };
+    const distinct = new Set(
+      own.map((entry) => `${entry.known ? "readable" : "unreadable"}:${entry.namespace ?? ""}`)
+    );
+    if (distinct.size === 1) {
+      return { namespace: own[0].namespace, known: own[0].known, ambiguous: false };
+    }
     return { namespace: void 0, known: false, ambiguous: true };
   };
   const bareNames = ["t", "translate"];
   const names = /* @__PURE__ */ new Set([...bindings.keys(), ...bareNames]);
   const methodAlternatives = CALL_METHODS.join("|");
   const callPattern = new RegExp(
-    `\\b(${[...names].map((name) => name.replace(/\$/g, "\\$")).join("|")})\\s*(?:\\.\\s*(${methodAlternatives}))?\\s*\\(`,
+    `\\b(${[...names].map((name) => name.replace(/\$/g, "\\$")).join("|")})(?:\\s*\\?\\.\\s*|\\s*\\.\\s*)?(${methodAlternatives})?\\s*(?:\\?\\.)?\\s*\\(`,
     "g"
   );
   for (let match = callPattern.exec(masked); match; match = callPattern.exec(masked)) {
     const name = match[1];
     if (FACTORIES.includes(name)) continue;
     const openParen = match.index + match[0].length - 1;
-    const argument = readFirstArgument(content, openParen);
-    if (argument === void 0) continue;
+    const args = readArgumentList(content, openParen);
+    if (args === void 0) continue;
+    const argument = args[0] ?? "";
     const { namespace, known, ambiguous } = namespaceAt(name, match.index);
     if (!known && staticString(argument) === void 0) continue;
-    const line = lineAt(match.index);
-    sites.push({
-      method: match[2],
-      argument,
-      line,
-      namespace,
-      namespaceKnown: known,
-      ambiguous,
-      ignored: suppressed.has(line)
+    found.push({
+      index: match.index,
+      site: {
+        method: match[2],
+        argument,
+        namespace,
+        namespaceKnown: known,
+        ambiguous,
+        namespaceNote: !known && !ambiguous && bindings.has(name) ? `"${name}" is created with a namespace argument that is not a string literal, so the key cannot be verified against one namespace.` : void 0
+      }
     });
+  }
+  JSX_COMPONENT.lastIndex = 0;
+  for (let match = JSX_COMPONENT.exec(masked); match; match = JSX_COMPONENT.exec(masked)) {
+    const argument = jsxIdArgument(content, masked, match.index);
+    if (argument === void 0 || argument === "") continue;
+    found.push({
+      index: match.index,
+      site: {
+        method: void 0,
+        argument,
+        namespaceKnown: false,
+        ambiguous: false,
+        origin: JSX_ORIGIN
+      }
+    });
+  }
+  found.sort((a, b) => a.index - b.index);
+  for (const { index, site } of found) {
+    const line = lineAt(index);
+    sites.push({ ...site, line, ignored: suppressed.has(line) });
   }
   return { bindings, sites };
 }
 function indexCatalog(source) {
   const combined = toFluentSource(source);
   const text = typeof combined === "string" ? combined : combined.join("\n");
-  const resource = parse(text, { withSpans: false });
+  const resource = parseFtl(text, "The catalog");
   const keys = /* @__PURE__ */ new Set();
   const withAttributes = /* @__PURE__ */ new Set();
   const withValue = /* @__PURE__ */ new Set();
@@ -370,7 +536,7 @@ function analyzeUsage(catalogs, sources, options = {}) {
             kind: "dynamic",
             file: file.path,
             line: site.line,
-            message: `Key is not a string literal and cannot be checked statically.`
+            message: `Key is not a string literal and cannot be checked statically${site.origin ? ` (${site.origin})` : ""}.`
           });
         }
         continue;
@@ -425,7 +591,7 @@ function analyzeUsage(catalogs, sources, options = {}) {
           kind: "dynamic",
           file: file.path,
           line: site.line,
-          message: `"${key}" is used through a translator this file does not create, so its namespace cannot be verified.`
+          message: site.namespaceNote ? `"${key}" is used where the namespace cannot be read: ${site.namespaceNote}` : site.origin ? `"${key}" is rendered by ${site.origin} and matches no catalog key (every namespace was searched), so it cannot be verified.` : `"${key}" is used through a translator this file does not create, so its namespace cannot be verified.`
         });
         continue;
       }

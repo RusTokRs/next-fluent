@@ -76,6 +76,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Breaking (no released version depended on it):** `FluentErrorCode` no longer
+  contains `ENVIRONMENT_FALLBACK`. The public enum described it as "a less
+  specific locale had to be used for the request", but nothing in the library
+  ever reported it — a `ru-RU` bundle falling back to `ru` resolves silently,
+  as it should. An application switching on `error.code` was carrying a branch
+  for an event that could not arrive. Reporting it instead would have announced
+  ordinary locale negotiation on every request, so the code is gone and
+  `test/audit-v12.test.mjs` fails if a public code ever stops being reportable.
+
+- **Breaking (no released version depended on it):** `fnv1a32` and `fnv1a64` are
+  no longer exported. The second was a "backwards-compatible alias" that ran the
+  32-bit implementation, so the public surface offered a function whose name
+  misstated its result. Both were unused, undocumented, and the package has never
+  been published. The package root still exports 42 names.
 - Build-time tools moved out of the app entry points. `pseudoLocalizeFtl` and
   `generateTypeDeclarations` are now imported from `next-fluent/pseudo` and
   `next-fluent/typegen`; `pickMessages` and `checkCatalogs` from
@@ -96,6 +110,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   shelled out to read Next's `package.json` and parse its version on every config
   evaluation — the only version-conditional code left in the library, and it is
   now deleted instead of carried.
+- **The client size budget measures what an app imports, not the package root.**
+  Bundling the root entry as an entry point kept code no visitor downloads
+  (every module is re-exported there), which overstated the client by 1.7 kB
+  minified / 0.7 kB gzip and quietly eroded the budget across three passes. The
+  budget now bundles `test/fixtures/size/client-consumer.ts`, which imports the
+  documented client API through the published specifiers, and a test fails when
+  a new client export is missing from it. Budgets were re-baselined accordingly
+  (47.0 kB minified / 15.9 kB gzip measured for the client surface).
+
 - **Node.js 22 stays the floor, deliberately.** No API newer than ES2022 is used
   anywhere in `src/` or `bin/`, and Node.js 20 reached end of life on 2026-04-30,
   so 22 is already the oldest supported LTS. Raising to 24 would exclude apps on
@@ -136,6 +159,279 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`next-fluent check` reported "no issues" for translations that were missing.**
+  A catalog directory whose name resolved to a locale already claimed by a flat
+  file (`messages/en-z/` beside `messages/en-x.ftl`) overwrote the collected
+  sources instead of merging into them, so the reference locale held fewer keys
+  than the project ships and every other locale was compared against an
+  incomplete catalog. Directory catalogs are now merged like flat ones, and the
+  result no longer depends on the order the entries sort in.
+
+- **`t.attrs()` reported a misclassified error.** An argument Fluent cannot
+  represent was named (`INVALID_ARGUMENT` with `unsupportedArguments`) when it
+  came from the call and downgraded to a bare `FORMATTING_ERROR` — losing the
+  argument name — when the same value came from `defaultTranslationValues`.
+  `t('id.attr')` and `t.attrs('id')` now classify the same message alike.
+
+- **`trustedHosts` could be switched off with a request header.** An
+  `x-forwarded-host` naming a configured domain was adopted as the request
+  origin, and the allow-list was then checked against that attacker-chosen
+  host — so `Host: evil.com`, which is answered with `421` on its own, was
+  served (with a redirect to the configured domain) once the header was added.
+  A domain-matching forwarded host now also requires the host the request
+  actually arrived for to be trusted. Proxies that forward the public host
+  without rewriting `Host` are unaffected when no allow-list is configured.
+- **`Host: example.com:443` was answered with `421` on an https request.** The
+  host header is only adopted when the URL parser reproduces it verbatim, and
+  the parser drops the scheme's default port — the one difference that is not a
+  different authority. `example.com:80` and `example.com:8443` were accepted
+  while the default-port spelling was refused, so the site went dark for
+  clients that send the port explicitly. Malformed, userinfo-bearing and
+  foreign `Host` values are still rejected.
+- **`useRouter().prefetch` did nothing on a single-domain site.** The rule that
+  skips a prefetch crossing to another configured domain was applied even with
+  no `domains` configured, where it collapsed to "the global prefix mode is not
+  `always`" — so in `as-needed` a locale switcher never prefetched `/ru/about`,
+  the URL it had just asked for. The rule now applies only when domains are
+  configured.
+- **A canonicality gate between the two layers.** Every URL navigation
+  produces is now asserted to be one the middleware already treats as
+  canonical, across prefix modes, `basePath`, per-domain prefix overrides,
+  localized slugs, catch-all and dynamic routes.
+- **No behaviour changed in this pass either.** The client provider's own
+  branches were probed and found correct: a bundle passed as `messages` or
+  `fallbackMessages` is used as given, a single `fallbackBundles` entry is
+  accepted as readily as an array, and `<FormattedMessage className="…">`
+  without a component still renders an element carrying the class — the
+  typical `input {...t.attrs('field')} className="x"` call lost nothing.
+  Thirteen tests.
+
+- **No behaviour changed in this pass.** The URL layer (`route-engine`,
+  `nav-url`), the webpack half of the Next plugin and the agreement between
+  generated types and the runtime were probed branch by branch and found
+  correct; what they lacked was any test on catch-all routes, percent signs
+  that are not escapes, query strings passed as strings, and the webpack
+  alias — where a mistake surfaces as a 404 or a server that cannot load
+  its request config, not as a red test.
+
+- **`clearCatalogIntegrityWarnings` was removed.** It was exported from an internal
+  module, reached no public entry point and was called from nowhere. The
+  warn-once set it reset is bounded on its own, so nothing depended on it.
+
+- **`check --usage` could not see a message used behind a symbolic link.** A
+  symlinked source file or directory — `app/components → ../../packages/ui` in
+  any monorepo — was neither a file nor a directory to `fs.Dirent`, so every call
+  site under it was invisible and `check --usage` reported live messages as
+  unused. With `--strict-usage` that is a failed build over a message that is in
+  active use. Links are now followed, with the real path of every visited
+  directory and file remembered: a link reaching its own ancestor terminates, and
+  a file behind two links is scanned once instead of twice.
+- **`check --usage` ignored `.mts`, `.cts` and `.mdx`.** TypeScript's ESM/CJS
+  extensions and MDX pages hold real call sites, so a message used only from one
+  of them was reported as dead. The scanner now reads all three and skips
+  `.d.mts`/`.d.cts` declarations like it already skipped `.d.ts`.
+
+- **`pseudo --output` could overwrite the catalogs it generated from.** Pointing
+  `--output` at the `--input` directory (or file) replaced every real catalog
+  with its pseudo-localized version, and when a later catalog failed to parse the
+  command exited with an error naming that other file — after the damage. `pseudo`
+  now refuses an output that resolves to one of its own sources and names the
+  file that would have been destroyed.
+- **`pseudo` wrote file by file, so one bad catalog left a half-finished run.**
+  All output is now generated in memory and written only once every catalog has
+  been read successfully; a failing batch leaves no output directory behind.
+- **`configureServerI18n` was undocumented.** It is the call that gives
+  `getLocale()` a list of locales to negotiate `Accept-Language` against; without
+  it the browser's preference is silently ignored and every request falls back to
+  the default. The README now documents it, the two places it must not be called
+  from, and the reason.
+
+- **The client size budget measured two entry points out of seven.** The fixture
+  the budget bundles imported 17 of the 42 exports the browser root offers, so
+  1.67 kB was reachable from an app and counted by nothing — an app that used
+  `jsonToFluent`, `matchSupportedLocale` or `LRUCache` shipped more than the
+  budget the gate claimed to enforce. `npm run size` now reports two numbers: the
+  fixture (what an app using the documented client API downloads) and a *ceiling*
+  generated from the package's own exports, verified against esbuild's metafile so
+  it cannot drift. A new export is measured the moment it exists.
+
+- **`Intl` refusals are reported everywhere they are swallowed.** `number` and
+  `relativeTime` returned a bare value when `Intl` rejected the options — so
+  `format.number(1234.5, { style: 'currency' })` printed `1234.5`, which looks like
+  a deliberate plain number. The same held for the FTL functions
+  `CURRENCY()`/`PERCENT()`, where a bad `currencyDisplay` silently dropped the
+  currency formatting entirely. Both now warn once per option set, naming the
+  refused options and what was rendered instead. The values themselves are
+  unchanged.
+
+- **A JSON catalog no longer loses a message to an empty object.**
+  `{ greeting: 'Hi', todo: {} }` produced `greeting = Hi` and dropped `todo`
+  without a word, leaving every lookup of it to miss. An empty object is now
+  rejected with the same guidance as `null` and arrays. A key written the FTL way —
+  `{ login: { '': 'Sign in', '.label': 'Label' } }` — is accepted as the attribute
+  it plainly means instead of failing with an error about a message id
+  `login..label`.
+
+- **The CI matrix now checks the Next major instead of printing it.** A job whose
+  `next@^16` install did not take effect would test Next 15 and stay green. The
+  integration harness fails when the resolved major is not the one it was asked
+  to verify, and the workflow passes it. Both workflows are now parsed by the test
+  suite as well: YAML keeps the last of two identical keys without a word, so a
+  repeated `env:` block in a step would have silently removed the browser-test
+  switch from that job.
+
+- **The edge bundle has a size limit and counts bytes.** The middleware check
+  printed a UTF-16 code-unit count and enforced nothing; it now compares a real
+  byte count against 64 kB (measured 40.6 kB), so a dependency that has no place
+  in the edge graph fails the build instead of quietly tripling it.
+
+- **`next-fluent check --usage` no longer invents verdicts.** Six call shapes
+  were read wrongly, and every one of them produced a *false* finding — the
+  `missing` and `unused` kinds that fail the command:
+  `<FormattedMessage id="checkout-title" />` was not scanned at all, so a key
+  used only through the component was reported as dead (and a non-literal `id`
+  vanished silently instead of being listed for review); a block comment after
+  the key (`t('key' /* why */)`) made the argument unreadable and the key
+  *dynamic*; `createTranslator(bundle, 'checkout')`,
+  `createTranslator(bundle, { namespace: 'checkout' })` and
+  `createTranslator(bundle, null, 'checkout')` read the namespace from the first
+  argument only, so the binding looked global and `t('total')` was reported as
+  missing; a namespace that exists but is not a literal
+  (`useTranslations(NAMESPACES.checkout)`) was resolved as if the translator were
+  global, reporting a key nothing matches as missing instead of unverifiable; a
+  concatenation (`t('check-' + suffix)`) was matched greedily into the literal
+  key `check-' + suffix` — a key no catalog can hold — and reported as missing
+  while the real keys were called unused; `t('key' as const)` and
+  `t('key' satisfies Key)` were classified as unverifiable even though the
+  compiler erases the assertion and the value is exactly that literal. Optional
+  calls (`t?.('key')`, `t?.rich('key')`, `t.rich?.('key')`) are call sites now
+  too, instead of being invisible.
+- **A route can no longer reach another origin through the characters a URL
+  parser removes.** Browsers strip ASCII tab, LF and CR from a URL before
+  parsing it, so `href: "/\n/evil.example"` is not a path with a newline in it —
+  it is protocol-relative `//evil.example`. The leading separator run was
+  collapsed before the browser's own reading of the string was modelled, so in
+  the `as-needed` and `never` modes the crafted href reached the DOM unchanged
+  and resolved to a different host. `normalizeLeadingSlashes` now removes the
+  discarded characters first, which also keeps a `basePath` strip behaving the
+  same for the crafted and the clean spelling.
+- **A valid `timeZone` is no longer reported as unknown when the *options* were
+  the problem.** `Intl.DateTimeFormat` throws for an unusable configuration as a
+  whole, and `{ dateStyle: 'short', timeZoneName: 'short' }` — a combination
+  ECMA-402 forbids — was reported as "Unknown time zone `UTC`", sending the
+  reader after a config value that was correct. The zone is now probed on its
+  own: when it is fine, the style is dropped so the value still renders as
+  localized text, and the warning names the rule. Errors with no such rescue
+  (an out-of-range `hourCycle`, say) are reported as refused instead.
+- **An internal path can no longer resolve to another origin.** `resolveLocalizedPathname`
+  normalizes Windows backslashes to `/`, but the leading run of separators that
+  this creates was only collapsed on the prefix branch. In `localePrefix:
+  'as-needed'` for the default locale (and in `'never'`) `href: '/\\evil.example'`
+  reached the DOM as `//evil.example` — a protocol-relative link to another
+  host — and the same happened after a `basePath` strip. The run is now collapsed
+  before locale matching, so every mode produces an internal path.
+- **A URL object's `port` is validated.** `absoluteUrlFromObject` interpolated the
+  port verbatim, so `{ hostname: 'example.com', port: '@evil.com' }` produced
+  `https://example.com:@evil.com/a`, which the URL parser reads as userinfo plus
+  the host `evil.com`: the link pointed at another origin. Non-numeric ports now
+  throw instead of building a different authority.
+- **An unknown `timeZone` no longer prints ISO strings.** A typo in
+  `requestConfig.timeZone` (or in per-call options) made `Intl.DateTimeFormat`
+  throw, and `dateTime()` silently fell back to `date.toISOString()`. The
+  formatter now reports the zone once and retries without it, so the output stays
+  localized; the fallback formatter is cached, so a misconfiguration costs
+  nothing per render.
+- **A byte-order mark no longer costs the first catalog entry.** Neither Fluent
+  parser treats U+FEFF as whitespace: a catalog saved with a BOM silently lost
+  its first message, in the runtime and in `typegen`/`check`/`pseudo` (and a JSON
+  catalog failed with a bare "Unexpected token"). The mark is stripped in the
+  shared funnel (`createFluentBundle`, `getOrCreateResource`, `parseFtl`,
+  `readCatalog`); both spellings now share one cache entry.
+- **Entries the runtime parser drops are reported with their ids.** A message
+  with a syntax error disappears from `FluentResource` without a trace, so
+  `t('that.key')` reported MISSING_MESSAGE for a key the catalog defines. The
+  server runtime now names the lost entries once per catalog and points at
+  `next-fluent check`; the scan lives in the server-only
+  `src/catalog-integrity.ts`, so it costs the client bundle nothing.
+- **FluentType-shaped values from another package copy work.** A `FluentNumber`
+  from a second copy of `@fluent/bundle` (or any application value object) was
+  passed to Fluent as a foreign object and failed with "Variable type not
+  supported"; plain data objects like `{ value: 1 }` also slipped through that
+  check and produced a formatting error instead of a clear `INVALID_ARGUMENT`
+  naming the argument. Such values are now unwrapped to the primitive the local
+  copy formats, and plain objects are reported as invalid arguments.
+- **`getRequestConfigSnapshot(locale)` no longer replaces the request locale.**
+  The snapshot wrote its locale into the request store, so a later `getLocale()`
+  in the same render returned the snapshot's locale instead of the request's.
+  `timeZone`/`now` still come from the snapshot, which is what the synchronous
+  `getNow()`/`getTimeZone()` helpers read.
+- **Cyclic `Intl` options no longer overflow the stack.** The formatter cache key
+  serialized options recursively, so an object graph with a cycle crashed the
+  render with `RangeError: Maximum call stack size exceeded`. The serializer now
+  tracks the current path.
+- **A domain configured as `example.com.` is matched.** The middleware compared
+  the normalized request host against the raw configured spelling, so an
+  absolute (dotted) domain silently stopped applying and global rules were used
+  instead.
+
+- **Generated types follow the runtime's key resolution.** When a message is
+  named like another message's dotted attribute (`greeting-formal` next to
+  `greeting` with `.formal`), `t('greeting.formal')` formats the message — the
+  dashed id is resolved first — but `typegen` declared the attribute's
+  arguments, so the type check pointed callers at the wrong variables and the
+  call formatted to the key. The key now carries the winner's arguments and the
+  generated file names the shadowed attribute and its `t.attrs()` path.
+- **`trustedHosts` wildcards list subdomains only.** `*.example.org` no longer
+  accepts the apex: an allow-list that quietly admits a host the operator did
+  not write down is the wrong default for a control whose job is rejecting
+  foreign `Host` values. Add `example.org` next to the wildcard when the apex is
+  served too — the README example already does.
+- **A forged `x-forwarded-host: localhost:3000` no longer rewrites the origin.**
+  The loopback exception is for local development proxies, so it now requires
+  the connection itself to come from loopback; a public request that merely
+  claims the header no longer makes redirects and alternate links point at
+  `localhost`.
+- **`next dev` warns about an unverified `Host` for alternate links too.** The
+  one-time warning used to fire only when a redirect was built, although the
+  `Link` header takes its origin from the same header. It now covers both.
+- **`localeDetection: false` stops writing the locale cookie.** Nothing read it
+  back, so the default `Set-Cookie` on the first response of every visitor only
+  made documents uncacheable. An explicit `localeCookie` config remains an
+  opt-in (e.g. to keep `getLocale()` working on routes the matcher excludes).
+- **`pickMessages` keeps the messages a namespace interpolates, not just its
+  terms.** `checkout-title = Buy { common-greeting }` produced a pruned catalog
+  without `common-greeting`: the client bundle then rendered `checkout-title`
+  itself and reported `FORMATTING_ERROR: Unknown message`. References are now
+  followed transitively (`{ -term }` and `{ message }`, from messages and from
+  kept terms), in source order, and each entry is emitted once even when it is
+  referenced several times or by itself.
+- **Unparsable catalog entries are no longer dropped in silence.** The FTL
+  parser does not throw on a broken message — it puts the text into a `Junk`
+  node — and the serializer drops junk by default, so `check` reported the
+  problem while `typegen`, `pseudo` and `pickMessages` quietly emitted an
+  artifact without the message. `typegen` and `pseudo` now fail with the first
+  line of every unreadable entry, and `pickMessages` does so when the entry
+  belongs to the requested namespace (junk of other namespaces is pruned by
+  design).
+- **A JSON catalog cannot declare one message id twice.** `{ "nav-home": … }`
+  and `{ "nav": { "home": … } }` both convert to `nav-home`; the second
+  definition silently replaced the first at runtime and the key disappeared from
+  generated types. Conversion now reports both JSON paths and refuses the
+  catalog.
+- **Literal braces have an escape hatch in JSON catalogs.** `{count}` stays an
+  interpolation (ICU/next-intl compatibility), but `has {braces}` used to become
+  `$braces` and render as the key. `\{` and `\}` now mean literal braces in
+  every JSON value.
+- **`Accept-Language: en;q=0,*` no longer negotiates English.** RFC 9110 §12.5.4
+  defines `q=0` as "not acceptable"; the wildcard branch ignored it and could
+  select a locale the client explicitly refused. A `q=0` entry now excludes that
+  locale from the wildcard, whether it appears before or after the `*`.
+- **The usage analyzer reports deep nesting and keeps line numbers aligned.**
+  `indexCatalog` parsed with the raw parser, so a deeply nested catalog crashed
+  with "Maximum call stack size exceeded" while every other consumer reported an
+  actionable error; and a `\`+newline line continuation inside a template
+  literal swallowed the newline, shifting every later diagnostic in that file by
+  one line.
 - **The catalog watcher reports an unwatchable directory.** `fs.watch` on a
   missing path throws on Linux/Node 22 but returns a silent, never-firing
   watcher on Node 24 and Windows — so `next dev` could stop regenerating types
@@ -377,6 +673,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `Unknown option "--input"`. It now says `"--input" requires a value.`
 - `checkCatalogs` failures in the CLI are reported as `Error: <message>` instead
   of a raw stack trace.
+
+- **A client catalog that Fluent cannot fully read is now named in development.**
+  `@fluent/bundle` drops an unreadable message without an error, so a catalog a
+  client component passes to `FluentProvider` (FTL text, FTL sources or a JSON
+  payload) rendered that key as its own id with nothing to explain why. The
+  provider now scans the catalog like the server runtime does and reports the
+  lost ids once; the scan is behind `process.env.NODE_ENV` and therefore absent
+  from a production bundle (verified by the size budget, which measures the same
+  fixture as a development build and fails if the two collapse to one size).
+
+- **The release dry run broke the Next integration harness.** npm hands its own
+  configuration to scripts as `npm_config_*`, so `npm publish --dry-run` set
+  `npm_config_dry_run=true` for everything it ran — including the harness's
+  nested `npm install` for Next 16, which then reported "added 54 packages"
+  while writing nothing, and the run died later on a bare `ENOENT` for
+  `node_modules/next/package.json`. The harnesses now build their child
+  environments through `scripts/npm-env.mjs`, which drops that namespace and
+  keeps everything else; the manual dispatch of the Publish workflow (dry run by
+  default) completes end to end again.
 
 ### Security
 

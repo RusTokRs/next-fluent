@@ -4,6 +4,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
+import { cleanNpmEnv, inheritedNpmConfigKeys } from './npm-env.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const fixture = join(root, 'test', 'fixtures', 'next-app');
@@ -88,13 +89,121 @@ function checkPrerenderedRoutes(target) {
   console.log(`[next-fluent] Static rendering verified for: ${expected.join(', ')}`);
 }
 
+/**
+ * The locale-detection branch of `getLocale()`, in the only environment where it
+ * can run. Every other fixture route pins the locale in `[locale]/layout.tsx`,
+ * so `getLocale()` returns the stored locale and the detection code — the
+ * forwarded header, the cookie, `accept-language`, the default — is never
+ * entered. Node tests cannot enter it either: `next/headers` does not resolve
+ * outside a request, and the helper swallows that as "no request".
+ *
+ * `/probe` has its own root layout without `setRequestLocale`, and the
+ * middleware matcher skips it, so each row below is the server helper's own
+ * decision. The row order *is* the precedence: header, then cookie, then
+ * `accept-language`, then the configured default.
+ */
+async function checkLocaleDetection(base, output) {
+  const cases = [
+    {
+      label: 'no signal at all',
+      headers: {},
+      locale: 'en',
+      hello: 'Hello Next Fluent',
+    },
+    {
+      label: 'accept-language',
+      headers: { 'accept-language': 'ru-RU,ru;q=0.9' },
+      locale: 'ru',
+      hello: 'Привет Next Fluent',
+    },
+    {
+      label: 'cookie beats accept-language',
+      headers: { cookie: 'NEXT_LOCALE=ru', 'accept-language': 'en-US,en;q=0.9' },
+      locale: 'ru',
+      hello: 'Привет Next Fluent',
+    },
+    {
+      label: 'an unsupported cookie falls through to accept-language',
+      headers: { cookie: 'NEXT_LOCALE=de', 'accept-language': 'ru' },
+      locale: 'ru',
+      hello: 'Привет Next Fluent',
+    },
+    {
+      label: 'an unsupported cookie with no header falls back to the default',
+      headers: { cookie: 'NEXT_LOCALE=de' },
+      locale: 'en',
+      hello: 'Hello Next Fluent',
+    },
+    {
+      label: 'the forwarded header beats the cookie',
+      headers: { 'x-next-locale': 'ru', cookie: 'NEXT_LOCALE=en' },
+      locale: 'ru',
+      hello: 'Привет Next Fluent',
+    },
+    {
+      label: 'an unsupported header falls through to the cookie',
+      headers: { 'x-next-locale': 'de', cookie: 'NEXT_LOCALE=ru' },
+      locale: 'ru',
+      hello: 'Привет Next Fluent',
+    },
+  ];
+
+  for (const { label, headers, locale, hello } of cases) {
+    const response = await fetch(`${base}/probe`, { redirect: 'manual', headers });
+    // Fluent isolates a variable reference with U+2068/U+2069 by default; the
+    // catalog text itself is plain, so the marks are removed before comparing.
+    const html = (await response.text()).replace(/[\u2068\u2069]/g, '');
+    if (response.status !== 200) {
+      throw new Error(`Locale detection: ${label} returned ${response.status}.\n${output}`);
+    }
+    // The synchronous helpers only carry the configured instant if the config
+    // reached the request store, and the formatter only formats in UTC if the
+    // configured zone did. Outside a request scope there is no store to write
+    // to, which is why this can only be checked here.
+    const expected = [
+      `data-probe-locale="${locale}"`,
+      `data-probe-now="2024-01-01T00:00:00.000Z"`,
+      'data-probe-timezone="UTC"',
+      'data-probe-formats="number"',
+      `data-probe-hello="${hello}"`,
+    ];
+    for (const marker of expected) {
+      if (!html.includes(marker)) {
+        throw new Error(
+          `Locale detection: ${label} rendered without ${marker}.\n${html.slice(0, 800)}\n${output}`
+        );
+      }
+    }
+  }
+
+  // Two requests in flight at once must not share the memoized store: one asks
+  // for Russian, the other for English, and both render their own catalog.
+  const [ru, en] = await Promise.all(
+    [
+      { headers: { 'accept-language': 'ru' }, marker: 'data-probe-locale="ru"' },
+      { headers: { 'accept-language': 'en' }, marker: 'data-probe-locale="en"' },
+    ].map(async ({ headers, marker }) => {
+      const response = await fetch(`${base}/probe`, { redirect: 'manual', headers });
+      return { html: await response.text(), marker };
+    })
+  );
+  for (const { html, marker } of [ru, en]) {
+    if (!html.includes(marker)) {
+      throw new Error(
+        `Concurrent locale detection leaked between requests (no ${marker}).\n${html.slice(0, 400)}\n${output}`
+      );
+    }
+  }
+  console.log('[next-fluent] Server-side locale detection verified against live requests.');
+}
+
 async function checkRuntime(nextCli) {
   const port = await availablePort();
   const base = `http://localhost:${port}`;
   const child = spawn(process.execPath, [nextCli, 'start', '--hostname', 'localhost', '--port', String(port)], {
     cwd: target,
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, NEXT_TELEMETRY_DISABLED: '1' },
+    env: cleanNpmEnv({ NEXT_TELEMETRY_DISABLED: '1' }),
   });
   let output = '';
   child.stdout.on('data', (chunk) => { output += chunk.toString(); });
@@ -122,12 +231,60 @@ async function checkRuntime(nextCli) {
         !russianHtml.includes('data-server-locale="ru"')) {
       throw new Error(`Russian RSC/client locale mismatch (${russian.status}).\n${russianHtml.slice(0, 1500)}\n${output}`);
     }
-    // The middleware must still forward the resolved locale to the app.
+    // The middleware must still forward the resolved locale to the app, and the
+    // request scope must reach the page (V4-16).
     const live = await fetch(`${base}/ru/live`, { redirect: 'manual' });
     const liveHtml = await live.text();
-    if (live.status !== 200 || !liveHtml.includes('data-header-locale="ru"')) {
-      throw new Error(`Locale request header was not forwarded (${live.status}).\n${liveHtml.slice(0, 500)}\n${output}`);
+    if (live.status !== 200 || !liveHtml.includes('data-header-locale="ru"') ||
+        !liveHtml.includes('data-scope-locale="ru"')) {
+      throw new Error(`Locale request header or request scope was not forwarded (${live.status}).\n${liveHtml.slice(0, 500)}\n${output}`);
     }
+    // A snapshot for another locale is a side-channel query: it reports that
+    // locale but must not replace the request's own (V6-07).
+    if (!liveHtml.includes('data-snapshot-locale="en"') ||
+        !liveHtml.includes('data-scope-locale-after-snapshot="ru"')) {
+      throw new Error(`A config snapshot replaced the request locale (${live.status}).\n${liveHtml.slice(0, 500)}\n${output}`);
+    }
+    // Concurrent requests for different locales: React's request scope is
+    // per-request, so neither the memoized store nor the bundle cache of one
+    // render may leak into another.
+    const concurrentRoutes = [
+      { route: '/', locale: 'en', headers: { 'accept-language': 'en' } },
+      { route: '/ru', locale: 'ru' },
+      { route: '/live', locale: 'en', headers: { 'accept-language': 'en' } },
+      { route: '/ru/live', locale: 'ru' },
+    ];
+    const concurrent = await Promise.all(
+      concurrentRoutes.map(async ({ route, locale, headers }) => {
+        const response = await fetch(`${base}${route}`, { redirect: 'manual', headers });
+        return { route, locale, status: response.status, html: await response.text() };
+      })
+    );
+    for (const { route, locale, status, html } of concurrent) {
+      if (status !== 200) {
+        throw new Error(`Concurrent request ${route} failed (${status}).\n${output}`);
+      }
+      const expected = [`lang="${locale}"`];
+      if (route.endsWith('/live')) {
+        // The dynamic route has no server-locale marker; it proves the request
+        // scope, the forwarded header and that a snapshot of another locale
+        // does not leak into the request's own locale (V6-07).
+        expected.push(
+          `data-header-locale="${locale}"`,
+          `data-scope-locale="${locale}"`,
+          `data-scope-locale-after-snapshot="${locale}"`
+        );
+      } else {
+        expected.push(`data-server-locale="${locale}"`);
+      }
+      for (const marker of expected) {
+        if (!html.includes(marker)) {
+          throw new Error(`Concurrent ${route} rendered the wrong locale (no ${marker}).\n${html.slice(0, 500)}\n${output}`);
+        }
+      }
+    }
+    console.log('[next-fluent] Concurrent request scopes stayed isolated.');
+    await checkLocaleDetection(base, output);
     const localized = await fetch(`${base}/ru/o-nas`, { redirect: 'manual' });
     const localizedHtml = await localized.text();
     if (localized.status !== 200 || !localizedHtml.includes('About route') || !localizedHtml.includes('lang="ru"')) {
@@ -193,9 +350,22 @@ try {
            `next@${nextOverride}`, 'react@19', 'react-dom@19']
         : ['install', '--no-save', '--no-audit', '--no-fund',
            `next@${nextOverride}`, 'react@19', 'react-dom@19'],
-      { cwd: target, stdio: 'inherit', env: { ...process.env, NEXT_TELEMETRY_DISABLED: '1' } }
+      { cwd: target, stdio: 'inherit', env: cleanNpmEnv({ NEXT_TELEMETRY_DISABLED: '1' }) }
     );
     if (install.status !== 0) throw new Error(`Installing next@${nextOverride} failed.`);
+    // `npm install` reports success in dry-run mode while writing nothing, so a
+    // leaked `npm_config_*` turns into an ENOENT deep inside the later build.
+    // Name the cause while it is still recognizable. `cleanNpmEnv` already
+    // filters those keys out; if one still reaches this point, say which.
+    if (!existsSync(join(nextRoot(), 'package.json'))) {
+      const leaked = inheritedNpmConfigKeys();
+      throw new Error(
+        'Installing next@' + nextOverride + ' wrote no node_modules/next. ' +
+          (leaked.length > 0
+            ? `Inherited npm configuration that npm applies to nested installs: ${leaked.join(', ')}.`
+            : 'The install reported success without installing anything.')
+      );
+    }
   }
 
   // Linked after any install: npm prunes packages it does not know about, which
@@ -206,6 +376,28 @@ try {
 
   const nextPackage = JSON.parse(readFileSync(join(nextRoot(), 'package.json'), 'utf8'));
   console.log(`[next-fluent] Integration fixture against Next ${nextPackage.version}.`);
+  // The CI matrix installs the Next major its job is named after, then runs the
+  // fixture against whatever `node_modules/next` turned out to be. Reporting the
+  // version is not the same as checking it: if the install did not take effect,
+  // a job labelled "Next 16" would exercise Next 15 and still pass, and the
+  // peer-range claim this matrix exists to verify would go untested. Turning the
+  // printed line into an assertion costs one comparison; `npm_config_dry_run`
+  // leaking into a nested install is the failure mode pass 7 already had to fix
+  // inside this script.
+  const expectedMajor =
+    process.env.NEXT_FLUENT_NEXT_MAJOR ??
+    // A harness told to install a major can check itself; otherwise only CI
+    // knows which major the job is named after.
+    (nextOverride ? String(Number.parseInt(nextOverride, 10)) : undefined);
+  if (expectedMajor !== undefined) {
+    const actualMajor = String(Number.parseInt(nextPackage.version, 10));
+    if (actualMajor !== expectedMajor) {
+      throw new Error(
+        `The fixture was asked to test Next ${expectedMajor} but node_modules/next is ` +
+          `${nextPackage.version}. The matrix label would not match what was verified.`
+      );
+    }
+  }
   if (Number.parseInt(nextPackage.version, 10) >= 16) {
     // Next 16 renamed the network-boundary file and runs it on Node, not edge.
     await rename(join(target, 'middleware.ts'), join(target, 'proxy.ts'));
@@ -214,7 +406,7 @@ try {
   const result = spawnSync(process.execPath, [nextCli, 'build'], {
     cwd: target,
     stdio: 'inherit',
-    env: { ...process.env, NEXT_TELEMETRY_DISABLED: '1' },
+    env: cleanNpmEnv({ NEXT_TELEMETRY_DISABLED: '1' }),
   });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`Next integration build failed (${result.status}).`);

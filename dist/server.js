@@ -1,5 +1,6 @@
 import { cache } from "react";
 import { createFluentBundle, createTranslator } from "./bundle.js";
+import { warnAboutDroppedEntries } from "./catalog-integrity.js";
 import { isJsonCatalog, toFluentSource } from "./catalog.js";
 import { createFormatter } from "./formatter.js";
 import { canonicalizeLocale, matchSupportedLocale, resolveAcceptLanguage } from "./utils.js";
@@ -22,6 +23,11 @@ function setRequestConfig(fn) {
 }
 function getRequestConfig() {
   return globalConfigFn;
+}
+function createServerBundle(locale, source, options) {
+  const normalized = toFluentSource(source);
+  warnAboutDroppedEntries(locale, normalized);
+  return createFluentBundle(locale, normalized, options);
 }
 const getRequestStore = cache(() => ({
   bundles: /* @__PURE__ */ new Map()
@@ -165,7 +171,7 @@ async function getRequestConfigSnapshot(localeArg) {
   const locale = result.locale && canonicalizeLocale(result.locale) || requestedLocale;
   const timeZone = result.timeZone ?? store.timeZone ?? getTimeZone();
   const now = result.now ?? store.now ?? getNow();
-  store.locale = locale;
+  store.locale ??= locale;
   store.timeZone = timeZone;
   store.now = now;
   return { ...result, locale, timeZone, now };
@@ -251,12 +257,12 @@ async function forLocale(locale, options) {
   const bundleOptions = { functions: mergedFunctions, useIsolating };
   let bundle;
   if (explicitMessages !== void 0) {
-    bundle = createFluentBundle(effectiveLocale, toFluentSource(explicitMessages), bundleOptions);
+    bundle = createServerBundle(effectiveLocale, explicitMessages, bundleOptions);
   } else {
     const hasCustomFuncs = Boolean(requestConfig || Object.keys(mergedFunctions).length > 0);
     let cached = hasCustomFuncs ? void 0 : store.bundles.get(bundleSlot);
     if (!cached) {
-      cached = createFluentBundle(effectiveLocale, toFluentSource(config?.messages ?? ""), bundleOptions);
+      cached = createServerBundle(effectiveLocale, config?.messages ?? "", bundleOptions);
       if (!hasCustomFuncs) {
         store.bundles.set(bundleSlot, cached);
       }
@@ -266,9 +272,7 @@ async function forLocale(locale, options) {
   const fallbackBundleList = [];
   if (fallbackMessages) {
     const fbLoc = fallbackLocale ?? "en";
-    fallbackBundleList.push(
-      createFluentBundle(fbLoc, toFluentSource(fallbackMessages), bundleOptions)
-    );
+    fallbackBundleList.push(createServerBundle(fbLoc, fallbackMessages, bundleOptions));
   }
   const fallbacksToLoad = /* @__PURE__ */ new Set();
   if (fallbackLocale && fallbackLocale !== effectiveLocale && !fallbackMessages) {
@@ -287,7 +291,7 @@ async function forLocale(locale, options) {
       if (!fbBundle) {
         const fbConfig = await loadConfig(fbLocale, requestConfig);
         const resolvedFallbackLocale = fbConfig.locale ?? fbLocale;
-        fbBundle = createFluentBundle(resolvedFallbackLocale, toFluentSource(fbConfig.messages), {
+        fbBundle = createServerBundle(resolvedFallbackLocale, fbConfig.messages, {
           functions: { ...fbConfig.functions, ...mergedFunctions },
           useIsolating
         });

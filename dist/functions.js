@@ -6,8 +6,20 @@ function unwrapFluentValue(val) {
   return val;
 }
 const numberFormatCache = new LRUCache(200);
+const refusedNumberFormats = /* @__PURE__ */ new Set();
+const MAX_REFUSED_REPORTS = 200;
+function warnRefusedFormat(name, locale, named, fallback) {
+  const key = `${name}::${locale}::${Object.entries(named).map(([k, v]) => `${k}=${String(unwrapFluentValue(v))}`).sort().join(",")}`;
+  if (refusedNumberFormats.has(key)) return;
+  if (refusedNumberFormats.size >= MAX_REFUSED_REPORTS) refusedNumberFormats.clear();
+  refusedNumberFormats.add(key);
+  console.warn(
+    `[next-fluent] Intl refused the options of ${name}() for "${locale}" (${key.split("::").slice(2).join("::")}); the value was rendered as ${JSON.stringify(fallback)}.`
+  );
+}
 function clearFunctionsCache() {
   numberFormatCache.clear();
+  refusedNumberFormats.clear();
 }
 function getCachedNumberFormat(locale, options) {
   const cacheKey = `${locale}::${options.style}::${options.currency ?? ""}::${options.currencyDisplay ?? ""}::${options.minimumFractionDigits ?? ""}::${options.maximumFractionDigits ?? ""}`;
@@ -39,7 +51,9 @@ function createDefaultFunctions(locale) {
           maximumFractionDigits: maxFraction
         }).format(num);
       } catch {
-        return `${num} ${currency}`;
+        const fallback = `${num} ${currency}`;
+        warnRefusedFormat("CURRENCY", locale, named, fallback);
+        return fallback;
       }
     },
     PERCENT: (positional, named) => {
@@ -57,7 +71,9 @@ function createDefaultFunctions(locale) {
           maximumFractionDigits: maxFraction
         }).format(num);
       } catch {
-        return `${num * 100}%`;
+        const fallback = `${num * 100}%`;
+        warnRefusedFormat("PERCENT", locale, named, fallback);
+        return fallback;
       }
     }
   };

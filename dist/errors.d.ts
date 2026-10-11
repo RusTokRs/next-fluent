@@ -14,8 +14,6 @@ export declare const FluentErrorCode: {
     readonly INVALID_ARGUMENT: "INVALID_ARGUMENT";
     /** A React element was interpolated through a string-only API. */
     readonly UNSUPPORTED_VALUE: "UNSUPPORTED_VALUE";
-    /** A less specific locale had to be used for the request. */
-    readonly ENVIRONMENT_FALLBACK: "ENVIRONMENT_FALLBACK";
 };
 export type FluentErrorCode = (typeof FluentErrorCode)[keyof typeof FluentErrorCode];
 export interface FluentErrorDetails {

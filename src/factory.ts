@@ -12,9 +12,16 @@ import {
   getFormatter as getServerFormatter,
   getLocale,
   getMessages as getServerMessages,
+  type ForLocaleOptions,
 } from './server';
 import { validateI18nConfig } from './utils';
 import type { MessageSource } from './catalog';
+
+/**
+ * Options accepted by `I18nRuntime.forLocale()`: everything the server entry
+ * takes, minus the instance-scoped request loader the runtime supplies itself.
+ */
+export type RuntimeForLocaleOptions = Omit<ForLocaleOptions, 'requestConfig'>;
 
 export interface I18nRuntime {
   readonly config: I18nConfig;
@@ -23,7 +30,7 @@ export interface I18nRuntime {
   readonly getTranslations: (options?: string | GetTranslationsOptions) => Promise<Translations>;
   readonly forLocale: (
     locale: string,
-    options?: string | { namespace?: string; fallbackLocale?: string; fallbackLocales?: readonly string[]; debug?: boolean }
+    options?: string | RuntimeForLocaleOptions
   ) => Promise<Translations>;
   readonly getMessages: (locale?: string) => Promise<MessageSource>;
   readonly getFormatter: (options?: { locale?: string; timeZone?: string }) => Promise<Formatter>;

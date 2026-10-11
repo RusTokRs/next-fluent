@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { jsonToFluent } from "./catalog.js";
+import { jsonToFluent, stripCatalogBom } from "./catalog.js";
 import { generateTypeDeclarations } from "./typegen.js";
 import { canonicalizeLocale } from "./utils.js";
 const CATALOG_EXTENSIONS = [".ftl", ".json"];
@@ -31,7 +31,7 @@ function collectCatalogFiles(target) {
   return files.sort();
 }
 function readCatalog(file) {
-  const raw = fs.readFileSync(file, "utf8");
+  const raw = stripCatalogBom(fs.readFileSync(file, "utf8"));
   if (!file.toLowerCase().endsWith(".json")) return raw;
   try {
     return jsonToFluent(JSON.parse(raw));
@@ -60,7 +60,10 @@ function readCatalogsByLocale(dir) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       const files = collectCatalogFiles(full);
-      if (files.length > 0) catalogs[localeFromCatalogName(entry.name)] = files.map(readCatalog);
+      if (files.length > 0) {
+        const locale = localeFromCatalogName(entry.name);
+        (catalogs[locale] ??= []).push(...files.map(readCatalog));
+      }
     } else if (entry.isFile() && isCatalogFile(entry.name)) {
       const locale = localeFromCatalogName(path.basename(entry.name, path.extname(entry.name)));
       (catalogs[locale] ??= []).push(readCatalog(full));
@@ -78,9 +81,19 @@ const SKIPPED_SOURCE_DIRS = /* @__PURE__ */ new Set([
   "coverage",
   ".turbo"
 ]);
-const SOURCE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
+const SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".mdx"];
+const DECLARATION_FILE = /\.d\.[cm]?ts$/;
+function realPathOrNull(target) {
+  try {
+    return fs.realpathSync(target);
+  } catch {
+    return null;
+  }
+}
 function collectSourceFiles(dir) {
   const found = [];
+  const visitedDirs = /* @__PURE__ */ new Set();
+  const seenFiles = /* @__PURE__ */ new Set();
   const walk = (current) => {
     let entries;
     try {
@@ -90,17 +103,38 @@ function collectSourceFiles(dir) {
     }
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
       const full = path.join(current, entry.name);
-      if (entry.isDirectory()) {
+      let isDir = entry.isDirectory();
+      let isFile = entry.isFile();
+      if (entry.isSymbolicLink()) {
+        try {
+          const linked = fs.statSync(full);
+          isFile = linked.isFile();
+          isDir = linked.isDirectory();
+        } catch {
+          continue;
+        }
+      }
+      if (isDir) {
         if (SKIPPED_SOURCE_DIRS.has(entry.name) || entry.name.startsWith(".")) continue;
+        const real2 = realPathOrNull(full);
+        if (real2 === null || visitedDirs.has(real2)) continue;
+        visitedDirs.add(real2);
         walk(full);
         continue;
       }
-      if (!entry.isFile()) continue;
-      if (entry.name.endsWith(".d.ts")) continue;
+      if (!isFile) continue;
+      if (DECLARATION_FILE.test(entry.name)) continue;
       if (!SOURCE_EXTENSIONS.includes(path.extname(entry.name))) continue;
+      const real = realPathOrNull(full);
+      if (real !== null) {
+        if (seenFiles.has(real)) continue;
+        seenFiles.add(real);
+      }
       found.push(full);
     }
   };
+  const root = realPathOrNull(dir);
+  if (root !== null) visitedDirs.add(root);
   walk(dir);
   return found;
 }

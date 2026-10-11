@@ -1,5 +1,6 @@
 import { FluentBundle, FluentResource, type FluentFunction } from '@fluent/bundle';
 import { createDefaultFunctions } from './functions';
+import { stripCatalogBom } from './catalog';
 
 export interface CreateFluentBundleOptions {
   useIsolating?: boolean;
@@ -15,21 +16,20 @@ const MAX_BUNDLE_CACHE = 500;
 
 /**
  * Fast 32-bit FNV-1a hash without heap allocations (no BigInt).
+ *
+ * Module-private: it used to be exported, together with a `fnv1a64` alias that
+ * ran *this* implementation and so answered a 32-bit hash under a 64-bit name.
+ * The package has never been published, so nothing outside could depend on the
+ * spelling — but a public function whose name misstates its result is worse than
+ * no public function at all.
  */
-export function fnv1a32(input: string): string {
+function fnv1a32(input: string): string {
   let hash = 0x811c9dc5;
   for (let i = 0; i < input.length; i++) {
     hash ^= input.charCodeAt(i);
     hash = Math.imul(hash, 0x01000193);
   }
   return (hash >>> 0).toString(16).padStart(8, '0');
-}
-
-/**
- * Backwards-compatible alias for 64-bit/32-bit string hashing.
- */
-export function fnv1a64(input: string): string {
-  return fnv1a32(input);
 }
 
 export function computeSourceHash(source: string | readonly string[]): string {
@@ -97,19 +97,25 @@ function sameSource(a: string | readonly string[], b: string | readonly string[]
 }
 
 export function getOrCreateResource(source: string): FluentResource {
-  const hash = `${source.length}:${fnv1a32(source)}`;
+  const normalized = stripCatalogBom(source);
+  const hash = `${normalized.length}:${fnv1a32(normalized)}`;
   const cached = resourceCache.get(hash);
-  if (cached?.source === source) return cached.resource;
-  const res = new FluentResource(source);
-  resourceCache.set(hash, { source, resource: res });
+  if (cached?.source === normalized) return cached.resource;
+  const res = new FluentResource(normalized);
+  resourceCache.set(hash, { source: normalized, resource: res });
   return res;
 }
 
 export function getCachedFluentBundle(
   locale: string,
-  ftlSource: string | readonly string[],
+  rawSource: string | readonly string[],
   options: CreateFluentBundleOptions = {}
 ): FluentBundle {
+  // A byte-order mark is stripped before hashing so both spellings of the same
+  // catalog share one cache entry, and so the first entry survives the parser.
+  const ftlSource: string | readonly string[] = typeof rawSource === 'string'
+    ? stripCatalogBom(rawSource)
+    : rawSource.map(stripCatalogBom);
   const useIsolating = options.useIsolating ?? true;
   const hasCustomFunctions = options.functions && Object.keys(options.functions).length > 0;
 
