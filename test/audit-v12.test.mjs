@@ -36,8 +36,17 @@ function tree() {
       fs.writeFileSync(target, content, 'utf8');
       return target;
     },
-    link: (relative, target, type) =>
-      fs.symlinkSync(target, path.join(dir, relative), type ?? 'file'),
+    // Windows refuses to create symlinks without Developer Mode, so a link
+    // that cannot be made is reported instead of thrown — the same guard the
+    // catalog symlink tests use.
+    link: (relative, target, type) => {
+      try {
+        fs.symlinkSync(target, path.join(dir, relative), type ?? 'file');
+        return true;
+      } catch {
+        return false;
+      }
+    },
     scanned: () =>
       collectSourceFiles(path.join(dir, 'app'))
         .map((file) => path.relative(dir, file))
@@ -70,7 +79,7 @@ test('a symlinked source file is scanned', () => {
   try {
     t.write('app/page.tsx', 'export const a = 1');
     t.write('shared/Button.tsx', 'export const b = 1');
-    t.link('app/Button.tsx', path.join(t.dir, 'shared/Button.tsx'));
+    if (!t.link('app/Button.tsx', path.join(t.dir, 'shared/Button.tsx'))) return;
 
     assert.deepEqual(t.scanned(), ['app/Button.tsx', 'app/page.tsx']);
   } finally {
@@ -83,7 +92,7 @@ test('a symlinked source directory is scanned', () => {
   try {
     t.write('app/page.tsx', 'export const a = 1');
     t.write('packages/ui/Button.tsx', 'export const b = 1');
-    t.link('app/components', path.join(t.dir, 'packages/ui'), 'dir');
+    if (!t.link('app/components', path.join(t.dir, 'packages/ui'), 'dir')) return;
 
     assert.deepEqual(t.scanned(), [
       'app/components/Button.tsx',
@@ -98,7 +107,7 @@ test('a link that reaches its own ancestor does not loop forever', () => {
   const t = tree();
   try {
     t.write('app/page.tsx', 'export const a = 1');
-    t.link('app/loop', t.dir, 'dir');
+    if (!t.link('app/loop', t.dir, 'dir')) return;
 
     // The walk has to terminate; without cycle tracking this never returns.
     assert.deepEqual(t.scanned(), ['app/page.tsx']);
@@ -112,8 +121,8 @@ test('the same directory behind two links is scanned once', () => {
   try {
     t.write('app/page.tsx', 'export const a = 1');
     t.write('shared/Button.tsx', 'export const b = 1');
-    t.link('app/a', path.join(t.dir, 'shared'), 'dir');
-    t.link('app/b', path.join(t.dir, 'shared'), 'dir');
+    if (!t.link('app/a', path.join(t.dir, 'shared'), 'dir')) return;
+    if (!t.link('app/b', path.join(t.dir, 'shared'), 'dir')) return;
 
     // Scanning it twice would report its call sites as two places.
     assert.deepEqual(t.scanned(), ['app/a/Button.tsx', 'app/page.tsx']);
@@ -126,8 +135,8 @@ test('the same file behind two links is collected once', () => {
   const t = tree();
   try {
     t.write('app/real.tsx', 'export const r = 1');
-    t.link('app/one.tsx', path.join(t.dir, 'app/real.tsx'));
-    t.link('app/two.tsx', path.join(t.dir, 'app/real.tsx'));
+    if (!t.link('app/one.tsx', path.join(t.dir, 'app/real.tsx'))) return;
+    if (!t.link('app/two.tsx', path.join(t.dir, 'app/real.tsx'))) return;
 
     assert.deepEqual(t.scanned(), ['app/one.tsx']);
   } finally {
@@ -139,8 +148,8 @@ test('a broken link is skipped instead of throwing', () => {
   const t = tree();
   try {
     t.write('app/page.tsx', 'export const p = 1');
-    t.link('app/dangling.tsx', path.join(t.dir, 'gone.tsx'));
-    t.link('app/dir-dangling', path.join(t.dir, 'nowhere'), 'dir');
+    if (!t.link('app/dangling.tsx', path.join(t.dir, 'gone.tsx'))) return;
+    if (!t.link('app/dir-dangling', path.join(t.dir, 'nowhere'), 'dir')) return;
 
     assert.deepEqual(t.scanned(), ['app/page.tsx']);
   } finally {
@@ -153,7 +162,7 @@ test('following links does not start walking node_modules', () => {
   try {
     t.write('app/page.tsx', 'export const p = 1');
     t.write('deps/node_modules/pkg/index.js', 'module.exports = 1');
-    t.link('app/deps', path.join(t.dir, 'deps'), 'dir');
+    if (!t.link('app/deps', path.join(t.dir, 'deps'), 'dir')) return;
 
     assert.deepEqual(t.scanned(), ['app/page.tsx']);
   } finally {
@@ -175,7 +184,7 @@ test('check --usage does not call a message dead when it is used behind a link',
         '}\n'
     );
     t.write('packages/ui/Button.tsx', "export default function B({ t }) {\n  return t('from-shared');\n}\n");
-    t.link('app/components', path.join(t.dir, 'packages/ui'), 'dir');
+    if (!t.link('app/components', path.join(t.dir, 'packages/ui'), 'dir')) return;
 
     const { status, output } = runCli(t.dir, ['check', '--input', 'messages', '--src', 'app', '--usage']);
     assert.equal(status, 0, output);
