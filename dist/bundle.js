@@ -290,13 +290,17 @@ function createTranslator(bundle, namespaceOrFallbackOrOpts, maybeNamespace) {
           );
         }
         if (errors.length > 0) {
+          const unsupported = [
+            ...defaults.rejected,
+            ...built.rejected
+          ];
           report(
-            built.rejected.length > 0 ? {
+            unsupported.length > 0 ? {
               code: FluentErrorCode.INVALID_ARGUMENT,
               key,
               namespace,
               locale: bundleLocale(b),
-              cause: { unsupportedArguments: built.rejected, errors }
+              cause: { unsupportedArguments: unsupported, errors }
             } : {
               code: FluentErrorCode.FORMATTING_ERROR,
               key,

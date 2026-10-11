@@ -102,7 +102,10 @@ function readCatalogsByLocale(dir) {
     const full = import_node_path.default.join(dir, entry.name);
     if (entry.isDirectory()) {
       const files = collectCatalogFiles(full);
-      if (files.length > 0) catalogs[localeFromCatalogName(entry.name)] = files.map(readCatalog);
+      if (files.length > 0) {
+        const locale = localeFromCatalogName(entry.name);
+        (catalogs[locale] ??= []).push(...files.map(readCatalog));
+      }
     } else if (entry.isFile() && isCatalogFile(entry.name)) {
       const locale = localeFromCatalogName(import_node_path.default.basename(entry.name, import_node_path.default.extname(entry.name)));
       (catalogs[locale] ??= []).push(readCatalog(full));

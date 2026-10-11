@@ -159,6 +159,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`next-fluent check` reported "no issues" for translations that were missing.**
+  A catalog directory whose name resolved to a locale already claimed by a flat
+  file (`messages/en-z/` beside `messages/en-x.ftl`) overwrote the collected
+  sources instead of merging into them, so the reference locale held fewer keys
+  than the project ships and every other locale was compared against an
+  incomplete catalog. Directory catalogs are now merged like flat ones, and the
+  result no longer depends on the order the entries sort in.
+
+- **`t.attrs()` reported a misclassified error.** An argument Fluent cannot
+  represent was named (`INVALID_ARGUMENT` with `unsupportedArguments`) when it
+  came from the call and downgraded to a bare `FORMATTING_ERROR` — losing the
+  argument name — when the same value came from `defaultTranslationValues`.
+  `t('id.attr')` and `t.attrs('id')` now classify the same message alike.
+
 - **`trustedHosts` could be switched off with a request header.** An
   `x-forwarded-host` naming a configured domain was adopted as the request
   origin, and the allow-list was then checked against that attacker-chosen

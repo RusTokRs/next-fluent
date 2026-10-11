@@ -503,14 +503,23 @@ export function createTranslator(
           );
         }
         if (errors.length > 0) {
+          // `formatKey` reports the rejected names from the per-call *and* the
+          // default values; reading only the per-call ones reported
+          // FORMATTING_ERROR and dropped `unsupportedArguments` for exactly the
+          // same message and error that `t('id.attr')` classified as
+          // INVALID_ARGUMENT.
+          const unsupported = [
+            ...defaults.rejected,
+            ...built.rejected,
+          ];
           report(
-            built.rejected.length > 0
+            unsupported.length > 0
               ? {
                   code: FluentErrorCode.INVALID_ARGUMENT,
                   key,
                   namespace,
                   locale: bundleLocale(b),
-                  cause: { unsupportedArguments: built.rejected, errors },
+                  cause: { unsupportedArguments: unsupported, errors },
                 }
               : {
                   code: FluentErrorCode.FORMATTING_ERROR,
