@@ -159,6 +159,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **No behaviour changed in this pass.** The URL layer (`route-engine`,
+  `nav-url`), the webpack half of the Next plugin and the agreement between
+  generated types and the runtime were probed branch by branch and found
+  correct; what they lacked was any test on catch-all routes, percent signs
+  that are not escapes, query strings passed as strings, and the webpack
+  alias — where a mistake surfaces as a 404 or a server that cannot load
+  its request config, not as a red test.
+
 - **`clearCatalogIntegrityWarnings` was removed.** It was exported from an internal
   module, reached no public entry point and was called from nowhere. The
   warn-once set it reset is bounded on its own, so nothing depended on it.
