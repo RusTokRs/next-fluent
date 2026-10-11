@@ -3,6 +3,7 @@ import React, { createContext, forwardRef, useContext, useEffect, useMemo, useRe
 import NextLink from "next/link.js";
 import { domainLocalePrefix, findLocaleDomain } from "./domain-routing.js";
 import { createFluentBundle, createTranslator } from "./bundle.js";
+import { warnAboutDroppedEntries } from "./catalog-integrity.js";
 import { isJsonCatalog, jsonToFluent } from "./catalog.js";
 import { createFormatter } from "./formatter.js";
 import { computeSourceHash } from "./cache.js";
@@ -28,6 +29,12 @@ function useStableFunctions(functions) {
   const stable = { ...functions };
   ref.current = { keys, values: keys.map((key) => functions[key]), stable };
   return stable;
+}
+function warnAboutUnreadableEntries(locale, source) {
+  if (process.env.NODE_ENV === "production") return;
+  if (typeof source === "string" || Array.isArray(source)) {
+    warnAboutDroppedEntries(locale, source);
+  }
 }
 function FluentProvider({
   locale,
@@ -69,6 +76,7 @@ function FluentProvider({
   const bundle = useMemo(() => {
     if (!normalizedMessages) return null;
     if (typeof normalizedMessages === "string" || Array.isArray(normalizedMessages)) {
+      warnAboutUnreadableEntries(locale, normalizedMessages);
       return createFluentBundle(locale, normalizedMessages, {
         functions: stableFunctions,
         useIsolating
@@ -80,6 +88,7 @@ function FluentProvider({
     if (!normalizedFallbackMessages) return null;
     const fLocale = fallbackLocale || "en";
     if (typeof normalizedFallbackMessages === "string" || Array.isArray(normalizedFallbackMessages)) {
+      warnAboutUnreadableEntries(fLocale, normalizedFallbackMessages);
       return createFluentBundle(fLocale, normalizedFallbackMessages, {
         functions: stableFunctions,
         useIsolating

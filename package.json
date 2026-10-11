@@ -121,7 +121,7 @@
     "test:next:domains": "npm run build && node ./scripts/test-domain-browser.mjs",
     "prepack": "npm run build",
     "check-dist": "npm run build && node ./scripts/check-dist.mjs",
-    "size": "node ./scripts/size-budget.mjs",
+    "size": "npm run build && node ./scripts/size-budget.mjs",
     "test:edge": "node ./scripts/check-edge-runtime.mjs",
     "ci": "npm run build && npm run check-dist && npm run lint && npm run typecheck && npm run test:edge && npm test && npm run test:consumer && npm run size",
     "check": "npm run ci && npm run test:types && npm run test:next && npm run test:next:16",

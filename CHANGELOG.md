@@ -96,6 +96,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   shelled out to read Next's `package.json` and parse its version on every config
   evaluation — the only version-conditional code left in the library, and it is
   now deleted instead of carried.
+- **The client size budget measures what an app imports, not the package root.**
+  Bundling the root entry as an entry point kept code no visitor downloads
+  (every module is re-exported there), which overstated the client by 1.7 kB
+  minified / 0.7 kB gzip and quietly eroded the budget across three passes. The
+  budget now bundles `test/fixtures/size/client-consumer.ts`, which imports the
+  documented client API through the published specifiers, and a test fails when
+  a new client export is missing from it. Budgets were re-baselined accordingly
+  (47.0 kB minified / 15.9 kB gzip measured for the client surface).
+
 - **Node.js 22 stays the floor, deliberately.** No API newer than ES2022 is used
   anywhere in `src/` or `bin/`, and Node.js 20 reached end of life on 2026-04-30,
   so 22 is already the oldest supported LTS. Raising to 24 would exclude apps on
@@ -486,6 +495,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `Unknown option "--input"`. It now says `"--input" requires a value.`
 - `checkCatalogs` failures in the CLI are reported as `Error: <message>` instead
   of a raw stack trace.
+
+- **A client catalog that Fluent cannot fully read is now named in development.**
+  `@fluent/bundle` drops an unreadable message without an error, so a catalog a
+  client component passes to `FluentProvider` (FTL text, FTL sources or a JSON
+  payload) rendered that key as its own id with nothing to explain why. The
+  provider now scans the catalog like the server runtime does and reports the
+  lost ids once; the scan is behind `process.env.NODE_ENV` and therefore absent
+  from a production bundle (verified by the size budget, which measures the same
+  fixture as a development build and fails if the two collapse to one size).
 
 ### Security
 

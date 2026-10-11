@@ -17,6 +17,7 @@ import type {
   Translations,
 } from './types';
 import { createFluentBundle, createTranslator } from './bundle';
+import { warnAboutDroppedEntries } from './catalog-integrity';
 import { isJsonCatalog, jsonToFluent, type MessageSource } from './catalog';
 import { createFormatter } from './formatter';
 import { computeSourceHash } from './cache';
@@ -91,6 +92,26 @@ function useStableFunctions(
   const stable = { ...functions };
   ref.current = { keys, values: keys.map((key) => functions[key]), stable };
   return stable;
+}
+
+/**
+ * Names catalog entries the Fluent parser cannot read, in development only.
+ *
+ * `@fluent/bundle` drops an unreadable message without an error, so a catalog
+ * parsed in the browser (a JSON payload handed to `FluentProvider`, an FTL
+ * string a client component fetched) would render that key silently — see
+ * `./catalog-integrity`. The server runtime always reports it; in the browser
+ * the scan is only worth its bytes while developing. Browser bundlers replace
+ * `process.env.NODE_ENV` with a literal, so in a production build this function
+ * body — and with it the whole diagnostics module — is dead code the minifier
+ * removes. A bundler that does not replace it keeps the check, which is the
+ * harmless direction to fail in.
+ */
+function warnAboutUnreadableEntries(locale: string, source: MessageSource | FluentBundle): void {
+  if (process.env.NODE_ENV === 'production') return;
+  if (typeof source === 'string' || Array.isArray(source)) {
+    warnAboutDroppedEntries(locale, source as string | readonly string[]);
+  }
 }
 
 export interface FluentProviderProps {
@@ -175,6 +196,7 @@ export function FluentProvider({
   const bundle = useMemo<FluentBundle | null>(() => {
     if (!normalizedMessages) return null;
     if (typeof normalizedMessages === 'string' || Array.isArray(normalizedMessages)) {
+      warnAboutUnreadableEntries(locale, normalizedMessages as string | readonly string[]);
       return createFluentBundle(locale, normalizedMessages as string | readonly string[], {
         functions: stableFunctions,
         useIsolating,
@@ -188,6 +210,7 @@ export function FluentProvider({
     if (!normalizedFallbackMessages) return null;
     const fLocale = fallbackLocale || 'en';
     if (typeof normalizedFallbackMessages === 'string' || Array.isArray(normalizedFallbackMessages)) {
+      warnAboutUnreadableEntries(fLocale, normalizedFallbackMessages as string | readonly string[]);
       return createFluentBundle(fLocale, normalizedFallbackMessages as string | readonly string[], {
         functions: stableFunctions,
         useIsolating,

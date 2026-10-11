@@ -601,10 +601,14 @@ The server runtime reports the same class of problem from the other side: Fluent
 runtime parser drops a message it cannot read *without any error*, so the only
 symptom used to be a `MISSING_MESSAGE` for a key the catalog defines. `next-fluent`
 now compares the entries a catalog declares with the ones the parser kept and warns
-once per catalog, naming the lost ids. A UTF-8 byte-order mark (a catalog saved by
-an editor that writes one) is stripped before parsing, so it no longer costs the
-first entry — and a BOM in a `.json` catalog no longer fails with a bare
-"Unexpected token".
+once per catalog, naming the lost ids. The same check covers a catalog a client
+component hands to `FluentProvider` (FTL text or a JSON payload parsed in the
+browser) — there it runs in development only, since the scan has no place in the
+bytes every visitor downloads; production builds drop it together with the code
+that performs it (`npm run size` fails if that ever stops being true). A UTF-8
+byte-order mark (a catalog saved by an editor that writes one) is stripped before
+parsing, so it no longer costs the first entry — and a BOM in a `.json` catalog no
+longer fails with a bare "Unexpected token".
 
 ### Finding dead messages
 

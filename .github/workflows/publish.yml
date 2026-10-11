@@ -46,6 +46,14 @@ jobs:
 
       # build, check-dist, lint, typecheck, test:edge, unit tests, consumer
       # contract, size budgets, typegen types, Next 15 + Next 16 integration.
+      #
+      # This step is deliberately not the only gate: `npm publish` below runs
+      # `prepublishOnly` (→ the same `npm run check`) and `prepack` (→ the
+      # build), so the gate is re-run on the exact tree being packed. Keep both:
+      # the explicit step turns a failure into a red *step* instead of a publish
+      # failure, and the publish-time run is what guarantees the tarball was
+      # built from the checked-out source. Never add `--ignore-scripts` to the
+      # publish commands — that would drop both guarantees to save a few minutes.
       - name: Run the full check
         run: npm run check
 

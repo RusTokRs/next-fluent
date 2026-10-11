@@ -2,19 +2,27 @@ import type { FluentResource } from '@fluent/bundle';
 import { getOrCreateResource } from './cache';
 
 /**
- * Catalog integrity diagnostics for the *server* runtime.
+ * Names the catalog entries `@fluent/bundle` silently dropped.
  *
- * `@fluent/bundle` collects only the entries its parser understood: a message
- * with a syntax error is dropped without an error, a warning or any other
- * trace, and the only symptom is that `t('that.key')` reports MISSING_MESSAGE
- * for a key the catalog obviously defines.
+ * The runtime parser collects only the entries it understood: a message with a
+ * syntax error is dropped without an error, a warning or any other trace, and
+ * the only symptom is that `t('that.key')` reports MISSING_MESSAGE for a key the
+ * catalog obviously defines.
  *
- * This module names the lost entries. It is deliberately not imported by any
- * browser entry point: the client bundle is a product constraint, and in a
- * Next.js app every catalog is parsed on the server first (`forLocale`,
- * `getTranslations`, `getMessages`), which is also where the actionable warning
- * belongs. `next-fluent check` reports the same problems from the reference
- * parser at build time, with source positions.
+ * Two call sites, one policy per runtime:
+ *
+ * - the server runtime (`./server`) calls `warnAboutDroppedEntries`
+ *   unconditionally, because that is where a Next.js app parses every catalog
+ *   and where a production log line is actionable;
+ * - the client provider (`./client`) calls it only when
+ *   `process.env.NODE_ENV !== 'production'`, because a browser bundle ships to
+ *   every visitor. Browser bundlers replace that expression with a literal, so
+ *   the call — and this module with it — is dead code in a production bundle;
+ *   `npm run size` fails if that ever stops being true.
+ *
+ * Both call sites share this module instance, so a catalog that is parsed in
+ * both places is still reported once. `next-fluent check` reports the same
+ * problems from the reference parser at build time, with source positions.
  */
 
 /**
