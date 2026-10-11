@@ -150,6 +150,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`check --usage` could not see a message used behind a symbolic link.** A
+  symlinked source file or directory — `app/components → ../../packages/ui` in
+  any monorepo — was neither a file nor a directory to `fs.Dirent`, so every call
+  site under it was invisible and `check --usage` reported live messages as
+  unused. With `--strict-usage` that is a failed build over a message that is in
+  active use. Links are now followed, with the real path of every visited
+  directory and file remembered: a link reaching its own ancestor terminates, and
+  a file behind two links is scanned once instead of twice.
+- **`check --usage` ignored `.mts`, `.cts` and `.mdx`.** TypeScript's ESM/CJS
+  extensions and MDX pages hold real call sites, so a message used only from one
+  of them was reported as dead. The scanner now reads all three and skips
+  `.d.mts`/`.d.cts` declarations like it already skipped `.d.ts`.
+
 - **`pseudo --output` could overwrite the catalogs it generated from.** Pointing
   `--output` at the `--input` directory (or file) replaced every real catalog
   with its pseudo-localized version, and when a later catalog failed to parse the

@@ -34,6 +34,14 @@ export declare function readCatalogsByLocale(dir: string): Record<string, string
  *
  * Deliberately shallow about file *types*: `.d.ts` files are skipped because
  * they contain no call sites, only declarations.
+ *
+ * Symlinks are followed, which `collectCatalogFiles` deliberately does not do
+ * for directories: a linked *directory* is a monorepo's `app/components →
+ * packages/ui`, and every message used only there was reported as dead —
+ * a false accusation that `check --usage` is expected to lead people to act
+ * on. The cost is that a cycle becomes possible (`app/components → .. → app`),
+ * so the real path of every visited directory and every collected file is
+ * remembered: a repeat is skipped rather than walked or counted twice.
  */
 export declare function collectSourceFiles(dir: string): string[];
 export interface TypegenResult {

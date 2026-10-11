@@ -674,6 +674,17 @@ and anything it cannot resolve is reported as `dynamic` rather than guessed at.
 A single call site can be exempted with a `// next-fluent-ignore` comment, whole
 namespaces with `--ignore-unused <prefix>`.
 
+**What it scans.** `--src` is walked recursively through `.ts`, `.tsx`, `.mts`,
+`.cts`, `.js`, `.jsx`, `.mjs`, `.cjs` and `.mdx`; `.d.ts`/`.d.mts`/`.d.cts` are
+skipped because they hold no call sites, and so are `node_modules`, `.next`,
+`dist`, `out`, `build`, `coverage`, `.git`, `.turbo` and dotted directories.
+Symbolic links **are** followed — `app/components → ../../packages/ui` is where a
+monorepo keeps half its call sites — with the real path of every visited
+directory and file remembered, so a link that reaches its own ancestor terminates
+and a file behind two links is counted once, not twice. A file outside the
+default list is not scanned, so a message used only from one will be reported as
+unused; `--allow-unused` silences that report if your project needs it.
+
 What it reads: every call shape of a translator — `t()`, `t?.()`, `t.rich()`,
 `t.rich?.()`, `t.attrs()`, `t.raw()`, `t.has()`, `t.plain()` — the factories that
 create one (`useTranslations`, `getTranslations` and `createTranslator`,
