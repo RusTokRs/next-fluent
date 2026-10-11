@@ -25,17 +25,22 @@ function warnMissingTrustedHosts() {
   if (!isDevelopment || warnedAboutTrustedHosts) return;
   warnedAboutTrustedHosts = true;
   console.warn(
-    "[next-fluent] trustedHosts is not configured, so redirect targets are built from the request's Host header. Set `trustedHosts: ['example.com']` in production to reject a foreign Host with 421 before any redirect is issued."
+    "[next-fluent] trustedHosts is not configured, so public URLs (redirect `Location`, alternate `Link`) are built from the request's Host header. Set `trustedHosts: ['example.com']` in production to reject a foreign Host with 421."
   );
 }
+const LOOPBACK_HOST = /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i;
+function normalizeHostForMatching(host) {
+  return host.endsWith(".") ? host.slice(0, -1) : host;
+}
 function hostMatchesTrustedList(requestHost, list) {
-  const hostname = requestHost.replace(/:\d+$/, "");
+  const hostAndPort = normalizeHostForMatching(requestHost);
+  const hostname = normalizeHostForMatching(hostAndPort.replace(/:\d+$/, ""));
   for (const raw of list) {
-    const entry = raw.toLowerCase();
-    if (entry === requestHost || entry === hostname) return true;
+    const entry = normalizeHostForMatching(raw.toLowerCase());
+    if (entry === hostAndPort || entry === hostname) return true;
     if (entry.startsWith("*.")) {
       const base = entry.slice(2);
-      if (hostname === base || hostname.endsWith(`.${base}`)) return true;
+      if (hostname.endsWith(`.${base}`)) return true;
     }
   }
   return false;
@@ -74,7 +79,10 @@ function createI18nMiddleware(options) {
     localeDetection = true,
     alternateLinks = true
   } = options;
-  const cookieConfig = resolveCookieConfig(options.localeCookie, cookieName);
+  const cookieConfig = resolveCookieConfig(
+    !localeDetection && options.localeCookie === void 0 ? false : options.localeCookie,
+    cookieName
+  );
   const globalPrefixConfig = normalizeLocalePrefix(allLocales, options.localePrefix);
   const internalPrefixConfig = normalizeLocalePrefix(allLocales);
   const domainPrefixes = new Map(domains?.map((domain) => [
@@ -88,7 +96,13 @@ function createI18nMiddleware(options) {
     const requestOrigin = new URL(request.url);
     const directHost = request.headers.get("host");
     const forwardedHost = request.headers.get("x-forwarded-host");
-    const trustedForwardedHost = forwardedHost && (forwardedHost.toLowerCase() === directHost?.toLowerCase() || domains?.some((item) => item.domain.toLowerCase() === forwardedHost.toLowerCase()) || /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(forwardedHost));
+    const trustedForwardedHost = forwardedHost && (normalizeHostForMatching(forwardedHost.toLowerCase()) === (directHost === null ? void 0 : normalizeHostForMatching(directHost.toLowerCase())) || domains?.some(
+      (item) => normalizeHostForMatching(item.domain.toLowerCase()) === normalizeHostForMatching(forwardedHost.toLowerCase())
+    ) || // A loopback forwarded host is what a local development proxy sends. It
+    // is honoured only when the connection itself came from loopback: a
+    // public request that merely claims `x-forwarded-host: localhost:3000`
+    // must not make every public URL point at localhost.
+    LOOPBACK_HOST.test(forwardedHost) && directHost !== null && LOOPBACK_HOST.test(directHost));
     const rawHost = trustedForwardedHost ? forwardedHost : directHost;
     if (rawHost && /^[^\s/?#@\\]+$/.test(rawHost)) {
       try {
@@ -97,7 +111,7 @@ function createI18nMiddleware(options) {
       } catch {
       }
     }
-    const requestHost = requestOrigin.host.toLowerCase();
+    const requestHost = normalizeHostForMatching(requestOrigin.host.toLowerCase());
     if (trustedHosts && trustedHosts.length > 0 && !hostMatchesTrustedList(requestHost, trustedHosts)) {
       return new NextResponse(null, { status: 421 });
     }
@@ -185,6 +199,7 @@ function createI18nMiddleware(options) {
       if (response.headers?.set) {
         response.headers.set(headerName, effectiveLocale);
         if (alternateLinks) {
+          if (!trustedHosts || trustedHosts.length === 0) warnMissingTrustedHosts();
           const header = buildAlternateLinksHeader({
             locales: allLocales,
             defaultLocale: configuredDefaultLocale,
@@ -355,5 +370,6 @@ function createI18nMiddleware(options) {
 const createMiddleware = createI18nMiddleware;
 export {
   createI18nMiddleware,
-  createMiddleware
+  createMiddleware,
+  normalizeHostForMatching
 };

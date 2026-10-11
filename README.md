@@ -71,6 +71,11 @@ the same integration fixture, which covers the `middleware.ts` → `proxy.ts` re
 and Turbopack being the default bundler for `next build`. Locally, `npm run check`
 runs the fixture against both majors in one go (`test:next` then `test:next:16`).
 
+The package's own versioning rule (patch fixes, minor may break while the major
+is 0, 1.0.0 switches to strict SemVer) is in
+[`SECURITY.md`](./SECURITY.md#supported-versions); releases are cut by the
+Publish workflow described under [Releasing](#releasing).
+
 The floor is the **oldest version that still receives updates**, not the newest
 one available: Node.js 20 reached end of life on 2026-04-30, so 22 is the oldest
 supported LTS, and Next.js 15.3 is where the top-level `turbopack` config landed
@@ -242,7 +247,7 @@ export const config = {
 };
 ```
 
-> **Hardening**: pass `trustedHosts` (e.g. `createI18nMiddleware({ ...routing, trustedHosts: ['example.com', '*.example.com'] })`) to reject foreign `Host` headers with `421 Misdirected Request` before any redirect is issued — recommended when responses may be cached by shared caches or CDNs. Without it, redirect targets are built from the request's `Host` header, and `next dev` prints a one-time warning on the first redirect.
+> **Hardening**: pass `trustedHosts` (e.g. `createI18nMiddleware({ ...routing, trustedHosts: ['example.com', '*.example.com'] })`) to reject foreign `Host` headers with `421 Misdirected Request` before any public URL is issued — recommended when responses may be cached by shared caches or CDNs. Without it, both redirect targets and the alternate `Link` header are built from the request's `Host` header, and `next dev` prints a one-time warning as soon as such a URL is built. The wildcard lists subdomains only: `*.example.com` does **not** cover the apex, so list `example.com` as well when it is served.
 
 ### 5. Root Layout (`app/[locale]/layout.tsx`)
 
@@ -352,6 +357,12 @@ export function Navigation() {
 }
 ```
 
+`useNow()` follows the request snapshot: it returns the `now` of the request
+config (or of `<FluentServerProvider>`), so server and client render the same
+instant. Without one — a bare `FluentProvider` with no `now` — the server-side
+render uses the epoch (`1970-01-01T00:00:00Z`, hydration-safe) and the live clock
+starts right after mount; pass `now` when the SSR HTML has to show the real date.
+
 ### Rich Text & React Node Interpolation
 
 Pass React components directly into variables or map interactive markup tags:
@@ -395,14 +406,24 @@ Mapping rules:
 
 | JSON | FTL |
 | --- | --- |
-| `{ "nav": { "home": "Home" } }` | `nav-home = Home` (addressable as `t('nav.home')` or `t('nav-home')`) |
+| `{ "nav": { "home": "Home" } }` | `nav-home = Home` (addressable as `t('nav.home')` or `t('nav-home')`) — a dashes key is looked up first, so `t('nav.home')` finds the message `nav-home` before any `nav` message's `.home` attribute |
 | `{ "hello": "Hi {name}!" }` / `{ $name }` | `hello = Hi { $name }!` |
 | `{ "btn": { "": "OK", "aria-label": "Confirm" } }` | `btn = OK` + `.aria-label = Confirm` |
 | numbers / booleans | stringified |
 | arrays, `null` | rejected with an actionable error (Fluent uses selectors, not lists) |
 
 Braces, quotes, backslashes, padding and newlines are escaped so a converted
-catalog round-trips byte for byte.
+catalog round-trips byte for byte. `\{` and `\}` are literal braces — the escape
+hatch for prose that is not a placeholder:
+
+```json
+{ "json-hint": "Wrap keys in \\{braces\\}" }
+```
+
+Without the escape `{braces}` would become a reference to a variable nobody
+passes, and the message would render as its own key. A catalog that declares the
+same message id twice (say `"nav-home"` and `{ "nav": { "home": … } }`) is
+rejected instead of quietly letting one definition win.
 
 ### Sending a client component only what it renders
 
@@ -415,9 +436,18 @@ import { pickMessages } from 'next-fluent/messages';
 />
 ```
 
-`pickMessages` prunes the catalog to one namespace — plus the shared Fluent
-terms (`-brand`) that namespace references — so the serialized payload scales
-with the page instead of the app.
+`pickMessages` prunes the catalog to one namespace — plus everything those
+messages reference: the shared Fluent terms (`-brand`) and the messages they
+interpolate (`{ common-greeting }`, followed transitively). A reference is part
+of a message's meaning, so dropping it would leave the client bundle with a
+placeable that cannot be resolved and the key rendered in its place. Pass
+`{ keepTerms: false }` to leave the shared terms behind; message references are
+always kept.
+
+An entry the FTL parser cannot read is not silently pruned: if it belongs to the
+requested namespace, `pickMessages` throws a `FluentError` naming its first
+line, so a broken catalog fails where it is visible instead of shipping a
+payload with missing text.
 
 ### Error handling (`onError` / `getMessageFallback`)
 
@@ -485,6 +515,13 @@ createI18nMiddleware({
 });
 ```
 
+`trustedHosts` entries are host names, optionally with a port; `*.example.com`
+matches subdomains and `example.com` matches the apex — list both when both are
+served. The absolute spelling `example.com.` is treated as the same host, and so
+is `x-forwarded-host`, which is only honoured when it matches `Host`, a
+configured domain, or when both it and the connection are loopback (a local
+development proxy). Anything else keeps the request's own origin.
+
 Alternate links use each destination domain's prefix rules and include locales
 served on other domains. They also work in `never` mode when domains or localized
 pathnames give the languages distinct URLs. URLs shared by multiple locales are
@@ -492,7 +529,7 @@ omitted; no header is emitted with fewer than two unambiguous variants, on
 redirects, or with `alternateLinks: false`. `x-default` is included only without
 domain routing and when the default URL is unambiguous.
 
-The cookie is only written for `Sec-Fetch-Dest: document` requests and only when the stored value changes, so a client that already has one keeps `Cache-Control: s-maxage=…` instead of invalidating the entry on every hit. A cookie-less client still receives `Set-Cookie` on its first response — that is why detection-derived responses vary on `Cookie` too — and the cookie is `Secure` in production by default.
+The cookie is only written for `Sec-Fetch-Dest: document` requests and only when the stored value changes, so a client that already has one keeps `Cache-Control: s-maxage=…` instead of invalidating the entry on every hit. A cookie-less client still receives `Set-Cookie` on its first response — that is why detection-derived responses vary on `Cookie` too — and the cookie is `Secure` in production by default. With `localeDetection: false` nothing reads the cookie back, so the middleware does not write it either and documents stay cacheable; pass an explicit `localeCookie` config (not `false`) if you want it maintained for `getLocale()` on routes your matcher excludes.
 
 Requests whose locale comes from the cookie or `Accept-Language` (a prefix-less URL, or `/` in `as-needed`) are answered with `Vary: Accept-Language, Cookie`, because the same URL resolves differently per visitor. On a CDN this means such responses are cached per language rather than shared; if a route must be cached globally, either spell the locale in the URL or set `localeDetection: false` for that zone.
 
@@ -530,6 +567,13 @@ declare global {
 ```
 
 Once declared, `useTranslations('namespace')` and `getTranslations('namespace')` **automatically autocomplete message keys and validate arguments** across your entire project!
+
+Arguments follow the runtime's key resolution, including the corner where a
+message is named like another message's dotted attribute (`greeting-formal`
+next to `greeting` with `.formal`): `t('greeting.formal')` formats the message,
+so the key carries that message's variables, and the generated file lists the
+shadowed attribute together with its `t.attrs()` path. Unparsable catalog
+entries fail the generator instead of silently disappearing from the types.
 
 ### Catalog consistency in CI
 
@@ -621,6 +665,20 @@ The analyzer never writes to a catalog. It is also available programmatically as
 | — | `pickMessages()` | prune a catalog to one namespace for client payloads |
 | — | `next-fluent check` | cross-locale missing/extra/duplicate/parse report |
 | Message extraction from source | ✅ by design | not needed: the catalog is the source of truth, so `t('unknown')` is a compile error. `next-fluent check --usage` covers the other direction — dead keys and unverifiable call sites |
+
+## Releasing
+
+Releases are cut from `main` by publishing a GitHub Release (or running the
+**Publish** workflow manually, which defaults to `npm publish --dry-run`). The
+workflow runs the full gate — `npm run check`, i.e. build, `dist` freshness,
+lint, types, edge bundle, unit tests, consumer contract, size budgets, typegen
+types and both Next integrations — and only then publishes with provenance.
+Authentication is either the `NPM_TOKEN` secret or npm trusted publishing
+(OIDC) when the repository is configured as a trusted publisher for the package.
+
+The versioning rule lives in [`SECURITY.md`](./SECURITY.md#supported-versions):
+patches fix, minors may break while the major is 0, and every breaking change
+gets its own heading in `CHANGELOG.md`.
 
 ## License
 

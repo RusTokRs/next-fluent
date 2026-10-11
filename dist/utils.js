@@ -98,29 +98,50 @@ function parseAcceptLanguageEntry(entry) {
     if (nextSeparator === -1) break;
     paramStart = nextSeparator + 1;
   }
-  if (quality <= 0) return void 0;
   return { tag, quality };
 }
 function resolveAcceptLanguage(header, locales, preferred) {
   if (!header) return void 0;
   let bestLocale;
   let bestQuality = Number.NEGATIVE_INFINITY;
+  let bestIsWildcard = false;
   let entryStart = 0;
+  let refused;
   while (entryStart <= header.length) {
     const separator = header.indexOf(",", entryStart);
     const entryEnd = separator === -1 ? header.length : separator;
     const candidate = parseAcceptLanguageEntry(header.slice(entryStart, entryEnd));
-    if (candidate && candidate.quality > bestQuality) {
-      const matched = candidate.tag === "*" ? (preferred ? matchSupportedLocale(preferred, locales) : void 0) ?? locales[0] : matchSupportedLocale(candidate.tag, locales);
-      if (matched) {
-        bestLocale = matched;
+    if (candidate && candidate.quality === 0) {
+      const matched = matchSupportedLocale(candidate.tag, locales);
+      if (matched) (refused ??= /* @__PURE__ */ new Set()).add(matched);
+    } else if (candidate && candidate.quality > bestQuality) {
+      if (candidate.tag === "*") {
+        bestIsWildcard = true;
         bestQuality = candidate.quality;
+        bestLocale = void 0;
+      } else {
+        const matched = matchSupportedLocale(candidate.tag, locales);
+        if (matched) {
+          bestIsWildcard = false;
+          bestLocale = matched;
+          bestQuality = candidate.quality;
+        }
       }
     }
     if (separator === -1) break;
     entryStart = separator + 1;
   }
+  if (bestIsWildcard) return wildcardMatch(preferred, locales, refused);
   return bestLocale;
+}
+function wildcardMatch(preferred, locales, refused) {
+  const preferredMatch = preferred ? matchSupportedLocale(preferred, locales) : void 0;
+  if (preferredMatch && !refused?.has(preferredMatch)) return preferredMatch;
+  if (!refused) return preferredMatch ?? locales[0];
+  for (const locale of locales) {
+    if (!refused.has(locale)) return locale;
+  }
+  return void 0;
 }
 const LOCALE_PREFIX_MODES = ["always", "as-needed", "never"];
 function validateLocalePrefix(locales, localePrefix) {

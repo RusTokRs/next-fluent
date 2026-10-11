@@ -2,11 +2,23 @@ import type { DomainConfig, LocalePrefixConfig } from './types';
 import { matchSupportedLocale } from './utils';
 import { normalizeLocalePrefix } from './locale-prefix';
 
+/**
+ * `example.com.` is the absolute (FQDN) spelling of `example.com`: every
+ * resolver treats them as the same host, and clients and proxies do send the
+ * dotted form. Matching has to ignore the trailing dot or a configured domain
+ * silently stops applying to those requests.
+ */
+function normalizeHost(host: string): string {
+  return host.endsWith('.') ? host.slice(0, -1) : host;
+}
+
 export function findDomain(
   domains: readonly DomainConfig[] | undefined,
   host: string | undefined
 ): DomainConfig | undefined {
-  return host ? domains?.find((entry) => entry.domain.toLowerCase() === host.toLowerCase()) : undefined;
+  if (!host) return undefined;
+  const normalized = normalizeHost(host.toLowerCase());
+  return domains?.find((entry) => normalizeHost(entry.domain.toLowerCase()) === normalized);
 }
 
 export function domainSupportsLocale(domain: DomainConfig, locale: string): boolean {

@@ -1,4 +1,11 @@
 import type { I18nMiddlewareOptions } from './types';
+/**
+ * `example.com.` is the absolute spelling of `example.com` — the same host to
+ * every resolver — and clients, health checks and proxies do send it. Comparing
+ * the two spellings as different hosts rejected the absolute form with 421 and
+ * silently skipped domain routing for it.
+ */
+export declare function normalizeHostForMatching(host: string): string;
 export interface NextMiddlewareRequestLike {
     url: string;
     nextUrl: {

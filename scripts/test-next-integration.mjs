@@ -122,12 +122,48 @@ async function checkRuntime(nextCli) {
         !russianHtml.includes('data-server-locale="ru"')) {
       throw new Error(`Russian RSC/client locale mismatch (${russian.status}).\n${russianHtml.slice(0, 1500)}\n${output}`);
     }
-    // The middleware must still forward the resolved locale to the app.
+    // The middleware must still forward the resolved locale to the app, and the
+    // request scope must reach the page (V4-16).
     const live = await fetch(`${base}/ru/live`, { redirect: 'manual' });
     const liveHtml = await live.text();
-    if (live.status !== 200 || !liveHtml.includes('data-header-locale="ru"')) {
-      throw new Error(`Locale request header was not forwarded (${live.status}).\n${liveHtml.slice(0, 500)}\n${output}`);
+    if (live.status !== 200 || !liveHtml.includes('data-header-locale="ru"') ||
+        !liveHtml.includes('data-scope-locale="ru"')) {
+      throw new Error(`Locale request header or request scope was not forwarded (${live.status}).\n${liveHtml.slice(0, 500)}\n${output}`);
     }
+    // Concurrent requests for different locales: React's request scope is
+    // per-request, so neither the memoized store nor the bundle cache of one
+    // render may leak into another.
+    const concurrentRoutes = [
+      { route: '/', locale: 'en', headers: { 'accept-language': 'en' } },
+      { route: '/ru', locale: 'ru' },
+      { route: '/live', locale: 'en', headers: { 'accept-language': 'en' } },
+      { route: '/ru/live', locale: 'ru' },
+    ];
+    const concurrent = await Promise.all(
+      concurrentRoutes.map(async ({ route, locale, headers }) => {
+        const response = await fetch(`${base}${route}`, { redirect: 'manual', headers });
+        return { route, locale, status: response.status, html: await response.text() };
+      })
+    );
+    for (const { route, locale, status, html } of concurrent) {
+      if (status !== 200) {
+        throw new Error(`Concurrent request ${route} failed (${status}).\n${output}`);
+      }
+      const expected = [`lang="${locale}"`];
+      if (route.endsWith('/live')) {
+        // The dynamic route has no server-locale marker; it proves the request
+        // scope and the forwarded header instead.
+        expected.push(`data-header-locale="${locale}"`, `data-scope-locale="${locale}"`);
+      } else {
+        expected.push(`data-server-locale="${locale}"`);
+      }
+      for (const marker of expected) {
+        if (!html.includes(marker)) {
+          throw new Error(`Concurrent ${route} rendered the wrong locale (no ${marker}).\n${html.slice(0, 500)}\n${output}`);
+        }
+      }
+    }
+    console.log('[next-fluent] Concurrent request scopes stayed isolated.');
     const localized = await fetch(`${base}/ru/o-nas`, { redirect: 'manual' });
     const localizedHtml = await localized.text();
     if (localized.status !== 200 || !localizedHtml.includes('About route') || !localizedHtml.includes('lang="ru"')) {

@@ -136,6 +136,64 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Generated types follow the runtime's key resolution.** When a message is
+  named like another message's dotted attribute (`greeting-formal` next to
+  `greeting` with `.formal`), `t('greeting.formal')` formats the message — the
+  dashed id is resolved first — but `typegen` declared the attribute's
+  arguments, so the type check pointed callers at the wrong variables and the
+  call formatted to the key. The key now carries the winner's arguments and the
+  generated file names the shadowed attribute and its `t.attrs()` path.
+- **`trustedHosts` wildcards list subdomains only.** `*.example.org` no longer
+  accepts the apex: an allow-list that quietly admits a host the operator did
+  not write down is the wrong default for a control whose job is rejecting
+  foreign `Host` values. Add `example.org` next to the wildcard when the apex is
+  served too — the README example already does.
+- **A forged `x-forwarded-host: localhost:3000` no longer rewrites the origin.**
+  The loopback exception is for local development proxies, so it now requires
+  the connection itself to come from loopback; a public request that merely
+  claims the header no longer makes redirects and alternate links point at
+  `localhost`.
+- **`next dev` warns about an unverified `Host` for alternate links too.** The
+  one-time warning used to fire only when a redirect was built, although the
+  `Link` header takes its origin from the same header. It now covers both.
+- **`localeDetection: false` stops writing the locale cookie.** Nothing read it
+  back, so the default `Set-Cookie` on the first response of every visitor only
+  made documents uncacheable. An explicit `localeCookie` config remains an
+  opt-in (e.g. to keep `getLocale()` working on routes the matcher excludes).
+- **`pickMessages` keeps the messages a namespace interpolates, not just its
+  terms.** `checkout-title = Buy { common-greeting }` produced a pruned catalog
+  without `common-greeting`: the client bundle then rendered `checkout-title`
+  itself and reported `FORMATTING_ERROR: Unknown message`. References are now
+  followed transitively (`{ -term }` and `{ message }`, from messages and from
+  kept terms), in source order, and each entry is emitted once even when it is
+  referenced several times or by itself.
+- **Unparsable catalog entries are no longer dropped in silence.** The FTL
+  parser does not throw on a broken message — it puts the text into a `Junk`
+  node — and the serializer drops junk by default, so `check` reported the
+  problem while `typegen`, `pseudo` and `pickMessages` quietly emitted an
+  artifact without the message. `typegen` and `pseudo` now fail with the first
+  line of every unreadable entry, and `pickMessages` does so when the entry
+  belongs to the requested namespace (junk of other namespaces is pruned by
+  design).
+- **A JSON catalog cannot declare one message id twice.** `{ "nav-home": … }`
+  and `{ "nav": { "home": … } }` both convert to `nav-home`; the second
+  definition silently replaced the first at runtime and the key disappeared from
+  generated types. Conversion now reports both JSON paths and refuses the
+  catalog.
+- **Literal braces have an escape hatch in JSON catalogs.** `{count}` stays an
+  interpolation (ICU/next-intl compatibility), but `has {braces}` used to become
+  `$braces` and render as the key. `\{` and `\}` now mean literal braces in
+  every JSON value.
+- **`Accept-Language: en;q=0,*` no longer negotiates English.** RFC 9110 §12.5.4
+  defines `q=0` as "not acceptable"; the wildcard branch ignored it and could
+  select a locale the client explicitly refused. A `q=0` entry now excludes that
+  locale from the wildcard, whether it appears before or after the `*`.
+- **The usage analyzer reports deep nesting and keeps line numbers aligned.**
+  `indexCatalog` parsed with the raw parser, so a deeply nested catalog crashed
+  with "Maximum call stack size exceeded" while every other consumer reported an
+  actionable error; and a `\`+newline line continuation inside a template
+  literal swallowed the newline, shifting every later diagnostic in that file by
+  one line.
 - **The catalog watcher reports an unwatchable directory.** `fs.watch` on a
   missing path throws on Linux/Node 22 but returns a silent, never-firing
   watcher on Node 24 and Windows — so `next dev` could stop regenerating types

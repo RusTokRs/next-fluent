@@ -1,6 +1,6 @@
 import { FluentError, FluentErrorCode } from "./errors.js";
 const VALID_ID = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
-const VARIABLE = /\{\$?([a-zA-Z][a-zA-Z0-9_]*)\}/g;
+const VARIABLE = /\\[{}]|\{\$?([a-zA-Z][a-zA-Z0-9_]*)\}/g;
 function isPlainObject(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const proto = Object.getPrototypeOf(value);
@@ -31,16 +31,11 @@ function renderInline(text) {
   while ((match = VARIABLE.exec(text)) !== null) {
     const literal = text.slice(last, match.index);
     if (literal !== "") out += `{ "${escapeLiteral(literal)}" }`;
-    out += `{ $${match[1]} }`;
+    out += match[1] === void 0 ? `{ "${match[0][1]}" }` : `{ $${match[1]} }`;
     last = match.index + match[0].length;
   }
   const tail = text.slice(last);
-  if (tail !== "") {
-    out += /[{}"\\]/.test(tail) ? tail.replace(
-      /[{}"\\]/g,
-      (ch) => ch === "{" || ch === "}" ? `{ "${ch}" }` : `{ "${escapeLiteral(ch)}" }`
-    ) : `{ "${escapeLiteral(tail)}" }`;
-  }
+  if (tail !== "") out += `{ "${escapeLiteral(tail)}" }`;
   return out === "" ? '{ "" }' : out;
 }
 function renderFluentPattern(text) {
@@ -63,7 +58,17 @@ function normalizeId(segment, path) {
   return id;
 }
 const MAX_JSON_DEPTH = 32;
-function walk(value, id, path, out, depth = 0) {
+function declareId(seen, id, path) {
+  const existing = seen.get(id);
+  if (existing !== void 0 && existing !== path) {
+    throw invalid(
+      `JSON catalog keys "${existing}" and "${path}" both map to the Fluent message id "${id}". Rename one of them: a catalog cannot define the same message twice.`,
+      path
+    );
+  }
+  seen.set(id, path);
+}
+function walk(value, id, path, out, depth = 0, seen = /* @__PURE__ */ new Map()) {
   if (depth > MAX_JSON_DEPTH) {
     throw invalid(
       `JSON catalog value at "${path}" is nested more than ${MAX_JSON_DEPTH} levels deep.`,
@@ -77,6 +82,7 @@ function walk(value, id, path, out, depth = 0) {
     );
   }
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    declareId(seen, id, path);
     out.push(`${id} = ${renderFluentPattern(String(value))}`);
     return;
   }
@@ -102,6 +108,7 @@ function walk(value, id, path, out, depth = 0) {
         path
       );
     }
+    declareId(seen, id, path);
     out.push(`${id} = ${renderFluentPattern(String(own ?? ""))}`);
     for (const [key, attr] of entries) {
       if (key === "") continue;
@@ -113,7 +120,14 @@ function walk(value, id, path, out, depth = 0) {
     return;
   }
   for (const [key, nested] of entries) {
-    walk(nested, `${id}-${normalizeId(key, `${path}.${key}`)}`, `${path}.${key}`, out, depth + 1);
+    walk(
+      nested,
+      `${id}-${normalizeId(key, `${path}.${key}`)}`,
+      `${path}.${key}`,
+      out,
+      depth + 1,
+      seen
+    );
   }
 }
 function jsonToFluent(catalog) {
@@ -121,8 +135,9 @@ function jsonToFluent(catalog) {
     throw invalid("JSON catalogs must be plain objects.");
   }
   const out = [];
+  const seen = /* @__PURE__ */ new Map();
   for (const [key, value] of Object.entries(catalog)) {
-    walk(value, normalizeId(key, key), key, out);
+    walk(value, normalizeId(key, key), key, out, 0, seen);
   }
   return out.length > 0 ? `${out.join("\n")}
 ` : "";

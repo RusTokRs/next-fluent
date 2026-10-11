@@ -1,4 +1,4 @@
-import { parse } from "@fluent/syntax";
+import { parseFtl } from "./ftl-parse.js";
 import { buildKeyCandidates } from "./utils.js";
 import { toFluentSource } from "./catalog.js";
 const CALL_METHODS = ["raw", "rich", "attrs", "plain", "has"];
@@ -146,7 +146,7 @@ function maskNonCode(source) {
     if (top === "template") {
       if (ch === "\\") {
         out[i] = " ";
-        out[i + 1] = " ";
+        if (source[i + 1] !== "\n") out[i + 1] = " ";
         i += 2;
         continue;
       }
@@ -300,7 +300,7 @@ function collectCallSites(file) {
 function indexCatalog(source) {
   const combined = toFluentSource(source);
   const text = typeof combined === "string" ? combined : combined.join("\n");
-  const resource = parse(text, { withSpans: false });
+  const resource = parseFtl(text, "The catalog");
   const keys = /* @__PURE__ */ new Set();
   const withAttributes = /* @__PURE__ */ new Set();
   const withValue = /* @__PURE__ */ new Set();

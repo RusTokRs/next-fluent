@@ -1,7 +1,12 @@
 import { matchSupportedLocale } from "./utils.js";
 import { normalizeLocalePrefix } from "./locale-prefix.js";
+function normalizeHost(host) {
+  return host.endsWith(".") ? host.slice(0, -1) : host;
+}
 function findDomain(domains, host) {
-  return host ? domains?.find((entry) => entry.domain.toLowerCase() === host.toLowerCase()) : void 0;
+  if (!host) return void 0;
+  const normalized = normalizeHost(host.toLowerCase());
+  return domains?.find((entry) => normalizeHost(entry.domain.toLowerCase()) === normalized);
 }
 function domainSupportsLocale(domain, locale) {
   return Boolean(matchSupportedLocale(locale, domain.locales ?? [domain.defaultLocale]));

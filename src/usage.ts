@@ -1,4 +1,5 @@
-import { parse, type Entry } from '@fluent/syntax';
+import { type Entry } from '@fluent/syntax';
+import { parseFtl } from './ftl-parse';
 import { buildKeyCandidates } from './utils';
 import { toFluentSource, type MessageSource } from './catalog';
 
@@ -239,7 +240,10 @@ function maskNonCode(source: string): string {
     if (top === 'template') {
       if (ch === '\\') {
         out[i] = ' ';
-        out[i + 1] = ' ';
+        // A backslash followed by a line break is a line continuation: the new
+        // line has to survive, or every later line number in the file is off
+        // by one (`blank` above preserves them for the same reason).
+        if (source[i + 1] !== '\n') out[i + 1] = ' ';
         i += 2;
         continue;
       }
@@ -470,7 +474,7 @@ interface CatalogIndex {
 function indexCatalog(source: MessageSource): CatalogIndex {
   const combined = toFluentSource(source);
   const text = typeof combined === 'string' ? combined : combined.join('\n');
-  const resource = parse(text, { withSpans: false });
+  const resource = parseFtl(text, 'The catalog');
   const keys = new Set<string>();
   const withAttributes = new Set<string>();
   const withValue = new Set<string>();
