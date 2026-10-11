@@ -159,6 +159,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **No behaviour changed in this pass either.** The client provider's own
+  branches were probed and found correct: a bundle passed as `messages` or
+  `fallbackMessages` is used as given, a single `fallbackBundles` entry is
+  accepted as readily as an array, and `<FormattedMessage className="…">`
+  without a component still renders an element carrying the class — the
+  typical `input {...t.attrs('field')} className="x"` call lost nothing.
+  Thirteen tests.
+
 - **No behaviour changed in this pass.** The URL layer (`route-engine`,
   `nav-url`), the webpack half of the Next plugin and the agreement between
   generated types and the runtime were probed branch by branch and found
