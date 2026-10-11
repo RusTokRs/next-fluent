@@ -409,8 +409,9 @@ Mapping rules:
 | `{ "nav": { "home": "Home" } }` | `nav-home = Home` (addressable as `t('nav.home')` or `t('nav-home')`) — a dashes key is looked up first, so `t('nav.home')` finds the message `nav-home` before any `nav` message's `.home` attribute |
 | `{ "hello": "Hi {name}!" }` / `{ $name }` | `hello = Hi { $name }!` |
 | `{ "btn": { "": "OK", "aria-label": "Confirm" } }` | `btn = OK` + `.aria-label = Confirm` |
+| `{ "btn": { "": "OK", ".aria-label": "Confirm" } }` | same — a leading dot is accepted, since that is how FTL spells an attribute |
 | numbers / booleans | stringified |
-| arrays, `null` | rejected with an actionable error (Fluent uses selectors, not lists) |
+| arrays, `null`, empty objects | rejected with an actionable error (Fluent uses selectors, not lists; an empty object is an unwritten message, and dropping it would leave every lookup of it to miss) |
 
 Braces, quotes, backslashes, padding and newlines are escaped so a converted
 catalog round-trips byte for byte. `\{` and `\}` are literal braces — the escape
@@ -605,7 +606,11 @@ once per catalog, naming the lost ids. The same check covers a catalog a client
 component hands to `FluentProvider` (FTL text or a JSON payload parsed in the
 browser) — there it runs in development only, since the scan has no place in the
 bytes every visitor downloads; production builds drop it together with the code
-that performs it (`npm run size` fails if that ever stops being true). A UTF-8
+that performs it (`npm run size` fails if that ever stops being true). That
+command reports two client numbers: what an app using the documented client API
+downloads (a hand-written fixture) and a ceiling generated from the package's own
+exports — the total cost of everything a browser can reach. Both are budgets, and
+both are raised only by a recorded measurement. A UTF-8
 byte-order mark (a catalog saved by an editor that writes one) is stripped before
 parsing, so it no longer costs the first entry — and a BOM in a `.json` catalog no
 longer fails with a bare "Unexpected token".

@@ -206,6 +206,18 @@ function walk(
   }
 
   const entries = Object.entries(value);
+  if (entries.length === 0) {
+    // An empty object is not a message with empty text — it is a message the
+    // author has not written yet. Dropping it silently produced a catalog in
+    // which every lookup of that id misses (`t('a')` then renders "a"), which is
+    // exactly the class of failure the analyzer exists to catch, so the input is
+    // rejected with the same guidance as the other impossible shapes.
+    throw invalid(
+      `JSON catalog value at "${path}" is an empty object. Every message needs a value ` +
+        '(`""`), at least one attribute, or nested messages.',
+      path
+    );
+  }
   const hasValue = entries.some(([key]) => key === '');
 
   if (hasValue) {
@@ -223,7 +235,16 @@ function walk(
       if (typeof attr === 'object' && attr !== null) {
         throw invalid(`JSON catalog attribute "${path}.${key}" must be a string.`, `${path}.${key}`);
       }
-      out.push(`    .${normalizeId(key, `${path}.${key}`)} = ${renderFluentPattern(String(attr))}`);
+      // Attributes sit next to the `""` value, so a key can only ever be one. A
+      // leading dot — how FTL itself spells an attribute, and therefore what an
+      // author porting a `.attr = …` line writes — is accepted as the marker.
+      // It cannot collide with anything: `normalizeId` turns a leading dot into
+      // `-`, which is not a legal id start, so such a key used to fail with an
+      // error about the message id `a..attr` instead of naming the real problem.
+      const attributeName = key.startsWith('.') ? key.slice(1) : key;
+      out.push(
+        `    .${normalizeId(attributeName, `${path}.${key}`)} = ${renderFluentPattern(String(attr))}`
+      );
     }
     return;
   }

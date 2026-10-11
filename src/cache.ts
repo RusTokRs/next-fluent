@@ -16,21 +16,20 @@ const MAX_BUNDLE_CACHE = 500;
 
 /**
  * Fast 32-bit FNV-1a hash without heap allocations (no BigInt).
+ *
+ * Module-private: it used to be exported, together with a `fnv1a64` alias that
+ * ran *this* implementation and so answered a 32-bit hash under a 64-bit name.
+ * The package has never been published, so nothing outside could depend on the
+ * spelling — but a public function whose name misstates its result is worse than
+ * no public function at all.
  */
-export function fnv1a32(input: string): string {
+function fnv1a32(input: string): string {
   let hash = 0x811c9dc5;
   for (let i = 0; i < input.length; i++) {
     hash ^= input.charCodeAt(i);
     hash = Math.imul(hash, 0x01000193);
   }
   return (hash >>> 0).toString(16).padStart(8, '0');
-}
-
-/**
- * Backwards-compatible alias for 64-bit/32-bit string hashing.
- */
-export function fnv1a64(input: string): string {
-  return fnv1a32(input);
 }
 
 export function computeSourceHash(source: string | readonly string[]): string {

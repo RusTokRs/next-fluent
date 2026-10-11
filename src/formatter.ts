@@ -48,12 +48,15 @@ export function clearFormatterCache(): void {
   lfCache.clear();
   warnedFormats.clear();
   warnedDateTimes.clear();
+  warnedIntlRefusals.clear();
 }
 
 /** Unknown format names already reported, so a list render cannot spam logs. */
 const warnedFormats = new Set<string>();
 /** Unusable `dateTime` configurations already reported, keyed by locale + cause. */
 const warnedDateTimes = new Set<string>();
+/** Configurations `Intl` refused, already reported, keyed by locale + kind + options. */
+const warnedIntlRefusals = new Set<string>();
 const MAX_WARNED_FORMATS = 200;
 
 /** Reports a formatter misconfiguration once per key, with a bounded key set. */
@@ -102,6 +105,34 @@ function usableTimeZone(locale: string, timeZone: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Reports, once per locale and option set, that `Intl` refused the options of
+ * `number` or `relativeTime` and what was rendered instead.
+ *
+ * The message names what was refused and what came out, never a cause: `Intl`
+ * throws the same `RangeError` for an unknown currency code, a non-existent
+ * unit and an out-of-range fraction-digit count, so an explanation guessing
+ * between them would send the reader after the wrong option. Without it the
+ * failure is invisible — `number(1234.5, { style: 'currency' })` renders
+ * `1234.5`, which reads like a correct number rather than like a currency that
+ * was never formatted. This is the `dateTime` contract (audit pass 8) applied to
+ * the two formatters that were still degrading silently.
+ */
+function warnIntlRefusal(
+  kind: 'number' | 'relativeTime',
+  locale: string,
+  options: Intl.NumberFormatOptions | Intl.RelativeTimeFormatOptions | undefined,
+  fallback: string
+): void {
+  warnOnce(
+    warnedIntlRefusals,
+    `${kind}::${locale}::${stringifySorted(options ?? {})}`,
+    `[next-fluent] Intl refused these ${kind} options for "${locale}" ` +
+      `(${Object.keys(options ?? {}).join(', ')}); the value was rendered as ` +
+      `${JSON.stringify(fallback)}.`
+  );
 }
 
 export function createFormatter(optionsOrLocale: string | FormatterOptions): Formatter {
@@ -229,6 +260,7 @@ export function createFormatter(optionsOrLocale: string | FormatterOptions): For
           formatter = new Intl.NumberFormat(locale, nfOptions);
           nfCache.set(cacheKey, formatter);
         } catch {
+          warnIntlRefusal('number', locale, nfOptions, String(value));
           return String(value);
         }
       }
@@ -236,6 +268,9 @@ export function createFormatter(optionsOrLocale: string | FormatterOptions): For
       try {
         return formatter.format(value);
       } catch {
+        // A value `Intl.NumberFormat.format` rejects is the caller's data, not
+        // a misconfiguration: `NaN`, `Infinity` and `-0` are all formattable, so
+        // there is no option set to report and nothing to fix in the config.
         return String(value);
       }
     },
@@ -253,7 +288,9 @@ export function createFormatter(optionsOrLocale: string | FormatterOptions): For
           formatter = new Intl.RelativeTimeFormat(locale, rtfOptions);
           rtfCache.set(cacheKey, formatter);
         } catch {
-          return `${value} ${unit}`;
+          const fallback = `${value} ${unit}`;
+          warnIntlRefusal('relativeTime', locale, rtfOptions, fallback);
+          return fallback;
         }
       }
 

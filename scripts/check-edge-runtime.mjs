@@ -100,8 +100,25 @@ try {
   await rm(dir, { recursive: true, force: true });
 }
 
-const kb = (code.length / 1024).toFixed(1);
+const bytes = Buffer.byteLength(code, 'utf8');
+const kb = (bytes / 1024).toFixed(1);
 console.log(`[next-fluent] middleware bundle: ${kb} kB (edge target)`);
+
+// A regression line, not a platform claim: the platform's own limit differs per
+// deployment, and Next.js only *reports* the size in its build output. What is
+// verifiable here is that the edge graph stays the small thing it is supposed to
+// be — it runs on every request and must never grow a dependency the rest of the
+// library treats as optional. Measured: 40.6 kB. Importing one module the
+// middleware has no business using (the FTL parser behind `check`/`pick-messages`
+// is ~20 kB on its own) crosses this line, which turns "middleware tripled" into
+// a red build instead of a slower cold start nobody traced back to a commit.
+const EDGE_BUDGET_BYTES = 64 * 1024;
+if (bytes > EDGE_BUDGET_BYTES) {
+  failures.push(
+    `middleware bundle is ${bytes} B, over the ${EDGE_BUDGET_BYTES} B edge budget ` +
+      '(40.6 kB at the time this line was added)'
+  );
+}
 
 if (failures.length > 0) {
   for (const failure of failures) console.error(`  ✗ ${failure}`);

@@ -12,9 +12,6 @@ function fnv1a32(input) {
   }
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
-function fnv1a64(input) {
-  return fnv1a32(input);
-}
 function computeSourceHash(source) {
   if (typeof source === "string") {
     return `${source.length}:${fnv1a32(source)}`;
@@ -111,8 +108,6 @@ export {
   LRUCache,
   clearBundleCache,
   computeSourceHash,
-  fnv1a32,
-  fnv1a64,
   getBundleCacheStats,
   getCachedFluentBundle,
   getOrCreateResource

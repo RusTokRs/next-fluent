@@ -129,6 +129,12 @@ function walk(value, id, path, out, depth = 0, seen = /* @__PURE__ */ new Map())
     );
   }
   const entries = Object.entries(value);
+  if (entries.length === 0) {
+    throw invalid(
+      `JSON catalog value at "${path}" is an empty object. Every message needs a value (\`""\`), at least one attribute, or nested messages.`,
+      path
+    );
+  }
   const hasValue = entries.some(([key]) => key === "");
   if (hasValue) {
     const own = entries.find(([key]) => key === "")?.[1];
@@ -145,7 +151,10 @@ function walk(value, id, path, out, depth = 0, seen = /* @__PURE__ */ new Map())
       if (typeof attr === "object" && attr !== null) {
         throw invalid(`JSON catalog attribute "${path}.${key}" must be a string.`, `${path}.${key}`);
       }
-      out.push(`    .${normalizeId(key, `${path}.${key}`)} = ${renderFluentPattern(String(attr))}`);
+      const attributeName = key.startsWith(".") ? key.slice(1) : key;
+      out.push(
+        `    .${normalizeId(attributeName, `${path}.${key}`)} = ${renderFluentPattern(String(attr))}`
+      );
     }
     return;
   }

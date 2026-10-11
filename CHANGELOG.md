@@ -76,6 +76,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Breaking (no released version depended on it):** `fnv1a32` and `fnv1a64` are
+  no longer exported. The second was a "backwards-compatible alias" that ran the
+  32-bit implementation, so the public surface offered a function whose name
+  misstated its result. Both were unused, undocumented, and the package has never
+  been published. The package root still exports 42 names.
 - Build-time tools moved out of the app entry points. `pseudoLocalizeFtl` and
   `generateTypeDeclarations` are now imported from `next-fluent/pseudo` and
   `next-fluent/typegen`; `pickMessages` and `checkCatalogs` from
@@ -144,6 +149,45 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   harness can still fail.
 
 ### Fixed
+
+- **The client size budget measured two entry points out of seven.** The fixture
+  the budget bundles imported 17 of the 42 exports the browser root offers, so
+  1.67 kB was reachable from an app and counted by nothing — an app that used
+  `jsonToFluent`, `matchSupportedLocale` or `LRUCache` shipped more than the
+  budget the gate claimed to enforce. `npm run size` now reports two numbers: the
+  fixture (what an app using the documented client API downloads) and a *ceiling*
+  generated from the package's own exports, verified against esbuild's metafile so
+  it cannot drift. A new export is measured the moment it exists.
+
+- **`Intl` refusals are reported everywhere they are swallowed.** `number` and
+  `relativeTime` returned a bare value when `Intl` rejected the options — so
+  `format.number(1234.5, { style: 'currency' })` printed `1234.5`, which looks like
+  a deliberate plain number. The same held for the FTL functions
+  `CURRENCY()`/`PERCENT()`, where a bad `currencyDisplay` silently dropped the
+  currency formatting entirely. Both now warn once per option set, naming the
+  refused options and what was rendered instead. The values themselves are
+  unchanged.
+
+- **A JSON catalog no longer loses a message to an empty object.**
+  `{ greeting: 'Hi', todo: {} }` produced `greeting = Hi` and dropped `todo`
+  without a word, leaving every lookup of it to miss. An empty object is now
+  rejected with the same guidance as `null` and arrays. A key written the FTL way —
+  `{ login: { '': 'Sign in', '.label': 'Label' } }` — is accepted as the attribute
+  it plainly means instead of failing with an error about a message id
+  `login..label`.
+
+- **The CI matrix now checks the Next major instead of printing it.** A job whose
+  `next@^16` install did not take effect would test Next 15 and stay green. The
+  integration harness fails when the resolved major is not the one it was asked
+  to verify, and the workflow passes it. Both workflows are now parsed by the test
+  suite as well: YAML keeps the last of two identical keys without a word, so a
+  repeated `env:` block in a step would have silently removed the browser-test
+  switch from that job.
+
+- **The edge bundle has a size limit and counts bytes.** The middleware check
+  printed a UTF-16 code-unit count and enforced nothing; it now compares a real
+  byte count against 64 kB (measured 40.6 kB), so a dependency that has no place
+  in the edge graph fails the build instead of quietly tripling it.
 
 - **`next-fluent check --usage` no longer invents verdicts.** Six call shapes
   were read wrongly, and every one of them produced a *false* finding — the

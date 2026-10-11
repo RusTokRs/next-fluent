@@ -33,9 +33,11 @@ function clearFormatterCache() {
   lfCache.clear();
   warnedFormats.clear();
   warnedDateTimes.clear();
+  warnedIntlRefusals.clear();
 }
 const warnedFormats = /* @__PURE__ */ new Set();
 const warnedDateTimes = /* @__PURE__ */ new Set();
+const warnedIntlRefusals = /* @__PURE__ */ new Set();
 const MAX_WARNED_FORMATS = 200;
 function warnOnce(store, key, message) {
   if (store.has(key)) return;
@@ -62,6 +64,13 @@ function usableTimeZone(locale, timeZone) {
   } catch {
     return false;
   }
+}
+function warnIntlRefusal(kind, locale, options, fallback) {
+  warnOnce(
+    warnedIntlRefusals,
+    `${kind}::${locale}::${stringifySorted(options ?? {})}`,
+    `[next-fluent] Intl refused these ${kind} options for "${locale}" (${Object.keys(options ?? {}).join(", ")}); the value was rendered as ${JSON.stringify(fallback)}.`
+  );
 }
 function createFormatter(optionsOrLocale) {
   const options = typeof optionsOrLocale === "string" ? { locale: optionsOrLocale } : optionsOrLocale;
@@ -148,6 +157,7 @@ function createFormatter(optionsOrLocale) {
           formatter = new Intl.NumberFormat(locale, nfOptions);
           nfCache.set(cacheKey, formatter);
         } catch {
+          warnIntlRefusal("number", locale, nfOptions, String(value));
           return String(value);
         }
       }
@@ -166,7 +176,9 @@ function createFormatter(optionsOrLocale) {
           formatter = new Intl.RelativeTimeFormat(locale, rtfOptions);
           rtfCache.set(cacheKey, formatter);
         } catch {
-          return `${value} ${unit}`;
+          const fallback = `${value} ${unit}`;
+          warnIntlRefusal("relativeTime", locale, rtfOptions, fallback);
+          return fallback;
         }
       }
       try {

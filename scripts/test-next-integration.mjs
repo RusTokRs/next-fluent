@@ -267,6 +267,28 @@ try {
 
   const nextPackage = JSON.parse(readFileSync(join(nextRoot(), 'package.json'), 'utf8'));
   console.log(`[next-fluent] Integration fixture against Next ${nextPackage.version}.`);
+  // The CI matrix installs the Next major its job is named after, then runs the
+  // fixture against whatever `node_modules/next` turned out to be. Reporting the
+  // version is not the same as checking it: if the install did not take effect,
+  // a job labelled "Next 16" would exercise Next 15 and still pass, and the
+  // peer-range claim this matrix exists to verify would go untested. Turning the
+  // printed line into an assertion costs one comparison; `npm_config_dry_run`
+  // leaking into a nested install is the failure mode pass 7 already had to fix
+  // inside this script.
+  const expectedMajor =
+    process.env.NEXT_FLUENT_NEXT_MAJOR ??
+    // A harness told to install a major can check itself; otherwise only CI
+    // knows which major the job is named after.
+    (nextOverride ? String(Number.parseInt(nextOverride, 10)) : undefined);
+  if (expectedMajor !== undefined) {
+    const actualMajor = String(Number.parseInt(nextPackage.version, 10));
+    if (actualMajor !== expectedMajor) {
+      throw new Error(
+        `The fixture was asked to test Next ${expectedMajor} but node_modules/next is ` +
+          `${nextPackage.version}. The matrix label would not match what was verified.`
+      );
+    }
+  }
   if (Number.parseInt(nextPackage.version, 10) >= 16) {
     // Next 16 renamed the network-boundary file and runs it on Node, not edge.
     await rename(join(target, 'middleware.ts'), join(target, 'proxy.ts'));
