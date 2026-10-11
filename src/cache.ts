@@ -1,5 +1,6 @@
 import { FluentBundle, FluentResource, type FluentFunction } from '@fluent/bundle';
 import { createDefaultFunctions } from './functions';
+import { stripCatalogBom } from './catalog';
 
 export interface CreateFluentBundleOptions {
   useIsolating?: boolean;
@@ -97,19 +98,25 @@ function sameSource(a: string | readonly string[], b: string | readonly string[]
 }
 
 export function getOrCreateResource(source: string): FluentResource {
-  const hash = `${source.length}:${fnv1a32(source)}`;
+  const normalized = stripCatalogBom(source);
+  const hash = `${normalized.length}:${fnv1a32(normalized)}`;
   const cached = resourceCache.get(hash);
-  if (cached?.source === source) return cached.resource;
-  const res = new FluentResource(source);
-  resourceCache.set(hash, { source, resource: res });
+  if (cached?.source === normalized) return cached.resource;
+  const res = new FluentResource(normalized);
+  resourceCache.set(hash, { source: normalized, resource: res });
   return res;
 }
 
 export function getCachedFluentBundle(
   locale: string,
-  ftlSource: string | readonly string[],
+  rawSource: string | readonly string[],
   options: CreateFluentBundleOptions = {}
 ): FluentBundle {
+  // A byte-order mark is stripped before hashing so both spellings of the same
+  // catalog share one cache entry, and so the first entry survives the parser.
+  const ftlSource: string | readonly string[] = typeof rawSource === 'string'
+    ? stripCatalogBom(rawSource)
+    : rawSource.map(stripCatalogBom);
   const useIsolating = options.useIsolating ?? true;
   const hasCustomFunctions = options.functions && Object.keys(options.functions).length > 0;
 

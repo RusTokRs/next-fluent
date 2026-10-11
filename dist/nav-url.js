@@ -4,6 +4,7 @@ import { domainLocalePrefix, domainSupportsLocale, findDomain, findLocaleDomain 
 import {
   localeNeedsPrefix,
   matchLocalePrefix,
+  normalizeLeadingSlashes,
   prefixForLocale
 } from "./locale-prefix.js";
 const UNSAFE_HREF_SCHEME = /^(?:javascript|data|vbscript|file):/i;
@@ -37,7 +38,13 @@ function absoluteUrlFromObject(urlObj) {
   if (protocol && protocol !== "http" && protocol !== "https") {
     throw new Error(`[next-fluent] Unsupported URL object protocol: "${protocol}".`);
   }
-  const port = urlObj.port !== void 0 && urlObj.port !== null && `${urlObj.port}`.length > 0 ? `:${urlObj.port}` : "";
+  const rawPort = urlObj.port !== void 0 && urlObj.port !== null ? `${urlObj.port}` : "";
+  if (rawPort && !/^\d{1,5}$/.test(rawPort)) {
+    throw new Error(
+      `[next-fluent] URL object port must be numeric (received ${JSON.stringify(urlObj.port)}).`
+    );
+  }
+  const port = rawPort ? `:${rawPort}` : "";
   const auth = typeof urlObj.auth === "string" && urlObj.auth ? `${urlObj.auth}@` : "";
   const path = typeof urlObj.pathname === "string" && urlObj.pathname ? urlObj.pathname : "/";
   const search = typeof urlObj.search === "string" ? urlObj.search : "";
@@ -151,6 +158,7 @@ function resolveLocalizedPathname(options, config) {
   if (basePath && (rawPathname === basePath || rawPathname.startsWith(`${basePath}/`))) {
     rawPathname = rawPathname.slice(basePath.length) || "/";
   }
+  rawPathname = normalizeLeadingSlashes(rawPathname);
   let cleanPathname = rawPathname;
   let sourceLocale;
   const prefixMatch = matchLocalePrefix(rawPathname, locales, sourcePrefixConfig);

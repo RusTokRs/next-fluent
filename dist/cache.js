@@ -1,5 +1,6 @@
 import { FluentBundle, FluentResource } from "@fluent/bundle";
 import { createDefaultFunctions } from "./functions.js";
+import { stripCatalogBom } from "./catalog.js";
 import { LRUCache } from "./lru.js";
 const MAX_RESOURCE_CACHE = 1e3;
 const MAX_BUNDLE_CACHE = 500;
@@ -49,14 +50,16 @@ function sameSource(a, b) {
   return a.length === b.length && a.every((item, index) => item === b[index]);
 }
 function getOrCreateResource(source) {
-  const hash = `${source.length}:${fnv1a32(source)}`;
+  const normalized = stripCatalogBom(source);
+  const hash = `${normalized.length}:${fnv1a32(normalized)}`;
   const cached = resourceCache.get(hash);
-  if (cached?.source === source) return cached.resource;
-  const res = new FluentResource(source);
-  resourceCache.set(hash, { source, resource: res });
+  if (cached?.source === normalized) return cached.resource;
+  const res = new FluentResource(normalized);
+  resourceCache.set(hash, { source: normalized, resource: res });
   return res;
 }
-function getCachedFluentBundle(locale, ftlSource, options = {}) {
+function getCachedFluentBundle(locale, rawSource, options = {}) {
+  const ftlSource = typeof rawSource === "string" ? stripCatalogBom(rawSource) : rawSource.map(stripCatalogBom);
   const useIsolating = options.useIsolating ?? true;
   const hasCustomFunctions = options.functions && Object.keys(options.functions).length > 0;
   const sourceHash = computeSourceHash(ftlSource);

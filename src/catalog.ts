@@ -51,6 +51,20 @@ function invalid(message: string, key = '<catalog>'): FluentError {
   });
 }
 
+/**
+ * Removes a leading UTF-8 byte-order mark from catalog text.
+ *
+ * Neither Fluent parser treats U+FEFF as whitespace, so a catalog saved by a
+ * Windows editor (or produced by a tool that emits a BOM) silently loses its
+ * *first* message: the parser skips the line and only the remaining entries show
+ * up. JSON.parse strips the mark, `fs.readFileSync(path, 'utf8')` does not, so
+ * the robust place to remove it is here — in the shared funnel every catalog
+ * source passes through.
+ */
+export function stripCatalogBom(source: string): string {
+  return source.charCodeAt(0) === 0xfeff ? source.slice(1) : source;
+}
+
 /** Fluent string-literal escaping: only `\` and `"` are escapable. */
 function escapeLiteral(text: string): string {
   return text.replace(/\\/g, '\\\\').replace(/"/g, '\\"');

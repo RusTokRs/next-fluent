@@ -5,6 +5,7 @@ import { domainLocalePrefix, domainSupportsLocale, findDomain, findLocaleDomain 
 import {
   localeNeedsPrefix,
   matchLocalePrefix,
+  normalizeLeadingSlashes,
   prefixForLocale,
 } from './locale-prefix';
 
@@ -77,9 +78,18 @@ export function absoluteUrlFromObject(urlObj: UrlObject): string | undefined {
   if (protocol && protocol !== 'http' && protocol !== 'https') {
     throw new Error(`[next-fluent] Unsupported URL object protocol: "${protocol}".`);
   }
-  const port = urlObj.port !== undefined && urlObj.port !== null && `${urlObj.port}`.length > 0
-    ? `:${urlObj.port}`
-    : '';
+  const rawPort =
+    urlObj.port !== undefined && urlObj.port !== null ? `${urlObj.port}` : '';
+  // A port is a number, and nothing else. Interpolating it verbatim let a
+  // non-numeric value rewrite the authority: `{ hostname: 'example.com',
+  // port: '@evil.com' }` produced `https://example.com:@evil.com/a`, which the
+  // URL parser reads as userinfo + host — the link pointed at another origin.
+  if (rawPort && !/^\d{1,5}$/.test(rawPort)) {
+    throw new Error(
+      `[next-fluent] URL object port must be numeric (received ${JSON.stringify(urlObj.port)}).`
+    );
+  }
+  const port = rawPort ? `:${rawPort}` : '';
   const auth = typeof urlObj.auth === 'string' && urlObj.auth ? `${urlObj.auth}@` : '';
   const path = typeof urlObj.pathname === 'string' && urlObj.pathname ? urlObj.pathname : '/';
   const search = typeof urlObj.search === 'string' ? urlObj.search : '';
@@ -227,6 +237,13 @@ export function resolveLocalizedPathname(
   if (basePath && (rawPathname === basePath || rawPathname.startsWith(`${basePath}/`))) {
     rawPathname = rawPathname.slice(basePath.length) || '/';
   }
+  // `new URL('//evil.example/x', origin)` is protocol-relative, and browsers
+  // treat `\` as `/`, so both the backslash normalization above and the basePath
+  // strip can leave an href that resolves to another origin — `/\evil.example`
+  // became a cross-origin link in `as-needed`/`never` mode, where no prefix is
+  // added in front of it. Collapse the leading run; `//host` inputs never reach
+  // this point (they return early as external URLs).
+  rawPathname = normalizeLeadingSlashes(rawPathname);
 
   // Strip an existing locale prefix (including custom per-locale prefixes).
   let cleanPathname = rawPathname;

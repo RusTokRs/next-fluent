@@ -130,6 +130,12 @@ async function checkRuntime(nextCli) {
         !liveHtml.includes('data-scope-locale="ru"')) {
       throw new Error(`Locale request header or request scope was not forwarded (${live.status}).\n${liveHtml.slice(0, 500)}\n${output}`);
     }
+    // A snapshot for another locale is a side-channel query: it reports that
+    // locale but must not replace the request's own (V6-07).
+    if (!liveHtml.includes('data-snapshot-locale="en"') ||
+        !liveHtml.includes('data-scope-locale-after-snapshot="ru"')) {
+      throw new Error(`A config snapshot replaced the request locale (${live.status}).\n${liveHtml.slice(0, 500)}\n${output}`);
+    }
     // Concurrent requests for different locales: React's request scope is
     // per-request, so neither the memoized store nor the bundle cache of one
     // render may leak into another.
@@ -152,8 +158,13 @@ async function checkRuntime(nextCli) {
       const expected = [`lang="${locale}"`];
       if (route.endsWith('/live')) {
         // The dynamic route has no server-locale marker; it proves the request
-        // scope and the forwarded header instead.
-        expected.push(`data-header-locale="${locale}"`, `data-scope-locale="${locale}"`);
+        // scope, the forwarded header and that a snapshot of another locale
+        // does not leak into the request's own locale (V6-07).
+        expected.push(
+          `data-header-locale="${locale}"`,
+          `data-scope-locale="${locale}"`,
+          `data-scope-locale-after-snapshot="${locale}"`
+        );
       } else {
         expected.push(`data-server-locale="${locale}"`);
       }

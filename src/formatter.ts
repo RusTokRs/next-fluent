@@ -4,20 +4,36 @@ import { LRUCache } from './lru';
 
 const MAX_CACHE_SIZE = 200;
 
-function stringifySorted(obj: unknown): string {
+/**
+ * Stable serialization of `Intl` options for the formatter cache keys.
+ *
+ * `seen` tracks the objects on the current path so a cyclic options object
+ * (any object graph a caller reuses as a cache key can contain one) cannot
+ * recurse until the stack overflows mid-render.
+ */
+function stringifySorted(obj: unknown, seen?: Set<object>): string {
   if (obj === null || typeof obj !== 'object') {
     return JSON.stringify(obj);
   }
-  if (Array.isArray(obj)) {
-    return `[${obj.map(stringifySorted).join(',')}]`;
+  const path = seen ?? new Set<object>();
+  if (path.has(obj)) {
+    return '"[circular]"';
   }
-  const keys = Object.keys(obj as Record<string, unknown>).sort();
-  return `{${keys
-    .map(
-      (k) =>
-        `${JSON.stringify(k)}:${stringifySorted((obj as Record<string, unknown>)[k])}`
-    )
-    .join(',')}}`;
+  path.add(obj);
+  try {
+    if (Array.isArray(obj)) {
+      return `[${obj.map((item) => stringifySorted(item, path)).join(',')}]`;
+    }
+    const keys = Object.keys(obj as Record<string, unknown>).sort();
+    return `{${keys
+      .map(
+        (k) =>
+          `${JSON.stringify(k)}:${stringifySorted((obj as Record<string, unknown>)[k], path)}`
+      )
+      .join(',')}}`;
+  } finally {
+    path.delete(obj);
+  }
 }
 
 const dtfCache = new LRUCache<Intl.DateTimeFormat>(MAX_CACHE_SIZE);
@@ -31,11 +47,22 @@ export function clearFormatterCache(): void {
   rtfCache.clear();
   lfCache.clear();
   warnedFormats.clear();
+  warnedDateTimes.clear();
 }
 
 /** Unknown format names already reported, so a list render cannot spam logs. */
 const warnedFormats = new Set<string>();
+/** Unusable `dateTime` configurations already reported, keyed by locale + cause. */
+const warnedDateTimes = new Set<string>();
 const MAX_WARNED_FORMATS = 200;
+
+/** Reports a formatter misconfiguration once per key, with a bounded key set. */
+function warnOnce(store: Set<string>, key: string, message: string): void {
+  if (store.has(key)) return;
+  if (store.size >= MAX_WARNED_FORMATS) store.clear();
+  store.add(key);
+  console.warn(message);
+}
 
 /**
  * Resolves a named format (`'short'`) against the configured presets, or passes
@@ -50,16 +77,11 @@ function resolveFormat<T>(
   if (options === undefined || typeof options !== 'string') return options;
   const preset = presets?.[options];
   if (!preset) {
-    const warnKey = `${kind}::${options}`;
-    if (!warnedFormats.has(warnKey)) {
-      // Bounded: a runaway key set is cleared rather than grown without limit,
-      // at the cost of a repeated warning.
-      if (warnedFormats.size >= MAX_WARNED_FORMATS) warnedFormats.clear();
-      warnedFormats.add(warnKey);
-      console.warn(
-        `[next-fluent] Unknown ${kind} format "${options}". Configure it in the request config "formats" option.`
-      );
-    }
+    warnOnce(
+      warnedFormats,
+      `${kind}::${options}`,
+      `[next-fluent] Unknown ${kind} format "${options}". Configure it in the request config "formats" option.`
+    );
     return undefined;
   }
   return preset;
@@ -100,12 +122,33 @@ export function createFormatter(optionsOrLocale: string | FormatterOptions): For
       const cacheKey = `${locale}::${stringifySorted(mergedOptions)}`;
       let formatter = dtfCache.get(cacheKey);
       if (!formatter) {
+        let candidate: Intl.DateTimeFormat | undefined;
         try {
-          formatter = new Intl.DateTimeFormat(locale, mergedOptions);
-          dtfCache.set(cacheKey, formatter);
+          candidate = new Intl.DateTimeFormat(locale, mergedOptions);
         } catch {
-          return date.toISOString();
+          // An unusable configuration used to degrade silently to an ISO string:
+          // machine-readable output in the UI with no diagnostic at all. A typo
+          // in `timeZone` is by far the common case (and the one `formats`
+          // presets cannot cover, because the zone comes from the config), so it
+          // is reported and retried without the zone — the text stays localized
+          // instead of turning into `2026-01-02T03:04:05.000Z`.
+          const requestedTimeZone = mergedOptions.timeZone;
+          if (!requestedTimeZone) return date.toISOString();
+          warnOnce(
+            warnedDateTimes,
+            `timeZone::${locale}::${requestedTimeZone}`,
+            `[next-fluent] Unknown time zone "${requestedTimeZone}" ` +
+              '(see `requestConfig.timeZone`); using the runtime zone.'
+          );
+          const { timeZone: _ignored, ...withoutZone } = mergedOptions;
+          try {
+            candidate = new Intl.DateTimeFormat(locale, withoutZone);
+          } catch {
+            return date.toISOString();
+          }
         }
+        formatter = candidate;
+        dtfCache.set(cacheKey, formatter);
       }
 
       try {

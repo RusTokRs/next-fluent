@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { jsonToFluent } from './catalog';
+import { jsonToFluent, stripCatalogBom } from './catalog';
 import { generateTypeDeclarations } from './typegen';
 import { canonicalizeLocale } from './utils';
 
@@ -51,7 +51,10 @@ export function collectCatalogFiles(target: string): string[] {
 
 /** Reads a catalog file, converting JSON catalogs into FTL source. */
 export function readCatalog(file: string): string {
-  const raw = fs.readFileSync(file, 'utf8');
+  // `JSON.parse` throws on a byte-order mark ("Unexpected token") and neither
+  // Fluent parser treats it as whitespace, so a BOM left in place by the editor
+  // that saved the file turns a healthy catalog into a broken one.
+  const raw = stripCatalogBom(fs.readFileSync(file, 'utf8'));
   if (!file.toLowerCase().endsWith('.json')) return raw;
   try {
     return jsonToFluent(JSON.parse(raw));

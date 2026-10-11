@@ -21,6 +21,7 @@ __export(catalog_exports, {
   isJsonCatalog: () => isJsonCatalog,
   jsonToFluent: () => jsonToFluent,
   renderFluentPattern: () => renderFluentPattern,
+  stripCatalogBom: () => stripCatalogBom,
   toFluentSource: () => toFluentSource
 });
 module.exports = __toCommonJS(catalog_exports);
@@ -41,6 +42,9 @@ function invalid(message, key = "<catalog>") {
     key,
     message: `[next-fluent] ${message}`
   });
+}
+function stripCatalogBom(source) {
+  return source.charCodeAt(0) === 65279 ? source.slice(1) : source;
 }
 function escapeLiteral(text) {
   return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
@@ -181,5 +185,6 @@ function toFluentSource(messages) {
   isJsonCatalog,
   jsonToFluent,
   renderFluentPattern,
+  stripCatalogBom,
   toFluentSource
 });

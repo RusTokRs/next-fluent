@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { jsonToFluent } from "./catalog.js";
+import { jsonToFluent, stripCatalogBom } from "./catalog.js";
 import { generateTypeDeclarations } from "./typegen.js";
 import { canonicalizeLocale } from "./utils.js";
 const CATALOG_EXTENSIONS = [".ftl", ".json"];
@@ -31,7 +31,7 @@ function collectCatalogFiles(target) {
   return files.sort();
 }
 function readCatalog(file) {
-  const raw = fs.readFileSync(file, "utf8");
+  const raw = stripCatalogBom(fs.readFileSync(file, "utf8"));
   if (!file.toLowerCase().endsWith(".json")) return raw;
   try {
     return jsonToFluent(JSON.parse(raw));

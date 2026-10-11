@@ -16,6 +16,9 @@ function invalid(message, key = "<catalog>") {
     message: `[next-fluent] ${message}`
   });
 }
+function stripCatalogBom(source) {
+  return source.charCodeAt(0) === 65279 ? source.slice(1) : source;
+}
 function escapeLiteral(text) {
   return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
@@ -154,5 +157,6 @@ export {
   isJsonCatalog,
   jsonToFluent,
   renderFluentPattern,
+  stripCatalogBom,
   toFluentSource
 };

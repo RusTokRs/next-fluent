@@ -46,6 +46,29 @@ function createFluentBundle(locale, ftlSource, options = {}) {
 function stripBidiIsolates(value) {
   return value.replace(/[\u2068\u2069]/g, "");
 }
+function unwrapFluentValueObject(value) {
+  if (!("value" in value)) return void 0;
+  const valueOf = value.valueOf;
+  if (typeof valueOf !== "function" || valueOf === Object.prototype.valueOf) {
+    return void 0;
+  }
+  try {
+    return valueOf.call(value);
+  } catch {
+    return void 0;
+  }
+}
+function toFluentArgument(value) {
+  if (typeof value === "string" || typeof value === "number" || value instanceof Date) {
+    return value;
+  }
+  if (typeof value === "boolean") return String(value);
+  if (typeof value === "bigint") {
+    const digits = value.toString();
+    return Number.isFinite(Number(digits)) ? new FluentNumber(digits) : digits;
+  }
+  return void 0;
+}
 function buildFluentArgs(values) {
   const args = {};
   const rejected = [];
@@ -59,22 +82,26 @@ function buildFluentArgs(values) {
       rejected.push(k);
       continue;
     }
-    if (typeof v === "string" || typeof v === "number" || v instanceof Date) {
+    const primitive = toFluentArgument(v);
+    if (primitive !== void 0) {
+      args[k] = primitive;
+      continue;
+    }
+    if (v instanceof FluentType) {
       args[k] = v;
       continue;
     }
-    if (typeof v === "boolean") {
-      args[k] = String(v);
-      continue;
-    }
-    if (typeof v === "bigint") {
-      const digits = v.toString();
-      args[k] = Number.isFinite(Number(digits)) ? new FluentNumber(digits) : digits;
-      continue;
-    }
-    if (v instanceof FluentType || typeof v === "object" && "value" in v && typeof v.valueOf === "function") {
-      args[k] = v;
-      continue;
+    if (typeof v === "object") {
+      const unwrapped = unwrapFluentValueObject(v);
+      const argument = toFluentArgument(unwrapped);
+      if (argument !== void 0) {
+        args[k] = argument;
+        continue;
+      }
+      if (unwrapped instanceof FluentType) {
+        args[k] = unwrapped;
+        continue;
+      }
     }
     rejected.push(k);
   }

@@ -16,7 +16,7 @@ export declare function fnv1a32(input: string): string;
 export declare function fnv1a64(input: string): string;
 export declare function computeSourceHash(source: string | readonly string[]): string;
 export declare function getOrCreateResource(source: string): FluentResource;
-export declare function getCachedFluentBundle(locale: string, ftlSource: string | readonly string[], options?: CreateFluentBundleOptions): FluentBundle;
+export declare function getCachedFluentBundle(locale: string, rawSource: string | readonly string[], options?: CreateFluentBundleOptions): FluentBundle;
 export declare function clearBundleCache(): void;
 export declare function getBundleCacheStats(): {
     resourceCount: number;

@@ -228,7 +228,12 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
       const url = new URL(normalizeLeadingSlashes(path), requestOrigin);
       return url.origin === requestOrigin.origin ? url : new URL('/', requestOrigin);
     };
-    const domain = domains?.find((item) => item.domain.toLowerCase() === requestHost);
+    // `requestHost` is normalized (lowercase, trailing dot removed), so the
+    // configured spellings must be too — otherwise `domains: [{ domain:
+    // 'example.com.' }]` silently stops applying to every request.
+    const domain = domains?.find(
+      (item) => normalizeHostForMatching(item.domain.toLowerCase()) === requestHost
+    );
     const locales = domain
       ? allLocales.filter((locale) => matchSupportedLocale(locale, domain.locales ?? [domain.defaultLocale]))
       : allLocales;

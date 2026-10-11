@@ -496,6 +496,11 @@ format.number(0.19, 'percent');            // → "19%"
 format.dateTime(new Date(), { dateStyle: 'full' }); // raw Intl options still work
 ```
 
+An unknown format name or an unknown IANA `timeZone` is reported once (listing the
+name and the config option it belongs to) instead of silently degrading; date/time
+output keeps formatting in the runtime's zone rather than turning into an ISO
+string, so a typo in the config is visible but never breaks the page.
+
 ### Non-HTML output (`useIsolating`)
 
 Fluent wraps placeables in U+2068/U+2069 bidi isolates — correct for HTML, noise in `<title>`, meta tags, JSON APIs or plain-text emails. Turn them off per request (or per call) with `useIsolating: false` in the request config or in `getTranslations()` options. `t.raw()` always strips them.
@@ -591,6 +596,15 @@ Missing, extra, duplicated and unparsable keys are reported per locale and the
 command exits non-zero, so translation gaps fail the build instead of shipping a
 fallback string. The same engine is available programmatically as
 `checkCatalogs()` from `next-fluent/check`.
+
+The server runtime reports the same class of problem from the other side: Fluent's
+runtime parser drops a message it cannot read *without any error*, so the only
+symptom used to be a `MISSING_MESSAGE` for a key the catalog defines. `next-fluent`
+now compares the entries a catalog declares with the ones the parser kept and warns
+once per catalog, naming the lost ids. A UTF-8 byte-order mark (a catalog saved by
+an editor that writes one) is stripped before parsing, so it no longer costs the
+first entry — and a BOM in a `.json` catalog no longer fails with a bare
+"Unexpected token".
 
 ### Finding dead messages
 

@@ -119,7 +119,9 @@ function createI18nMiddleware(options) {
       const url = new URL(normalizeLeadingSlashes(path), requestOrigin);
       return url.origin === requestOrigin.origin ? url : new URL("/", requestOrigin);
     };
-    const domain = domains?.find((item) => item.domain.toLowerCase() === requestHost);
+    const domain = domains?.find(
+      (item) => normalizeHostForMatching(item.domain.toLowerCase()) === requestHost
+    );
     const locales = domain ? allLocales.filter((locale) => matchSupportedLocale(locale, domain.locales ?? [domain.defaultLocale])) : allLocales;
     const prefixConfig = domain && domainPrefixes.get(domain) || globalPrefixConfig;
     const localePrefix = prefixConfig.mode;

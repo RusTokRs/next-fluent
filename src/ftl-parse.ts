@@ -1,5 +1,6 @@
 import { parse, type Resource } from '@fluent/syntax';
 import { FluentError, FluentErrorCode } from './errors';
+import { stripCatalogBom } from './catalog';
 
 /**
  * Parses FTL, turning the parser's stack overflow into an actionable error.
@@ -14,7 +15,7 @@ import { FluentError, FluentErrorCode } from './errors';
  */
 export function parseFtl(source: string, context: string): Resource {
   try {
-    return parse(source, { withSpans: false });
+    return parse(stripCatalogBom(source), { withSpans: false });
   } catch (error) {
     if (error instanceof RangeError) {
       throw new FluentError({

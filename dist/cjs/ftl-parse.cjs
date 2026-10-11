@@ -25,9 +25,10 @@ __export(ftl_parse_exports, {
 module.exports = __toCommonJS(ftl_parse_exports);
 var import_syntax = require("@fluent/syntax");
 var import_errors = require("./errors.cjs");
+var import_catalog = require("./catalog.cjs");
 function parseFtl(source, context) {
   try {
-    return (0, import_syntax.parse)(source, { withSpans: false });
+    return (0, import_syntax.parse)((0, import_catalog.stripCatalogBom)(source), { withSpans: false });
   } catch (error) {
     if (error instanceof RangeError) {
       throw new import_errors.FluentError({

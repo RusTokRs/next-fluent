@@ -1,17 +1,26 @@
 import { canonicalizeLocale } from "./utils.js";
 import { LRUCache } from "./lru.js";
 const MAX_CACHE_SIZE = 200;
-function stringifySorted(obj) {
+function stringifySorted(obj, seen) {
   if (obj === null || typeof obj !== "object") {
     return JSON.stringify(obj);
   }
-  if (Array.isArray(obj)) {
-    return `[${obj.map(stringifySorted).join(",")}]`;
+  const path = seen ?? /* @__PURE__ */ new Set();
+  if (path.has(obj)) {
+    return '"[circular]"';
   }
-  const keys = Object.keys(obj).sort();
-  return `{${keys.map(
-    (k) => `${JSON.stringify(k)}:${stringifySorted(obj[k])}`
-  ).join(",")}}`;
+  path.add(obj);
+  try {
+    if (Array.isArray(obj)) {
+      return `[${obj.map((item) => stringifySorted(item, path)).join(",")}]`;
+    }
+    const keys = Object.keys(obj).sort();
+    return `{${keys.map(
+      (k) => `${JSON.stringify(k)}:${stringifySorted(obj[k], path)}`
+    ).join(",")}}`;
+  } finally {
+    path.delete(obj);
+  }
 }
 const dtfCache = new LRUCache(MAX_CACHE_SIZE);
 const nfCache = new LRUCache(MAX_CACHE_SIZE);
@@ -23,21 +32,26 @@ function clearFormatterCache() {
   rtfCache.clear();
   lfCache.clear();
   warnedFormats.clear();
+  warnedDateTimes.clear();
 }
 const warnedFormats = /* @__PURE__ */ new Set();
+const warnedDateTimes = /* @__PURE__ */ new Set();
 const MAX_WARNED_FORMATS = 200;
+function warnOnce(store, key, message) {
+  if (store.has(key)) return;
+  if (store.size >= MAX_WARNED_FORMATS) store.clear();
+  store.add(key);
+  console.warn(message);
+}
 function resolveFormat(presets, options, kind) {
   if (options === void 0 || typeof options !== "string") return options;
   const preset = presets?.[options];
   if (!preset) {
-    const warnKey = `${kind}::${options}`;
-    if (!warnedFormats.has(warnKey)) {
-      if (warnedFormats.size >= MAX_WARNED_FORMATS) warnedFormats.clear();
-      warnedFormats.add(warnKey);
-      console.warn(
-        `[next-fluent] Unknown ${kind} format "${options}". Configure it in the request config "formats" option.`
-      );
-    }
+    warnOnce(
+      warnedFormats,
+      `${kind}::${options}`,
+      `[next-fluent] Unknown ${kind} format "${options}". Configure it in the request config "formats" option.`
+    );
     return void 0;
   }
   return preset;
@@ -64,12 +78,26 @@ function createFormatter(optionsOrLocale) {
       const cacheKey = `${locale}::${stringifySorted(mergedOptions)}`;
       let formatter = dtfCache.get(cacheKey);
       if (!formatter) {
+        let candidate;
         try {
-          formatter = new Intl.DateTimeFormat(locale, mergedOptions);
-          dtfCache.set(cacheKey, formatter);
+          candidate = new Intl.DateTimeFormat(locale, mergedOptions);
         } catch {
-          return date.toISOString();
+          const requestedTimeZone = mergedOptions.timeZone;
+          if (!requestedTimeZone) return date.toISOString();
+          warnOnce(
+            warnedDateTimes,
+            `timeZone::${locale}::${requestedTimeZone}`,
+            `[next-fluent] Unknown time zone "${requestedTimeZone}" (see \`requestConfig.timeZone\`); using the runtime zone.`
+          );
+          const { timeZone: _ignored, ...withoutZone } = mergedOptions;
+          try {
+            candidate = new Intl.DateTimeFormat(locale, withoutZone);
+          } catch {
+            return date.toISOString();
+          }
         }
+        formatter = candidate;
+        dtfCache.set(cacheKey, formatter);
       }
       try {
         return formatter.format(date);

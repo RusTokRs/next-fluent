@@ -20,20 +20,29 @@ const BUDGETS = [
   {
     name: 'next-fluent (root, client)',
     entry: path.join(root, 'src/index-browser.ts'),
-    maxMinified: 48 * 1024,
     // +128 B gzip for effective-prefix validation and segment-wise route priority.
     // A further +128 B permits deeply copied/frozen routing definitions.
     // Audit V4-12/V4-13 raise both by ~0.3 kB: honoring an absolute URL object
     // costs ~0.28 kB gzip, a stable table for custom Fluent functions ~0.14 kB.
-    maxGzip: 16.5 * 1024,
+    // Audit pass 6 (V6-01, V6-02, V6-06, V6-08) adds ~0.75 kB minified / ~0.3 kB
+    // gzip of correctness: a protocol-relative href can no longer escape through
+    // backslash normalization, an object href's port is validated, FluentType
+    // values from a second @fluent/bundle copy are unwrapped instead of failing,
+    // cyclic Intl options no longer overflow the stack. The unparsable-catalog
+    // scan lives in src/catalog-integrity.ts (server-only), so it costs nothing
+    // here. Measured after the pass: 48.7 kB minified / 16.6 kB gzip.
+    maxMinified: 49 * 1024,
+    maxGzip: 17 * 1024,
   },
   {
     name: 'next-fluent/client',
     entry: path.join(root, 'src/client.ts'),
     // Absolute domain locale switches must carry a cookie-update signal too.
     // +128 B allowance for the browser-verified fix (measured gzip ~13.04 kB).
-    maxMinified: 39.5 * 1024,
-    maxGzip: 13.75 * 1024,
+    // Audit pass 6: the same correctness work as the root entry; measured
+    // 40.1 kB minified / 14.0 kB gzip.
+    maxMinified: 40.5 * 1024,
+    maxGzip: 14.25 * 1024,
   },
   {
     // The library's own code, without the Fluent runtime it depends on.
@@ -49,8 +58,10 @@ const BUDGETS = [
     // Deep routing snapshots add ~0.2 kB minified / ~0.1 kB gzip.
     // The previous budget left 45 B of gzip headroom, so audit V4-12/V4-13
     // (~0.42 kB gzip minified, ~0.9 kB minified) needed the next step up.
-    maxMinified: 37.5 * 1024,
-    maxGzip: 13 * 1024,
+    // Audit pass 6: measured 37.9 kB minified / 13.0 kB gzip after the
+    // hardenings listed above.
+    maxMinified: 38.5 * 1024,
+    maxGzip: 13.25 * 1024,
   },
   {
     name: '@fluent/bundle (runtime dependency)',

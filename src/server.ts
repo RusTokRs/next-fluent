@@ -16,6 +16,7 @@ import type {
   NamespaceKeys,
 } from './types';
 import { createFluentBundle, createTranslator } from './bundle';
+import { warnAboutDroppedEntries } from './catalog-integrity';
 import { isJsonCatalog, toFluentSource, type MessageSource } from './catalog';
 import { createFormatter } from './formatter';
 import { canonicalizeLocale, matchSupportedLocale, resolveAcceptLanguage } from './utils';
@@ -53,6 +54,24 @@ export function setRequestConfig(fn: RequestConfigFn): RequestConfigFn {
 
 export function getRequestConfig(): RequestConfigFn | null {
   return globalConfigFn;
+}
+
+/**
+ * Builds a request bundle, reporting entries the FTL parser silently dropped.
+ *
+ * `@fluent/bundle` skips a message it cannot parse without a trace, so the only
+ * symptom is a MISSING_MESSAGE for a key the catalog defines. Every catalog the
+ * server runtime renders comes through here, which is also where the catalog is
+ * parsed for the first time in a Next.js request.
+ */
+function createServerBundle(
+  locale: string,
+  source: MessageSource,
+  options: { functions?: Record<string, FluentFunction>; useIsolating?: boolean }
+): FluentBundle {
+  const normalized = toFluentSource(source);
+  warnAboutDroppedEntries(locale, normalized);
+  return createFluentBundle(locale, normalized, options);
 }
 
 interface RequestStore {
@@ -271,7 +290,12 @@ export async function getRequestConfigSnapshot(localeArg?: string): Promise<Requ
   const locale = (result.locale && canonicalizeLocale(result.locale)) || requestedLocale;
   const timeZone = result.timeZone ?? store.timeZone ?? getTimeZone();
   const now = result.now ?? store.now ?? getNow();
-  store.locale = locale;
+  // The snapshot may be taken for a locale other than the request's own (a
+  // shared header widget, for example). Writing it back replaced the request
+  // locale for every later `getLocale()` call in the same render, so an
+  // explicit snapshot no longer overwrites a locale the request already
+  // resolved. `timeZone`/`now` stay: they are what the synchronous helpers read.
+  store.locale ??= locale;
   store.timeZone = timeZone;
   store.now = now;
   return { ...result, locale, timeZone, now };
@@ -413,12 +437,12 @@ export async function forLocale(
 
   let bundle: FluentBundle;
   if (explicitMessages !== undefined) {
-    bundle = createFluentBundle(effectiveLocale, toFluentSource(explicitMessages), bundleOptions);
+    bundle = createServerBundle(effectiveLocale, explicitMessages, bundleOptions);
   } else {
     const hasCustomFuncs = Boolean(requestConfig || Object.keys(mergedFunctions).length > 0);
     let cached = hasCustomFuncs ? undefined : store.bundles.get(bundleSlot);
     if (!cached) {
-      cached = createFluentBundle(effectiveLocale, toFluentSource(config?.messages ?? ''), bundleOptions);
+      cached = createServerBundle(effectiveLocale, config?.messages ?? '', bundleOptions);
       if (!hasCustomFuncs) {
         store.bundles.set(bundleSlot, cached);
       }
@@ -431,9 +455,7 @@ export async function forLocale(
   // 1. Explicit fallback messages
   if (fallbackMessages) {
     const fbLoc = fallbackLocale ?? 'en';
-    fallbackBundleList.push(
-      createFluentBundle(fbLoc, toFluentSource(fallbackMessages), bundleOptions)
-    );
+    fallbackBundleList.push(createServerBundle(fbLoc, fallbackMessages, bundleOptions));
   }
 
   // 2. Fallback locales from request/config
@@ -455,7 +477,7 @@ export async function forLocale(
       if (!fbBundle) {
         const fbConfig = await loadConfig(fbLocale, requestConfig);
         const resolvedFallbackLocale = fbConfig.locale ?? fbLocale;
-        fbBundle = createFluentBundle(resolvedFallbackLocale, toFluentSource(fbConfig.messages), {
+        fbBundle = createServerBundle(resolvedFallbackLocale, fbConfig.messages, {
           functions: { ...fbConfig.functions, ...mergedFunctions },
           useIsolating,
         });

@@ -136,6 +136,57 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **An internal path can no longer resolve to another origin.** `resolveLocalizedPathname`
+  normalizes Windows backslashes to `/`, but the leading run of separators that
+  this creates was only collapsed on the prefix branch. In `localePrefix:
+  'as-needed'` for the default locale (and in `'never'`) `href: '/\\evil.example'`
+  reached the DOM as `//evil.example` — a protocol-relative link to another
+  host — and the same happened after a `basePath` strip. The run is now collapsed
+  before locale matching, so every mode produces an internal path.
+- **A URL object's `port` is validated.** `absoluteUrlFromObject` interpolated the
+  port verbatim, so `{ hostname: 'example.com', port: '@evil.com' }` produced
+  `https://example.com:@evil.com/a`, which the URL parser reads as userinfo plus
+  the host `evil.com`: the link pointed at another origin. Non-numeric ports now
+  throw instead of building a different authority.
+- **An unknown `timeZone` no longer prints ISO strings.** A typo in
+  `requestConfig.timeZone` (or in per-call options) made `Intl.DateTimeFormat`
+  throw, and `dateTime()` silently fell back to `date.toISOString()`. The
+  formatter now reports the zone once and retries without it, so the output stays
+  localized; the fallback formatter is cached, so a misconfiguration costs
+  nothing per render.
+- **A byte-order mark no longer costs the first catalog entry.** Neither Fluent
+  parser treats U+FEFF as whitespace: a catalog saved with a BOM silently lost
+  its first message, in the runtime and in `typegen`/`check`/`pseudo` (and a JSON
+  catalog failed with a bare "Unexpected token"). The mark is stripped in the
+  shared funnel (`createFluentBundle`, `getOrCreateResource`, `parseFtl`,
+  `readCatalog`); both spellings now share one cache entry.
+- **Entries the runtime parser drops are reported with their ids.** A message
+  with a syntax error disappears from `FluentResource` without a trace, so
+  `t('that.key')` reported MISSING_MESSAGE for a key the catalog defines. The
+  server runtime now names the lost entries once per catalog and points at
+  `next-fluent check`; the scan lives in the server-only
+  `src/catalog-integrity.ts`, so it costs the client bundle nothing.
+- **FluentType-shaped values from another package copy work.** A `FluentNumber`
+  from a second copy of `@fluent/bundle` (or any application value object) was
+  passed to Fluent as a foreign object and failed with "Variable type not
+  supported"; plain data objects like `{ value: 1 }` also slipped through that
+  check and produced a formatting error instead of a clear `INVALID_ARGUMENT`
+  naming the argument. Such values are now unwrapped to the primitive the local
+  copy formats, and plain objects are reported as invalid arguments.
+- **`getRequestConfigSnapshot(locale)` no longer replaces the request locale.**
+  The snapshot wrote its locale into the request store, so a later `getLocale()`
+  in the same render returned the snapshot's locale instead of the request's.
+  `timeZone`/`now` still come from the snapshot, which is what the synchronous
+  `getNow()`/`getTimeZone()` helpers read.
+- **Cyclic `Intl` options no longer overflow the stack.** The formatter cache key
+  serialized options recursively, so an object graph with a cycle crashed the
+  render with `RangeError: Maximum call stack size exceeded`. The serializer now
+  tracks the current path.
+- **A domain configured as `example.com.` is matched.** The middleware compared
+  the normalized request host against the raw configured spelling, so an
+  absolute (dotted) domain silently stopped applying and global rules were used
+  instead.
+
 - **Generated types follow the runtime's key resolution.** When a message is
   named like another message's dotted attribute (`greeting-formal` next to
   `greeting` with `.formal`), `t('greeting.formal')` formats the message — the

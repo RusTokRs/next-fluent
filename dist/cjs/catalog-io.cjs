@@ -73,7 +73,7 @@ function collectCatalogFiles(target) {
   return files.sort();
 }
 function readCatalog(file) {
-  const raw = import_node_fs.default.readFileSync(file, "utf8");
+  const raw = (0, import_catalog.stripCatalogBom)(import_node_fs.default.readFileSync(file, "utf8"));
   if (!file.toLowerCase().endsWith(".json")) return raw;
   try {
     return (0, import_catalog.jsonToFluent)(JSON.parse(raw));

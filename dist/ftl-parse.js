@@ -1,8 +1,9 @@
 import { parse } from "@fluent/syntax";
 import { FluentError, FluentErrorCode } from "./errors.js";
+import { stripCatalogBom } from "./catalog.js";
 function parseFtl(source, context) {
   try {
-    return parse(source, { withSpans: false });
+    return parse(stripCatalogBom(source), { withSpans: false });
   } catch (error) {
     if (error instanceof RangeError) {
       throw new FluentError({
