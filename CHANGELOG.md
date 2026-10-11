@@ -159,6 +159,31 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`trustedHosts` could be switched off with a request header.** An
+  `x-forwarded-host` naming a configured domain was adopted as the request
+  origin, and the allow-list was then checked against that attacker-chosen
+  host — so `Host: evil.com`, which is answered with `421` on its own, was
+  served (with a redirect to the configured domain) once the header was added.
+  A domain-matching forwarded host now also requires the host the request
+  actually arrived for to be trusted. Proxies that forward the public host
+  without rewriting `Host` are unaffected when no allow-list is configured.
+- **`Host: example.com:443` was answered with `421` on an https request.** The
+  host header is only adopted when the URL parser reproduces it verbatim, and
+  the parser drops the scheme's default port — the one difference that is not a
+  different authority. `example.com:80` and `example.com:8443` were accepted
+  while the default-port spelling was refused, so the site went dark for
+  clients that send the port explicitly. Malformed, userinfo-bearing and
+  foreign `Host` values are still rejected.
+- **`useRouter().prefetch` did nothing on a single-domain site.** The rule that
+  skips a prefetch crossing to another configured domain was applied even with
+  no `domains` configured, where it collapsed to "the global prefix mode is not
+  `always`" — so in `as-needed` a locale switcher never prefetched `/ru/about`,
+  the URL it had just asked for. The rule now applies only when domains are
+  configured.
+- **A canonicality gate between the two layers.** Every URL navigation
+  produces is now asserted to be one the middleware already treats as
+  canonical, across prefix modes, `basePath`, per-domain prefix overrides,
+  localized slugs, catch-all and dynamic routes.
 - **No behaviour changed in this pass either.** The client provider's own
   branches were probed and found correct: a bundle passed as `messages` or
   `fallbackMessages` is used as given, a single `fallbackBundles` entry is

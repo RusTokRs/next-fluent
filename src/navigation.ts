@@ -119,9 +119,17 @@ export function createNavigation<Locales extends readonly string[] = readonly st
           return router.replace(target, routerOptions);
         },
         prefetch(href: Href, options?: { locale?: string; forcePrefix?: boolean }) {
-          if (options?.locale && domainLocalePrefix(
-            locales, config.localePrefix, findLocaleDomain(config.domains, options.locale)
-          ).mode !== 'always') return;
+          // The skip below is a domain-routing rule: a locale switch can land
+          // on another configured domain, where the prefetch cannot be used.
+          // It was applied even with no `domains` configured, where
+          // `findLocaleDomain` returns nothing and the condition collapsed to
+          // "the global prefix mode is not 'always'" — so on a single-domain
+          // site in `as-needed` (the default shape) a switcher never prefetched
+          // `/ru/about`, the one URL it had asked for.
+          if (options?.locale && config.domains) {
+            const domain = findLocaleDomain(config.domains, options.locale);
+            if (domain && domainLocalePrefix(locales, config.localePrefix, domain).mode !== 'always') return;
+          }
           const targetLocale = options?.locale ?? currentLocale ?? defaultLocale;
           const target = getPathname({
             href,

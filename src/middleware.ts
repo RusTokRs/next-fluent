@@ -196,9 +196,21 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
     const trustedForwardedHost = forwardedHost && (
       normalizeHostForMatching(forwardedHost.toLowerCase()) ===
         (directHost === null ? undefined : normalizeHostForMatching(directHost.toLowerCase())) ||
-      domains?.some(
-        (item) => normalizeHostForMatching(item.domain.toLowerCase()) ===
-          normalizeHostForMatching(forwardedHost.toLowerCase())
+      (
+        domains?.some(
+          (item) => normalizeHostForMatching(item.domain.toLowerCase()) ===
+            normalizeHostForMatching(forwardedHost.toLowerCase())
+        ) === true &&
+        // A domain-matching forwarded host is how a proxy that does not rewrite
+        // `Host` still names the public origin — but `x-forwarded-host` is a
+        // request header, so a client can send it too. Letting it choose the
+        // host would hand it the very pick `trustedHosts` exists to prevent:
+        // `Host: evil.com` was rejected with 421, yet `Host: evil.com` plus
+        // `x-forwarded-host: <a configured domain>` was served, and the 421 was
+        // then decided against the attacker-chosen host. The host the request
+        // actually arrived for therefore has to be trusted on its own.
+        (trustedHosts === undefined || trustedHosts.length === 0 ||
+          (directHost !== null && hostMatchesTrustedList(directHost, trustedHosts)))
       ) ||
       // A loopback forwarded host is what a local development proxy sends. It
       // is honoured only when the connection itself came from loopback: a
@@ -210,7 +222,19 @@ export function createI18nMiddleware(options: I18nMiddlewareOptions) {
     if (rawHost && /^[^\s/?#@\\]+$/.test(rawHost)) {
       try {
         const parsedHost = new URL(`${requestOrigin.protocol}//${rawHost}`);
-        if (parsedHost.host === rawHost.toLowerCase()) replaceUrlHost(requestOrigin, parsedHost.host);
+        // The header has to survive the parser unchanged, or it names something
+        // else: `a.test/b` parses to host `a.test`, and `//evil.test` resolves
+        // to another origin. The one difference that is *not* a different
+        // authority is the scheme's default port, which the parser drops —
+        // `Host: a.test:443` on an https request is the same host as `a.test`,
+        // and reading it as "did not round-trip" left the origin untouched, so
+        // `trustedHosts: ['a.test']` answered 421 to the site's own name.
+        const defaultPort = requestOrigin.protocol === 'https:' ? '443' : '80';
+        const sameAuthority =
+          parsedHost.host === rawHost.toLowerCase() ||
+          (parsedHost.port === '' &&
+            rawHost.toLowerCase() === `${parsedHost.hostname.toLowerCase()}:${defaultPort}`);
+        if (sameAuthority) replaceUrlHost(requestOrigin, parsedHost.host);
       } catch { /* Keep NextRequest's origin for an invalid Host header. */ }
     }
     const requestHost = normalizeHostForMatching(requestOrigin.host.toLowerCase());
