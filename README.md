@@ -706,6 +706,16 @@ than guessed at, and so is a namespace the file does not spell out literally
 (`useTranslations(NAMESPACES.checkout)`): "no key matches" cannot be concluded
 from "the namespace could not be read".
 
+Where a call site is listed as `dynamic` depends on whether the file creates the
+translator itself. A non-literal key is listed when `t` was bound earlier in the
+same file by `useTranslations()` / `getTranslations()` — the key is unreadable,
+but the call site is real. When the file does not create the translator (a
+component that receives `t` from props, a callback parameter, an import), an
+expression argument is left alone: a name like `t` may not be a translator at all,
+and `const t = 5; t(3)` must not appear in the report. A *literal* key through
+such a translator is still matched against every namespace, and if it matches
+nothing it is reported as `dynamic` — never as `missing`.
+
 The analyzer never writes to a catalog. It is also available programmatically as
 `analyzeUsage()` / `formatUsageReport()` from `next-fluent/usage`.
 

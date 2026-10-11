@@ -22,9 +22,6 @@ function droppedEntryIds(source, resource) {
 }
 const warnedCatalogs = /* @__PURE__ */ new Set();
 const MAX_WARNED_CATALOGS = 200;
-function clearCatalogIntegrityWarnings() {
-  warnedCatalogs.clear();
-}
 function warnDroppedEntries(locale, source, ids) {
   const shown = ids.slice(0, 5).map((id) => `"${id}"`).join(", ");
   const more = ids.length > 5 ? ` and ${ids.length - 5} more` : "";
@@ -45,6 +42,5 @@ function warnAboutDroppedEntries(locale, source) {
   }
 }
 export {
-  clearCatalogIntegrityWarnings,
   warnAboutDroppedEntries
 };

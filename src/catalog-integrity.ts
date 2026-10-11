@@ -65,10 +65,6 @@ function droppedEntryIds(source: string, resource: FluentResource): string[] {
 const warnedCatalogs = new Set<string>();
 const MAX_WARNED_CATALOGS = 200;
 
-export function clearCatalogIntegrityWarnings(): void {
-  warnedCatalogs.clear();
-}
-
 function warnDroppedEntries(locale: string, source: string, ids: readonly string[]): void {
   const shown = ids.slice(0, 5).map((id) => `"${id}"`).join(', ');
   const more = ids.length > 5 ? ` and ${ids.length - 5} more` : '';

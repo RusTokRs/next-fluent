@@ -159,6 +159,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`clearCatalogIntegrityWarnings` was removed.** It was exported from an internal
+  module, reached no public entry point and was called from nowhere. The
+  warn-once set it reset is bounded on its own, so nothing depended on it.
+
 - **`check --usage` could not see a message used behind a symbolic link.** A
   symlinked source file or directory — `app/components → ../../packages/ui` in
   any monorepo — was neither a file nor a directory to `fs.Dirent`, so every call

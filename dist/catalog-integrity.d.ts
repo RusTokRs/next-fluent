@@ -1,4 +1,3 @@
-export declare function clearCatalogIntegrityWarnings(): void;
 /**
  * Reports catalog sources whose entries the runtime parser silently dropped.
  * Accepts the shapes `createFluentBundle` accepts; JSON catalogs are converted
