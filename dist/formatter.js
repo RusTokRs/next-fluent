@@ -56,6 +56,13 @@ function resolveFormat(presets, options, kind) {
   }
   return preset;
 }
+function usableTimeZone(locale, timeZone) {
+  try {
+    return Boolean(new Intl.DateTimeFormat(locale, { timeZone }));
+  } catch {
+    return false;
+  }
+}
 function createFormatter(optionsOrLocale) {
   const options = typeof optionsOrLocale === "string" ? { locale: optionsOrLocale } : optionsOrLocale;
   const rawLocale = options.locale || "en";
@@ -83,17 +90,44 @@ function createFormatter(optionsOrLocale) {
           candidate = new Intl.DateTimeFormat(locale, mergedOptions);
         } catch {
           const requestedTimeZone = mergedOptions.timeZone;
-          if (!requestedTimeZone) return date.toISOString();
-          warnOnce(
-            warnedDateTimes,
-            `timeZone::${locale}::${requestedTimeZone}`,
-            `[next-fluent] Unknown time zone "${requestedTimeZone}" (see \`requestConfig.timeZone\`); using the runtime zone.`
-          );
-          const { timeZone: _ignored, ...withoutZone } = mergedOptions;
-          try {
-            candidate = new Intl.DateTimeFormat(locale, withoutZone);
-          } catch {
-            return date.toISOString();
+          if (requestedTimeZone === void 0) return date.toISOString();
+          if (usableTimeZone(locale, requestedTimeZone)) {
+            const { dateStyle, timeStyle, ...components } = mergedOptions;
+            let withoutStyle;
+            if ((dateStyle !== void 0 || timeStyle !== void 0) && Object.keys(components).length > 0) {
+              try {
+                withoutStyle = new Intl.DateTimeFormat(locale, components);
+              } catch {
+                withoutStyle = void 0;
+              }
+            }
+            if (withoutStyle) {
+              candidate = withoutStyle;
+              warnOnce(
+                warnedDateTimes,
+                `options::${locale}::${stringifySorted(mergedOptions)}`,
+                `[next-fluent] Intl refused these dateTime options for "${locale}" (${Object.keys(mergedOptions).join(", ")}): \`dateStyle\` and \`timeStyle\` cannot be combined with any other component option, so the style was ignored.`
+              );
+            } else {
+              warnOnce(
+                warnedDateTimes,
+                `options::${locale}::${stringifySorted(mergedOptions)}`,
+                `[next-fluent] Intl refused these dateTime options for "${locale}" (${Object.keys(mergedOptions).join(", ")}); the value was rendered as an ISO string.`
+              );
+              return date.toISOString();
+            }
+          } else {
+            warnOnce(
+              warnedDateTimes,
+              `timeZone::${locale}::${requestedTimeZone}`,
+              `[next-fluent] Unknown time zone "${requestedTimeZone}" (see \`requestConfig.timeZone\`); using the runtime zone.`
+            );
+            const { timeZone: _ignored, ...withoutZone } = mergedOptions;
+            try {
+              candidate = new Intl.DateTimeFormat(locale, withoutZone);
+            } catch {
+              return date.toISOString();
+            }
           }
         }
         formatter = candidate;

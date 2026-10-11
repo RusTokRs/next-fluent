@@ -137,6 +137,7 @@ function resolveLocalizedPathname(options, config) {
     const searchIndex = pathAndSearch.indexOf("?");
     rawPathname = searchIndex !== -1 ? pathAndSearch.slice(0, searchIndex) : pathAndSearch;
     search = searchIndex !== -1 ? pathAndSearch.slice(searchIndex) : "";
+    rawPathname = normalizeLeadingSlashes(rawPathname);
   } else if (href && typeof href === "object") {
     const absolute = absoluteUrlFromObject(href);
     if (absolute !== void 0) {
@@ -197,20 +198,21 @@ function resolveLocalizedPathname(options, config) {
 }
 function switchLocaleHref(target, explicitLocale, config) {
   const { locales, basePath = "" } = config;
-  if (!explicitLocale || target.startsWith("#")) return target;
+  const safeTarget = isExternalUrl(target) ? target : normalizeLeadingSlashes(target);
+  if (!explicitLocale || safeTarget.startsWith("#")) return safeTarget;
   const locale = matchSupportedLocale(explicitLocale, locales);
-  if (!locale) return target;
+  if (!locale) return safeTarget;
   const absolute = isExternalUrl(target);
-  const url = new URL(target, "https://next-fluent.invalid");
+  const url = new URL(safeTarget, "https://next-fluent.invalid");
   const domain = absolute ? findDomain(config.domains, url.host) : findLocaleDomain(config.domains, locale);
-  if (absolute && (!domain?.locales || domain.locales.length < 2 || !domainSupportsLocale(domain, locale) || !/^https?:$/.test(url.protocol))) return target;
+  if (absolute && (!domain?.locales || domain.locales.length < 2 || !domainSupportsLocale(domain, locale) || !/^https?:$/.test(url.protocol))) return safeTarget;
   const prefixConfig = domainLocalePrefix(locales, config.localePrefix, domain);
   const localePrefix = prefixConfig.mode;
-  if (localePrefix === "always") return target;
+  if (localePrefix === "always") return safeTarget;
   const route = basePath && (url.pathname === basePath || url.pathname.startsWith(`${basePath}/`)) ? url.pathname.slice(basePath.length) || "/" : url.pathname;
   if (localePrefix === "as-needed") {
     if (matchLocalePrefix(route, locales, prefixConfig)) {
-      return target;
+      return safeTarget;
     }
   }
   const switched = `${basePath}${prefixForLocale(locale, prefixConfig)}${route === "/" ? "" : route}${url.search}${url.hash}`;

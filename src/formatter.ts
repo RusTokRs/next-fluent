@@ -87,6 +87,23 @@ function resolveFormat<T>(
   return preset;
 }
 
+/**
+ * Whether `Intl` accepts this time zone on its own.
+ *
+ * `new Intl.DateTimeFormat` throws for a zone that does not exist *and* for an
+ * option combination it refuses, so the two have to be told apart before the
+ * zone is blamed: `"UTC"` is a perfectly usable zone that
+ * `Intl.supportedValuesOf('timeZone')` does not even list. The probe runs only
+ * on the error path.
+ */
+function usableTimeZone(locale: string, timeZone: string): boolean {
+  try {
+    return Boolean(new Intl.DateTimeFormat(locale, { timeZone }));
+  } catch {
+    return false;
+  }
+}
+
 export function createFormatter(optionsOrLocale: string | FormatterOptions): Formatter {
   const options: FormatterOptions =
     typeof optionsOrLocale === 'string' ? { locale: optionsOrLocale } : optionsOrLocale;
@@ -133,18 +150,60 @@ export function createFormatter(optionsOrLocale: string | FormatterOptions): For
           // is reported and retried without the zone — the text stays localized
           // instead of turning into `2026-01-02T03:04:05.000Z`.
           const requestedTimeZone = mergedOptions.timeZone;
-          if (!requestedTimeZone) return date.toISOString();
-          warnOnce(
-            warnedDateTimes,
-            `timeZone::${locale}::${requestedTimeZone}`,
-            `[next-fluent] Unknown time zone "${requestedTimeZone}" ` +
-              '(see `requestConfig.timeZone`); using the runtime zone.'
-          );
-          const { timeZone: _ignored, ...withoutZone } = mergedOptions;
-          try {
-            candidate = new Intl.DateTimeFormat(locale, withoutZone);
-          } catch {
-            return date.toISOString();
+          if (requestedTimeZone === undefined) return date.toISOString();
+
+          if (usableTimeZone(locale, requestedTimeZone)) {
+            // The zone is fine, so what Intl refused is the options. One
+            // combination is forbidden outright: a `dateStyle` or `timeStyle`
+            // next to any component option (`{ dateStyle, timeZoneName }` throws
+            // a TypeError that names neither). Dropping the style is the retry
+            // that keeps a localized value, and the warning is emitted only when
+            // that retry succeeds — so neither message is a guess about the
+            // cause. Intl errors with no such rescue (an out-of-range
+            // `hourCycle`, say) are reported as refused rather than explained.
+            const { dateStyle, timeStyle, ...components } = mergedOptions;
+            let withoutStyle: Intl.DateTimeFormat | undefined;
+            if (
+              (dateStyle !== undefined || timeStyle !== undefined) &&
+              Object.keys(components).length > 0
+            ) {
+              try {
+                withoutStyle = new Intl.DateTimeFormat(locale, components);
+              } catch {
+                withoutStyle = undefined;
+              }
+            }
+            if (withoutStyle) {
+              candidate = withoutStyle;
+              warnOnce(
+                warnedDateTimes,
+                `options::${locale}::${stringifySorted(mergedOptions)}`,
+                `[next-fluent] Intl refused these dateTime options for "${locale}" ` +
+                  `(${Object.keys(mergedOptions).join(', ')}): \`dateStyle\` and \`timeStyle\` ` +
+                  'cannot be combined with any other component option, so the style was ignored.'
+              );
+            } else {
+              warnOnce(
+                warnedDateTimes,
+                `options::${locale}::${stringifySorted(mergedOptions)}`,
+                `[next-fluent] Intl refused these dateTime options for "${locale}" ` +
+                  `(${Object.keys(mergedOptions).join(', ')}); the value was rendered as an ISO string.`
+              );
+              return date.toISOString();
+            }
+          } else {
+            warnOnce(
+              warnedDateTimes,
+              `timeZone::${locale}::${requestedTimeZone}`,
+              `[next-fluent] Unknown time zone "${requestedTimeZone}" ` +
+                '(see `requestConfig.timeZone`); using the runtime zone.'
+            );
+            const { timeZone: _ignored, ...withoutZone } = mergedOptions;
+            try {
+              candidate = new Intl.DateTimeFormat(locale, withoutZone);
+            } catch {
+              return date.toISOString();
+            }
           }
         }
         formatter = candidate;

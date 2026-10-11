@@ -25,17 +25,29 @@ export interface LocalePrefixMatch {
  * `new URL('//evil.example/x', origin)` is protocol-relative and resolves to
  * another host, and browsers treat `\` as `/`, so a path such as
  * `/ru//evil.example/x` must never reach a redirect target verbatim.
- */
-/**
- * A leading run of two or more path separators. Both `/` and `\` act as
- * separators to the URL parser, so `//host` and `/\host` are protocol-relative
- * and resolve to another origin.
+ *
+ * The run is read the way the URL parser will read it, which is why the three
+ * characters a browser strips from a URL — ASCII tab, LF and CR — are removed
+ * first: `"/\n/evil.example"` is not a path with a newline in it, it is
+ * protocol-relative `//evil.example` and resolves to a *different origin*.
  */
 const LEADING_SLASH_RUN = /^[/\\]{2,}/;
 
+/**
+ * The characters a URL parser removes from a URL anywhere in it before the URL
+ * is looked at at all. Invisible to the parser, and therefore to any check that
+ * merely reads the string.
+ */
+function stripUrlDiscardedControls(path: string): string {
+  if (!path.includes('\t') && !path.includes('\n') && !path.includes('\r')) return path;
+  // eslint-disable-next-line no-control-regex -- tab/LF/CR are exactly what a browser discards
+  return path.replace(/[\u0009\u000a\u000d]/g, '');
+}
+
 export function normalizeLeadingSlashes(path: string): string {
-  if (!LEADING_SLASH_RUN.test(path)) return path;
-  return `/${path.replace(LEADING_SLASH_RUN, '')}`;
+  const clean = stripUrlDiscardedControls(path);
+  if (!LEADING_SLASH_RUN.test(clean)) return clean;
+  return `/${clean.replace(LEADING_SLASH_RUN, '')}`;
 }
 
 export function normalizeLocalePrefix(

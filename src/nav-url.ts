@@ -209,6 +209,13 @@ export function resolveLocalizedPathname(
     const searchIndex = pathAndSearch.indexOf('?');
     rawPathname = searchIndex !== -1 ? pathAndSearch.slice(0, searchIndex) : pathAndSearch;
     search = searchIndex !== -1 ? pathAndSearch.slice(searchIndex) : '';
+    // A browser removes ASCII tab/LF/CR before parsing, so they cannot be left
+    // to hide a protocol-relative prefix from the checks below: `"/\n/evil"` is
+    // `//evil`, i.e. another origin. Collapsing the run here, before the basePath
+    // is stripped, keeps the rest of the path meaning the same thing it means
+    // for the clean input. (`//host` inputs never reach this point — an external
+    // href is returned as is above.)
+    rawPathname = normalizeLeadingSlashes(rawPathname);
   } else if (href && typeof href === 'object') {
     // The object may carry its own origin (`protocol`/`host`/`hostname`/`auth`
     // or an absolute `href`); honouring it keeps those call sites from being
@@ -320,19 +327,26 @@ export function switchLocaleHref(
   config: NavigationConfig
 ): string {
   const { locales, basePath = '' } = config;
-  if (!explicitLocale || target.startsWith('#')) return target;
+  // The href this function hands back is the one the browser will follow, so it
+  // is decided from the shape the browser will see: ASCII tab/LF/CR are removed
+  // and a leading separator run is collapsed (`"/\n/evil.example"` is
+  // protocol-relative `//evil.example`). Both normalizations are identity for
+  // an absolute URL — and for a protocol-relative one, which stays external by
+  // design and is returned as it is.
+  const safeTarget = isExternalUrl(target) ? target : normalizeLeadingSlashes(target);
+  if (!explicitLocale || safeTarget.startsWith('#')) return safeTarget;
   const locale = matchSupportedLocale(explicitLocale, locales);
-  if (!locale) return target;
+  if (!locale) return safeTarget;
   const absolute = isExternalUrl(target);
-  const url = new URL(target, 'https://next-fluent.invalid');
+  const url = new URL(safeTarget, 'https://next-fluent.invalid');
   const domain = absolute ? findDomain(config.domains, url.host) : findLocaleDomain(config.domains, locale);
   // Canonical URLs generated for a configured multi-locale domain still need
   // a switch signal. Unrelated external links and single-locale hosts do not.
   if (absolute && (!domain?.locales || domain.locales.length < 2 ||
-    !domainSupportsLocale(domain, locale) || !/^https?:$/.test(url.protocol))) return target;
+    !domainSupportsLocale(domain, locale) || !/^https?:$/.test(url.protocol))) return safeTarget;
   const prefixConfig = domainLocalePrefix(locales, config.localePrefix, domain);
   const localePrefix = prefixConfig.mode;
-  if (localePrefix === 'always') return target;
+  if (localePrefix === 'always') return safeTarget;
 
   const route =
     basePath && (url.pathname === basePath || url.pathname.startsWith(`${basePath}/`))
@@ -344,7 +358,7 @@ export function switchLocaleHref(
     // unambiguous — return it as is. Only prefix-less canonical hrefs need the
     // temporary signal URL so that middleware can update the locale cookie.
     if (matchLocalePrefix(route, locales, prefixConfig)) {
-      return target;
+      return safeTarget;
     }
   }
 

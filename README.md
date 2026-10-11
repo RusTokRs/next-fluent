@@ -650,6 +650,18 @@ and anything it cannot resolve is reported as `dynamic` rather than guessed at.
 A single call site can be exempted with a `// next-fluent-ignore` comment, whole
 namespaces with `--ignore-unused <prefix>`.
 
+What it reads: every call shape of a translator — `t()`, `t?.()`, `t.rich()`,
+`t.rich?.()`, `t.attrs()`, `t.raw()`, `t.has()`, `t.plain()` — the factories that
+create one (`useTranslations`, `getTranslations` and `createTranslator`,
+including the namespace in its options argument), and
+`<FormattedMessage id="checkout-title" />`, which counts as a render of that key.
+A literal may carry a type-level suffix (`t('key' as const)` or
+`t('key' satisfies Key)`): the compiler erases it, so the key is still known. An
+argument that is an *expression* (`t('key-' + suffix)`) is unverifiable rather
+than guessed at, and so is a namespace the file does not spell out literally
+(`useTranslations(NAMESPACES.checkout)`): "no key matches" cannot be concluded
+from "the namespace could not be read".
+
 The analyzer never writes to a catalog. It is also available programmatically as
 `analyzeUsage()` / `formatUsageReport()` from `next-fluent/usage`.
 

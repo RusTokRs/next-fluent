@@ -145,6 +145,44 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`next-fluent check --usage` no longer invents verdicts.** Six call shapes
+  were read wrongly, and every one of them produced a *false* finding — the
+  `missing` and `unused` kinds that fail the command:
+  `<FormattedMessage id="checkout-title" />` was not scanned at all, so a key
+  used only through the component was reported as dead (and a non-literal `id`
+  vanished silently instead of being listed for review); a block comment after
+  the key (`t('key' /* why */)`) made the argument unreadable and the key
+  *dynamic*; `createTranslator(bundle, 'checkout')`,
+  `createTranslator(bundle, { namespace: 'checkout' })` and
+  `createTranslator(bundle, null, 'checkout')` read the namespace from the first
+  argument only, so the binding looked global and `t('total')` was reported as
+  missing; a namespace that exists but is not a literal
+  (`useTranslations(NAMESPACES.checkout)`) was resolved as if the translator were
+  global, reporting a key nothing matches as missing instead of unverifiable; a
+  concatenation (`t('check-' + suffix)`) was matched greedily into the literal
+  key `check-' + suffix` — a key no catalog can hold — and reported as missing
+  while the real keys were called unused; `t('key' as const)` and
+  `t('key' satisfies Key)` were classified as unverifiable even though the
+  compiler erases the assertion and the value is exactly that literal. Optional
+  calls (`t?.('key')`, `t?.rich('key')`, `t.rich?.('key')`) are call sites now
+  too, instead of being invisible.
+- **A route can no longer reach another origin through the characters a URL
+  parser removes.** Browsers strip ASCII tab, LF and CR from a URL before
+  parsing it, so `href: "/\n/evil.example"` is not a path with a newline in it —
+  it is protocol-relative `//evil.example`. The leading separator run was
+  collapsed before the browser's own reading of the string was modelled, so in
+  the `as-needed` and `never` modes the crafted href reached the DOM unchanged
+  and resolved to a different host. `normalizeLeadingSlashes` now removes the
+  discarded characters first, which also keeps a `basePath` strip behaving the
+  same for the crafted and the clean spelling.
+- **A valid `timeZone` is no longer reported as unknown when the *options* were
+  the problem.** `Intl.DateTimeFormat` throws for an unusable configuration as a
+  whole, and `{ dateStyle: 'short', timeZoneName: 'short' }` — a combination
+  ECMA-402 forbids — was reported as "Unknown time zone `UTC`", sending the
+  reader after a config value that was correct. The zone is now probed on its
+  own: when it is fine, the style is dropped so the value still renders as
+  localized text, and the warning names the rule. Errors with no such rescue
+  (an out-of-range `hourCycle`, say) are reported as refused instead.
 - **An internal path can no longer resolve to another origin.** `resolveLocalizedPathname`
   normalizes Windows backslashes to `/`, but the leading run of separators that
   this creates was only collapsed on the prefix branch. In `localePrefix:
