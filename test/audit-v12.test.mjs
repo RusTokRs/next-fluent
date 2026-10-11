@@ -24,6 +24,19 @@ import { collectSourceFiles } from '../dist/catalog-io.js';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const CLI = path.join(root, 'bin/next-fluent.mjs');
 
+/**
+ * Relative paths in '/'-separated form.
+ *
+ * `path.relative` answers with the platform separator, so on Windows the
+ * expectations below would never match. Splitting on `path.sep` would be
+ * untestable here — on Linux both forms are '/', so the mistake stays invisible
+ * until CI runs on Windows — hence a separator-independent conversion that is
+ * verified directly.
+ */
+function toPosix(relativePath) {
+  return relativePath.split('\\').join('/');
+}
+
 /** A project tree the scenario fills in. */
 function tree() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'next-fluent-srcwalk-'));
@@ -47,9 +60,11 @@ function tree() {
         return false;
       }
     },
+    // `path.relative` answers with the platform separator, and the expectations
+    // below are written with '/', so normalize before comparing.
     scanned: () =>
       collectSourceFiles(path.join(dir, 'app'))
-        .map((file) => path.relative(dir, file))
+        .map((file) => toPosix(path.relative(dir, file)))
         .sort(),
     cleanup: () => fs.rmSync(dir, { recursive: true, force: true }),
   };
@@ -310,19 +325,27 @@ test('the watcher reports a broken catalog and recovers when it is fixed', async
       onUpdate: (result) => events.push(`update:${result.changed}`),
       onError: (error) => events.push(`error:${error.message.split('\n')[0]}`),
     });
+    // A loaded runner delivers the event late, and `fs.watch` may report one
+    // write as several events; wait for what matters instead of a fixed sleep.
+    const until = async (predicate) => {
+      const deadline = Date.now() + 5000;
+      while (!predicate() && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      return predicate();
+    };
     try {
       await new Promise((resolve) => setTimeout(resolve, 100));
       // A half-saved file is the normal case, not an edge case.
       fs.writeFileSync(catalog, 'good = Fine\nbroken = {\n');
-      await new Promise((resolve) => setTimeout(resolve, 400));
-      assert.equal(events.length, 1, events.join('\n'));
-      assert.match(events[0], /^error:/);
+      assert.ok(await until(() => events.some((e) => e.startsWith('error:'))), events.join('\n'));
+      assert.ok(events.every((e) => e.startsWith('error:')), events.join('\n'));
       assert.match(events[0], /cannot read/);
 
       events.length = 0;
       fs.writeFileSync(catalog, 'good = Fine\nfixed = Yes\n');
-      await new Promise((resolve) => setTimeout(resolve, 400));
-      assert.deepEqual(events, ['update:true']);
+      assert.ok(await until(() => events.length > 0), 'the watcher stayed quiet after the fix');
+      assert.ok(events.every((e) => e === 'update:true'), events.join('\n'));
       assert.match(fs.readFileSync(output, 'utf8'), /'fixed'/);
     } finally {
       stop();
@@ -343,4 +366,14 @@ test('the scanner does not walk into a directory it is told to skip', () => {
   } finally {
     t.cleanup();
   }
+});
+
+test('the path conversion the assertions rely on is separator-independent', () => {
+  // Whatever the platform reports, the expectations in this file are written
+  // with '/'. Checking the conversion directly keeps that guarantee verifiable
+  // on a machine whose separator is already '/'.
+  assert.equal(toPosix('app/page.tsx'), 'app/page.tsx');
+  assert.equal(toPosix('app\\page.tsx'), 'app/page.tsx');
+  assert.equal(toPosix('a\\b\\c.tsx'), 'a/b/c.tsx');
+  assert.equal(toPosix('/already/posix.tsx'), '/already/posix.tsx');
 });
