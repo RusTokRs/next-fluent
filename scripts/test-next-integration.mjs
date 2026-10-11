@@ -89,6 +89,114 @@ function checkPrerenderedRoutes(target) {
   console.log(`[next-fluent] Static rendering verified for: ${expected.join(', ')}`);
 }
 
+/**
+ * The locale-detection branch of `getLocale()`, in the only environment where it
+ * can run. Every other fixture route pins the locale in `[locale]/layout.tsx`,
+ * so `getLocale()` returns the stored locale and the detection code — the
+ * forwarded header, the cookie, `accept-language`, the default — is never
+ * entered. Node tests cannot enter it either: `next/headers` does not resolve
+ * outside a request, and the helper swallows that as "no request".
+ *
+ * `/probe` has its own root layout without `setRequestLocale`, and the
+ * middleware matcher skips it, so each row below is the server helper's own
+ * decision. The row order *is* the precedence: header, then cookie, then
+ * `accept-language`, then the configured default.
+ */
+async function checkLocaleDetection(base, output) {
+  const cases = [
+    {
+      label: 'no signal at all',
+      headers: {},
+      locale: 'en',
+      hello: 'Hello Next Fluent',
+    },
+    {
+      label: 'accept-language',
+      headers: { 'accept-language': 'ru-RU,ru;q=0.9' },
+      locale: 'ru',
+      hello: 'Привет Next Fluent',
+    },
+    {
+      label: 'cookie beats accept-language',
+      headers: { cookie: 'NEXT_LOCALE=ru', 'accept-language': 'en-US,en;q=0.9' },
+      locale: 'ru',
+      hello: 'Привет Next Fluent',
+    },
+    {
+      label: 'an unsupported cookie falls through to accept-language',
+      headers: { cookie: 'NEXT_LOCALE=de', 'accept-language': 'ru' },
+      locale: 'ru',
+      hello: 'Привет Next Fluent',
+    },
+    {
+      label: 'an unsupported cookie with no header falls back to the default',
+      headers: { cookie: 'NEXT_LOCALE=de' },
+      locale: 'en',
+      hello: 'Hello Next Fluent',
+    },
+    {
+      label: 'the forwarded header beats the cookie',
+      headers: { 'x-next-locale': 'ru', cookie: 'NEXT_LOCALE=en' },
+      locale: 'ru',
+      hello: 'Привет Next Fluent',
+    },
+    {
+      label: 'an unsupported header falls through to the cookie',
+      headers: { 'x-next-locale': 'de', cookie: 'NEXT_LOCALE=ru' },
+      locale: 'ru',
+      hello: 'Привет Next Fluent',
+    },
+  ];
+
+  for (const { label, headers, locale, hello } of cases) {
+    const response = await fetch(`${base}/probe`, { redirect: 'manual', headers });
+    // Fluent isolates a variable reference with U+2068/U+2069 by default; the
+    // catalog text itself is plain, so the marks are removed before comparing.
+    const html = (await response.text()).replace(/[\u2068\u2069]/g, '');
+    if (response.status !== 200) {
+      throw new Error(`Locale detection: ${label} returned ${response.status}.\n${output}`);
+    }
+    // The synchronous helpers only carry the configured instant if the config
+    // reached the request store, and the formatter only formats in UTC if the
+    // configured zone did. Outside a request scope there is no store to write
+    // to, which is why this can only be checked here.
+    const expected = [
+      `data-probe-locale="${locale}"`,
+      `data-probe-now="2024-01-01T00:00:00.000Z"`,
+      'data-probe-timezone="UTC"',
+      'data-probe-formats="number"',
+      `data-probe-hello="${hello}"`,
+    ];
+    for (const marker of expected) {
+      if (!html.includes(marker)) {
+        throw new Error(
+          `Locale detection: ${label} rendered without ${marker}.\n${html.slice(0, 800)}\n${output}`
+        );
+      }
+    }
+  }
+
+  // Two requests in flight at once must not share the memoized store: one asks
+  // for Russian, the other for English, and both render their own catalog.
+  const [ru, en] = await Promise.all(
+    [
+      { headers: { 'accept-language': 'ru' }, marker: 'data-probe-locale="ru"' },
+      { headers: { 'accept-language': 'en' }, marker: 'data-probe-locale="en"' },
+    ].map(async ({ headers, marker }) => {
+      const response = await fetch(`${base}/probe`, { redirect: 'manual', headers });
+      return { html: await response.text(), marker };
+    })
+  );
+  for (const { html, marker } of [ru, en]) {
+    if (!html.includes(marker)) {
+      throw new Error(
+        `Concurrent locale detection leaked between requests (no ${marker}).\n${html.slice(0, 400)}\n${output}`
+      );
+    }
+  }
+  console.log('[next-fluent] Server-side locale detection verified against live requests.');
+}
+
 async function checkRuntime(nextCli) {
   const port = await availablePort();
   const base = `http://localhost:${port}`;
@@ -176,6 +284,7 @@ async function checkRuntime(nextCli) {
       }
     }
     console.log('[next-fluent] Concurrent request scopes stayed isolated.');
+    await checkLocaleDetection(base, output);
     const localized = await fetch(`${base}/ru/o-nas`, { redirect: 'manual' });
     const localizedHtml = await localized.text();
     if (localized.status !== 200 || !localizedHtml.includes('About route') || !localizedHtml.includes('lang="ru"')) {

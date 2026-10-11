@@ -150,6 +150,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`pseudo --output` could overwrite the catalogs it generated from.** Pointing
+  `--output` at the `--input` directory (or file) replaced every real catalog
+  with its pseudo-localized version, and when a later catalog failed to parse the
+  command exited with an error naming that other file — after the damage. `pseudo`
+  now refuses an output that resolves to one of its own sources and names the
+  file that would have been destroyed.
+- **`pseudo` wrote file by file, so one bad catalog left a half-finished run.**
+  All output is now generated in memory and written only once every catalog has
+  been read successfully; a failing batch leaves no output directory behind.
+- **`configureServerI18n` was undocumented.** It is the call that gives
+  `getLocale()` a list of locales to negotiate `Accept-Language` against; without
+  it the browser's preference is silently ignored and every request falls back to
+  the default. The README now documents it, the two places it must not be called
+  from, and the reason.
+
 - **The client size budget measured two entry points out of seven.** The fixture
   the budget bundles imported 17 of the 42 exports the browser root offers, so
   1.67 kB was reachable from an app and counted by nothing — an app that used

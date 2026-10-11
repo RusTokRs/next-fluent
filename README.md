@@ -249,6 +249,25 @@ export const config = {
 
 > **Hardening**: pass `trustedHosts` (e.g. `createI18nMiddleware({ ...routing, trustedHosts: ['example.com', '*.example.com'] })`) to reject foreign `Host` headers with `421 Misdirected Request` before any public URL is issued — recommended when responses may be cached by shared caches or CDNs. Without it, both redirect targets and the alternate `Link` header are built from the request's `Host` header, and `next dev` prints a one-time warning as soon as such a URL is built. The wildcard lists subdomains only: `*.example.com` does **not** cover the apex, so list `example.com` as well when it is served.
 
+#### Telling the server which locales exist
+
+`getLocale()` prefers, in order: the locale forwarded by the middleware, the locale cookie, `Accept-Language`, and finally `defaultLocale`. The last two need a list of locales to choose *from* — without one the browser's preference is never consulted and every request falls back to the default. Declare the list once, in a module only the server imports:
+
+```typescript
+// src/i18n/server-config.ts
+import { configureServerI18n } from 'next-fluent/server';
+import { routing } from './routing';
+
+configureServerI18n({ locales: routing.locales, defaultLocale: routing.defaultLocale });
+```
+
+Two rules make this work:
+
+- It has to run **before the first `getLocale()` of the request** — that call resolves `next/headers` and every module it imports along the way. An import-time call at the top of `request.ts` is too late by that point, and `routing.ts` is wrong outright because the client imports it too.
+- Keep it in its own server-only module, imported from the root layout or the middleware — not from `request.ts` or `routing.ts`.
+
+Without this module, `Accept-Language` detection is silently inert and `createI18nMiddleware`'s own negotiation is the only thing that honours the browser's preference.
+
 ### 5. Root Layout (`app/[locale]/layout.tsx`)
 
 ```tsx

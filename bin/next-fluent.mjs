@@ -289,23 +289,51 @@ if (command === 'pseudo') {
     process.exit(1);
   }
 
-  if (fs.statSync(inputPath).isDirectory()) {
-    if (resolvedOutput.endsWith('.ftl')) {
-      console.error('Error: --output must be a directory when --input is a directory.');
-      process.exit(1);
-    }
-    for (const file of files) {
-      const relative = path.relative(inputPath, file).replace(/\.json$/i, '.ftl');
-      const dest = path.join(resolvedOutput, relative);
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.writeFileSync(dest, runGuarded(() => pseudoLocalizeFtl(readCatalog(file))), 'utf8');
-    }
-    console.log(
-      `[next-fluent] Generated pseudo-locales for ${files.length} file(s) at: ${outputArg}`
-    );
-  } else {
-    fs.mkdirSync(path.dirname(resolvedOutput), { recursive: true });
-    fs.writeFileSync(resolvedOutput, runGuarded(() => pseudoLocalizeFtl(readCatalog(files[0]))), 'utf8');
-    console.log(`[next-fluent] Generated pseudo-locale at: ${outputArg}`);
+  // Everything is generated in memory first. Writing file by file meant that a
+  // catalog that fails to parse half-way through left the files before it
+  // already replaced — with the source directory as the output (see below) that
+  // is silent, irreversible data loss reported as an error about a different
+  // file. Generating first makes the command all-or-nothing for anything but the
+  // write syscalls themselves.
+  const isDirectoryInput = fs.statSync(inputPath).isDirectory();
+  if (isDirectoryInput && resolvedOutput.endsWith('.ftl')) {
+    console.error('Error: --output must be a directory when --input is a directory.');
+    process.exit(1);
   }
+
+  const destinations = isDirectoryInput
+    ? files.map((file) => ({
+        source: file,
+        dest: path.join(resolvedOutput, path.relative(inputPath, file).replace(/\.json$/i, '.ftl')),
+      }))
+    : [{ source: files[0], dest: resolvedOutput }];
+
+  // A destination that is one of the sources would overwrite the catalog it was
+  // generated from. `--input messages --output messages` is an easy slip — it
+  // looks like "put them where they already are" — and the result was the real
+  // catalog replaced by `[Ĥîî]` with no warning at all.
+  const overwritten = destinations.find(({ source, dest }) => source === dest);
+  if (overwritten) {
+    console.error(
+      `Error: --output would overwrite the catalog it generates from: ${overwritten.dest}\n` +
+        'Pick a different output directory.'
+    );
+    process.exit(1);
+  }
+
+  const generated = destinations.map(({ source, dest }) => ({
+    dest,
+    content: runGuarded(() => pseudoLocalizeFtl(readCatalog(source))),
+  }));
+
+  for (const { dest, content } of generated) {
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(dest, content, 'utf8');
+  }
+
+  console.log(
+    isDirectoryInput
+      ? `[next-fluent] Generated pseudo-locales for ${files.length} file(s) at: ${outputArg}`
+      : `[next-fluent] Generated pseudo-locale at: ${outputArg}`
+  );
 }

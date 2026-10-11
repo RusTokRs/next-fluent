@@ -234,3 +234,118 @@ test('a directory symlink cannot make catalog collection recurse forever', async
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// The command line itself: discovery, argument errors, exit codes
+// ---------------------------------------------------------------------------
+// Everything above drives `check` with an explicit `--input`. The paths a user
+// actually hits first — no arguments, `--help`, a typo in the command, a
+// directory that does not exist, and the default catalog discovery — were not
+// covered, so a regression there would only ever be seen by a person running
+// the CLI for the first time.
+
+/** Runs the CLI in `cwd`, returning status and combined output. */
+function runCli(cwd, args) {
+  try {
+    const stdout = execFileSync(process.execPath, [CLI, ...args], { cwd, encoding: 'utf8' });
+    return { status: 0, output: stdout };
+  } catch (error) {
+    return { status: error.status, output: `${error.stdout ?? ''}${error.stderr ?? ''}` };
+  }
+}
+
+test('no arguments prints the usage and fails: a bare command is a mistake', () => {
+  const { status, output } = runCli(process.cwd(), []);
+  assert.equal(status, 1);
+  assert.match(output, /Usage:/);
+  assert.match(output, /next-fluent typegen/);
+  assert.match(output, /next-fluent check/);
+});
+
+test('--help prints the same usage and succeeds', () => {
+  const { status, output } = runCli(process.cwd(), ['--help']);
+  assert.equal(status, 0);
+  assert.match(output, /Usage:/);
+  assert.match(output, /--strict-usage/);
+});
+
+test('an unknown command names the typo instead of failing obscurely', () => {
+  const { status, output } = runCli(process.cwd(), ['chek']);
+  assert.equal(status, 1);
+  assert.match(output, /Unknown command "chek"/);
+  assert.match(output, /Usage:/, 'the usage has to follow the error');
+});
+
+test('an unknown option names the option', () => {
+  const { status, output } = runCli(process.cwd(), ['check', '--stric-usage']);
+  assert.equal(status, 1);
+  assert.match(output, /Unknown option "--stric-usage"/);
+});
+
+test('a missing input path is reported with the path that was looked for', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'next-fluent-cli-'));
+  try {
+    const { status, output } = runCli(dir, ['check', '--input', 'nowhere']);
+    assert.equal(status, 1);
+    assert.match(output, /Input file or directory not found/);
+    assert.ok(output.includes(path.join(dir, 'nowhere')), 'the resolved path has to be shown');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a project without any catalog directory lists where it looked', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'next-fluent-cli-'));
+  try {
+    const { status, output } = runCli(dir, ['check']);
+    assert.equal(status, 1);
+    assert.match(output, /No catalog directory found/);
+    // The order is the search order, and `--input` is the way out.
+    assert.match(output, /messages/);
+    assert.match(output, /--input/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('catalogs are discovered without --input', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'next-fluent-cli-'));
+  try {
+    fs.mkdirSync(path.join(dir, 'messages'));
+    fs.writeFileSync(path.join(dir, 'messages/en.ftl'), 'greeting = Hi\n');
+    fs.writeFileSync(path.join(dir, 'messages/ru.ftl'), 'greeting = Привет\n');
+
+    const found = runCli(dir, ['check']);
+    assert.equal(found.status, 0, found.output);
+    assert.match(found.output, /Checked 2 catalog\(s\)/);
+
+    // `src/messages` is the other documented location.
+    const nested = fs.mkdtempSync(path.join(os.tmpdir(), 'next-fluent-cli-'));
+    try {
+      fs.mkdirSync(path.join(nested, 'src/messages'), { recursive: true });
+      fs.writeFileSync(path.join(nested, 'src/messages/en.ftl'), 'greeting = Hi\n');
+      fs.writeFileSync(path.join(nested, 'src/messages/ru.ftl'), 'greeting = Привет\n');
+      const fromSrc = runCli(nested, ['check']);
+      assert.equal(fromSrc.status, 0, fromSrc.output);
+      assert.match(fromSrc.output, /Checked 2 catalog\(s\)/);
+    } finally {
+      fs.rmSync(nested, { recursive: true, force: true });
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a single-locale catalog is refused with the shape it expects', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'next-fluent-cli-'));
+  try {
+    fs.mkdirSync(path.join(dir, 'messages'));
+    fs.writeFileSync(path.join(dir, 'messages/en.ftl'), 'greeting = Hi\n');
+    const { status, output } = runCli(dir, ['check', '--input', 'messages']);
+    assert.equal(status, 1);
+    assert.match(output, /at least two locales/);
+    assert.match(output, /messages\/en\.ftl/, 'the message shows the layout it looked for');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
