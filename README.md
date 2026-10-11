@@ -490,6 +490,15 @@ export default setRequestConfig(async ({ locale }) => ({
 }));
 ```
 
+The error carries `code`, `key`, `namespace`, `locale`, `path` (the namespaced key) and, where there is one, a `cause`:
+
+| `code` | `cause` |
+| --- | --- |
+| `FORMATTING_ERROR` | the `Error[]` Fluent collected, e.g. `ReferenceError: Unknown variable: $name` |
+| `INVALID_ARGUMENT` | `{ unsupportedArguments: string[], errors: Error[] }` — the keys that could not be used, and why |
+
+`MISSING_MESSAGE` and `UNSUPPORTED_VALUE` have no cause: there is nothing underneath them. Fluent's errors are native `Error` objects, whose `message` is not enumerable — log the error itself rather than `JSON.stringify(error.cause)`, which yields `[{}]`.
+
 Missing and formatting errors are logged by default (`console.warn` / `console.error`); pass `onError() {}` to silence them completely. A throwing handler can never break a render. `debug: true` on `getTranslations()`/`createTranslator()` keeps the development-friendly `[MISSING: namespace.key]` output.
 
 ### Named formats

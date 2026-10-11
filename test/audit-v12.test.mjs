@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import { collectSourceFiles } from '../dist/catalog-io.js';
+import { createFluentBundle, createTranslator } from '../dist/bundle.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const CLI = path.join(root, 'bin/next-fluent.mjs');
@@ -376,4 +377,255 @@ test('the path conversion the assertions rely on is separator-independent', () =
   assert.equal(toPosix('app\\page.tsx'), 'app/page.tsx');
   assert.equal(toPosix('a\\b\\c.tsx'), 'a/b/c.tsx');
   assert.equal(toPosix('/already/posix.tsx'), '/already/posix.tsx');
+});
+
+// ---------------------------------------------------------------------------
+// V12-01. A public error code the library can never report
+// ---------------------------------------------------------------------------
+// `FluentErrorCode` is exported for applications to switch on, and one of its
+// five members — `ENVIRONMENT_FALLBACK`, documented in the source as "a less
+// specific locale had to be used for the request" — was never produced
+// anywhere: not by the translator, not by the formatter, not by the middleware.
+// The library does resolve a message from a less specific locale, silently and
+// correctly; it simply never said so, while the enum advertised that it would.
+//
+// Reporting it was not a small fix: every ordinary `en-GB` request that finds
+// its message in `en` would have to be announced, which is the library's normal
+// operation rather than a fault. So the code is gone instead, and the gate
+// below is what keeps the public surface from drifting away from the behaviour
+// again.
+
+test('every public error code is one the library actually reports', async () => {
+  const { FluentErrorCode } = await import('../dist/errors.js');
+  const source = await fs.promises.readFile(
+    path.join(root, 'src/errors.ts'),
+    'utf8'
+  );
+  // Everything except the declaration file itself.
+  const producers = await fs.promises.readFile(
+    path.join(root, 'src/bundle.ts'),
+    'utf8'
+  );
+
+  const codes = Object.values(FluentErrorCode);
+  assert.ok(codes.length >= 4, 'the error codes were removed along with the message text');
+
+  for (const code of codes) {
+    assert.match(
+      source,
+      new RegExp(`case FluentErrorCode\\.${code}:`),
+      `${code} has no message of its own`
+    );
+    assert.ok(
+      producers.includes(`FluentErrorCode.${code}`),
+      `${code} is public but nothing outside src/errors.ts ever reports it`
+    );
+  }
+});
+
+test('every error code names its key, and its locale when there is one', async () => {
+  const { FluentError, FluentErrorCode } = await import('../dist/errors.js');
+  const expected = {
+    [FluentErrorCode.MISSING_MESSAGE]: 'Missing message "nav.home"',
+    [FluentErrorCode.FORMATTING_ERROR]: 'Could not format message "nav.home"',
+    [FluentErrorCode.INVALID_ARGUMENT]: 'Invalid argument for message "nav.home"',
+    [FluentErrorCode.UNSUPPORTED_VALUE]: 'Unsupported value for message "nav.home"',
+  };
+
+  for (const [code, prefix] of Object.entries(expected)) {
+    const error = new FluentError({ code, key: 'home', namespace: 'nav' });
+    assert.equal(error.message, `[next-fluent] ${prefix}`);
+    assert.equal(error.path, 'nav.home');
+
+    const withLocale = new FluentError({ code, key: 'home', namespace: 'nav', locale: 'ru' });
+    assert.equal(withLocale.message, `[next-fluent] ${prefix} (locale: ru)`);
+  }
+});
+
+test('a key with no namespace is reported by itself', async () => {
+  const { FluentError, FluentErrorCode } = await import('../dist/errors.js');
+  const error = new FluentError({ code: FluentErrorCode.MISSING_MESSAGE, key: 'title' });
+  assert.equal(error.message, '[next-fluent] Missing message "title"');
+  assert.equal(error.path, 'title');
+});
+
+test('an unknown code still produces a message instead of undefined', async () => {
+  const { FluentError } = await import('../dist/errors.js');
+  // Plain JavaScript can pass anything; the contract is a string.
+  const error = new FluentError({ code: 'SOMETHING_ELSE', key: 'title' });
+  assert.equal(error.message, '[next-fluent] Localization error for "title"');
+  assert.equal(typeof error.message, 'string');
+});
+
+// ---------------------------------------------------------------------------
+// V12-02. What an error actually carries
+// ---------------------------------------------------------------------------
+// `onError` hands the application a `FluentError`, and four places in the
+// library attach a `cause` to it: two in the translator, two in `t.attrs()`.
+// None of them had a test, and nothing documented the shape, so an application
+// writing a handler had no way to find out what it receives.
+
+/** Translates `messages` and returns every error the handler was given. */
+function collectErrors(messages, run, options = {}) {
+  const seen = [];
+  const t = createTranslator(createFluentBundle('en', messages), {
+    onError: (error) => seen.push(error),
+    getMessageFallback: () => '<fallback>',
+    ...options,
+  });
+  run(t);
+  return seen;
+}
+
+test('a formatting error carries the Fluent error that stopped it', () => {
+  const seen = collectErrors('greet = Hi { $name }', (t) => t('greet'));
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].code, 'FORMATTING_ERROR');
+  assert.ok(Array.isArray(seen[0].cause), 'the cause is the list Fluent collected');
+  assert.match(seen[0].cause[0].message, /Unknown variable: \$name/);
+  // Without it, the message says only "could not format" and names no reason.
+  assert.equal(seen[0].message, '[next-fluent] Could not format message "greet" (locale: en)');
+});
+
+test('an invalid argument names the arguments it could not use', () => {
+  const seen = collectErrors('greet = Hi { $name }', (t) => t('greet', { name: null }));
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].code, 'INVALID_ARGUMENT');
+  assert.deepEqual(seen[0].cause.unsupportedArguments, ['name'], 'the rejected keys are named');
+  assert.ok(Array.isArray(seen[0].cause.errors));
+  assert.match(seen[0].cause.errors[0].message, /Unknown variable: \$name/);
+});
+
+test('an argument the library cannot turn into a Fluent value is named too', () => {
+  const seen = collectErrors('greet = Hi { $name }', (t) =>
+    t('greet', { name: { deep: { nested: true } } })
+  );
+  assert.equal(seen[0].code, 'INVALID_ARGUMENT');
+  assert.deepEqual(seen[0].cause.unsupportedArguments, ['name']);
+});
+
+test('t.attrs() reports the same way and renders nothing rather than throwing', () => {
+  const seen = collectErrors(
+    'field = Name\n    .placeholder = Your { $name }\n',
+    (t) => {
+      const attrs = t.attrs('field');
+      assert.deepEqual(attrs, {}, 'a failed attribute set spreads to nothing');
+    }
+  );
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].code, 'FORMATTING_ERROR');
+  assert.ok(Array.isArray(seen[0].cause));
+  assert.match(seen[0].cause[0].message, /Unknown variable: \$name/);
+  assert.equal(seen[0].message, '[next-fluent] Could not format message "field" (locale: en)');
+});
+
+test('a function in defaultTranslationValues does not reach the client', async () => {
+  const React = (await import('react')).default;
+  // `FluentServerProvider` is async and suspends, so it needs the suspending
+  // renderer rather than `renderToStaticMarkup`.
+  const { prerender } = await import('react-dom/static');
+  const { FluentServerProvider } = await import('../dist/server-provider.js');
+  const { useTranslations } = await import('../dist/client.js');
+  const { setRequestConfig, getRequestConfig } = await import('../dist/server.js');
+
+  // React cannot serialize a function across the RSC boundary, so the provider
+  // drops them. Node renders neither half of that boundary, which is why the
+  // filter itself is asserted against the source and the outcome against the
+  // render: a function in the config must not break the tree, and the plain
+  // values beside it must still reach the messages.
+  const source = await fs.promises.readFile(
+    path.join(root, 'src/server-provider.ts'),
+    'utf8'
+  );
+  assert.match(source, /typeof value !== 'function'/);
+
+  const previous = getRequestConfig();
+  setRequestConfig(async ({ locale }) => ({
+    locale,
+    messages: 'greet = Hi { $who }\n',
+    defaultTranslationValues: { who: 'World', later: () => 'unused' },
+  }));
+  try {
+    const Child = () => {
+      const t = useTranslations();
+      return React.createElement('span', null, t('greet'));
+    };
+    const { prelude } = await prerender(
+      React.createElement(FluentServerProvider, { locale: 'en' }, React.createElement(Child))
+    );
+    const decoder = new TextDecoder();
+    let html = '';
+    for await (const chunk of prelude) html += decoder.decode(chunk, { stream: true });
+    // Fluent isolates interpolated values with U+2068/U+2069; that is
+    // presentation, not content.
+    assert.match(html.replace(/[\u2066-\u2069]/g, ''), /Hi World/);
+  } finally {
+    if (previous) setRequestConfig(previous);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// V12-03. The diagnostics themselves
+// ---------------------------------------------------------------------------
+// The parser's own reporting — what it says about a catalog it could not read —
+// is the first thing an author sees when a file has a typo, and none of its
+// branches were exercised: junk without a key in front of it, one entry against
+// several, and the provider's own defaults.
+
+test('junk the parser cannot attribute to a key is still reported', async () => {
+  const { junkEntries, parseFtl } = await import('../dist/ftl-parse.js');
+  // A stray brace is junk with no `key =` in front of it, so there is no id to
+  // name — which must not make the entry disappear.
+  assert.deepEqual(junkEntries(parseFtl('ok = Fine\n}\n', 'test')), [{ id: undefined, snippet: '}' }]);
+  assert.deepEqual(junkEntries(parseFtl('ok = Fine\n= orphan\n', 'test')), [
+    { id: undefined, snippet: '= orphan' },
+  ]);
+  // A key the parser did read keeps its name.
+  assert.deepEqual(junkEntries(parseFtl('ok = Fine\n}\nbroken = {\n', 'test')), [
+    { id: undefined, snippet: '}' },
+    { id: 'broken', snippet: 'broken = {' },
+  ]);
+});
+
+test('an unparsable catalog counts entries the way a person reads them', async () => {
+  const { unparsableCatalogError } = await import('../dist/ftl-parse.js');
+  const one = unparsableCatalogError([{ id: undefined, snippet: '}' }], 'messages/en.ftl');
+  assert.match(one.message, /contains 1 entry the Fluent parser cannot read: "}"/);
+  assert.equal(one.key, '<catalog>', 'with no key of its own, the catalog is named instead');
+
+  const named = unparsableCatalogError([{ id: 'broken', snippet: 'broken = {' }], 'messages/en.ftl');
+  assert.equal(named.key, 'broken', 'a single named entry can be named');
+
+  const several = unparsableCatalogError(
+    [
+      { id: undefined, snippet: '}' },
+      { id: 'broken', snippet: 'broken = {' },
+    ],
+    'messages/en.ftl'
+  );
+  assert.match(several.message, /contains 2 entries .*: "}"; "broken = \{"/);
+  assert.equal(several.key, '<catalog>');
+});
+
+test('the provider renders with no default translation values at all', async () => {
+  const React = (await import('react')).default;
+  const { prerender } = await import('react-dom/static');
+  const { FluentServerProvider } = await import('../dist/server-provider.js');
+  const { useTranslations } = await import('../dist/client.js');
+  const { setRequestConfig, getRequestConfig } = await import('../dist/server.js');
+
+  const previous = getRequestConfig();
+  setRequestConfig(async ({ locale }) => ({ locale, messages: 'greet = Hi\n' }));
+  try {
+    const Child = () => React.createElement('span', null, useTranslations()('greet'));
+    const { prelude } = await prerender(
+      React.createElement(FluentServerProvider, { locale: 'en' }, React.createElement(Child))
+    );
+    const decoder = new TextDecoder();
+    let html = '';
+    for await (const chunk of prelude) html += decoder.decode(chunk, { stream: true });
+    assert.match(html, /Hi/);
+  } finally {
+    if (previous) setRequestConfig(previous);
+  }
 });

@@ -76,6 +76,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Breaking (no released version depended on it):** `FluentErrorCode` no longer
+  contains `ENVIRONMENT_FALLBACK`. The public enum described it as "a less
+  specific locale had to be used for the request", but nothing in the library
+  ever reported it — a `ru-RU` bundle falling back to `ru` resolves silently,
+  as it should. An application switching on `error.code` was carrying a branch
+  for an event that could not arrive. Reporting it instead would have announced
+  ordinary locale negotiation on every request, so the code is gone and
+  `test/audit-v12.test.mjs` fails if a public code ever stops being reportable.
+
 - **Breaking (no released version depended on it):** `fnv1a32` and `fnv1a64` are
   no longer exported. The second was a "backwards-compatible alias" that ran the
   32-bit implementation, so the public surface offered a function whose name
