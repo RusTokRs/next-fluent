@@ -8,6 +8,7 @@ import { createServer as createTcpServer } from 'node:net';
 import { createServer as createHttpsServer } from 'node:https';
 import { request as httpRequest } from 'node:http';
 import { chromium } from 'playwright';
+import { cleanNpmEnv } from './npm-env.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const target = await mkdtemp(join(root, '.next-integration-domains-'));
@@ -16,7 +17,7 @@ let serverOutput = '';
 const errors = [];
 const requests = [];
 
-function run(command, args, cwd = target, env = process.env, stdio = 'inherit') {
+function run(command, args, cwd = target, env = cleanNpmEnv(), stdio = 'inherit') {
   const result = spawnSync(command, args, { cwd, env, stdio });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`${command} ${args.join(' ')} failed (${result.status})`);
@@ -47,7 +48,7 @@ try {
 
   // Certificates and keys are ephemeral test artifacts, never shipped or committed.
   run('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
-    '-subj', '/CN=*.next-fluent.test', '-keyout', 'test-key.pem', '-out', 'test-cert.pem'], target, process.env, 'pipe');
+    '-subj', '/CN=*.next-fluent.test', '-keyout', 'test-key.pem', '-out', 'test-cert.pem'], target, cleanNpmEnv(), 'pipe');
   proxy = createHttpsServer({ key: await readFile(join(target, 'test-key.pem')), cert: await readFile(join(target, 'test-cert.pem')) }, (req, res) => {
     const upstream = httpRequest({ hostname: '127.0.0.1', port: backendPort, path: req.url, method: req.method,
       headers: { ...req.headers, 'x-forwarded-proto': 'https', 'x-forwarded-host': req.headers.host } }, (response) => {
@@ -58,7 +59,7 @@ try {
     req.pipe(upstream);
   });
   const port = await listen(proxy);
-  const env = { ...process.env, NEXT_TELEMETRY_DISABLED: '1', NEXT_PUBLIC_DOMAIN_TEST_PORT: String(port) };
+  const env = cleanNpmEnv({ NEXT_TELEMETRY_DISABLED: '1', NEXT_PUBLIC_DOMAIN_TEST_PORT: String(port) });
   console.log(`[next-fluent] Domain browser fixture: Next ${version}, TLS port ${port}`);
   run(process.execPath, [nextCli, 'build'], target, env);
   server = spawn(process.execPath, [nextCli, 'start', '--hostname', '0.0.0.0', '--port', String(backendPort)],

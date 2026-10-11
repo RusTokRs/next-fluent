@@ -505,6 +505,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   from a production bundle (verified by the size budget, which measures the same
   fixture as a development build and fails if the two collapse to one size).
 
+- **The release dry run broke the Next integration harness.** npm hands its own
+  configuration to scripts as `npm_config_*`, so `npm publish --dry-run` set
+  `npm_config_dry_run=true` for everything it ran — including the harness's
+  nested `npm install` for Next 16, which then reported "added 54 packages"
+  while writing nothing, and the run died later on a bare `ENOENT` for
+  `node_modules/next/package.json`. The harnesses now build their child
+  environments through `scripts/npm-env.mjs`, which drops that namespace and
+  keeps everything else; the manual dispatch of the Publish workflow (dry run by
+  default) completes end to end again.
+
 ### Security
 
 - **Open redirect closed.** With `localePrefix: 'never'` (and `'as-needed'` for

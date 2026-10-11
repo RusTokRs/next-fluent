@@ -5,8 +5,11 @@
  * budget now measures what an app imports instead of the aggregate facade, the
  * catalog diagnostics cover the browser path in development only, and the
  * dotted-key precedence left from V5-06 is pinned as intended behaviour rather
- * than an open question. The publish workflow's dry run is verified outside this
- * file (`npm publish --dry-run`, see the report).
+ * than an open question. Verifying the publish workflow (V7-04) then turned up
+ * V7-05: `npm publish --dry-run` leaks `npm_config_dry_run` into the Next
+ * integration harness, whose nested `npm install` therefore installs nothing.
+ * Those two tests pin the helper that keeps npm's own configuration out of the
+ * child processes this repository starts.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -156,6 +159,55 @@ test('V7-01: the server runtime keeps reporting in production', async () => {
 
   assert.equal(warnings.length, 1, warnings.join('\n'));
   assert.match(warnings[0], /"broken-v7-01-server"/);
+});
+
+// ---------------------------------------------------------------------------
+// V7-05: a nested npm install inherited npm's own configuration
+// ---------------------------------------------------------------------------
+/** Runs `run` with the given environment variables set, restoring them after. */
+function withEnv(vars, run) {
+  const previous = new Map(Object.keys(vars).map((key) => [key, process.env[key]]));
+  Object.assign(process.env, vars);
+  try {
+    return run();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+test('V7-05: cleanNpmEnv strips the npm config namespace and keeps everything else', async () => {
+  const { cleanNpmEnv, inheritedNpmConfigKeys } = await import('../scripts/npm-env.mjs');
+  const env = withEnv({ npm_config_dry_run: 'true', NPM_CONFIG_OFFLINE: 'true' }, () =>
+    cleanNpmEnv({ NEXT_TELEMETRY_DISABLED: '1' })
+  );
+
+  assert.ok(
+    !Object.keys(env).some((key) => /^npm_config_/i.test(key)),
+    `npm configuration survived: ${Object.keys(env).filter((key) => /^npm_config_/i.test(key)).join(', ')}`
+  );
+  assert.equal(env.NEXT_TELEMETRY_DISABLED, '1');
+  assert.equal(env.PATH, process.env.PATH, 'unrelated variables are preserved');
+
+  const inherited = withEnv({ npm_config_dry_run: 'true', NPM_CONFIG_OFFLINE: 'true' }, () =>
+    inheritedNpmConfigKeys()
+  );
+  assert.ok(inherited.includes('npm_config_dry_run'));
+  assert.ok(inherited.includes('NPM_CONFIG_OFFLINE'), 'the check is case-insensitive');
+});
+
+test('V7-05: both integration harnesses build child environments through the helper', () => {
+  for (const file of ['test-next-integration.mjs', 'test-domain-browser.mjs']) {
+    const source = fs.readFileSync(new URL(`../scripts/${file}`, import.meta.url), 'utf8');
+    assert.ok(source.includes('cleanNpmEnv'), `${file} does not use cleanNpmEnv`);
+    assert.ok(
+      !source.includes('...process.env'),
+      `${file} spreads process.env into a child process again — a nested npm install would ` +
+        'inherit `npm_config_dry_run` and install nothing (V7-05)'
+    );
+  }
 });
 
 // ---------------------------------------------------------------------------

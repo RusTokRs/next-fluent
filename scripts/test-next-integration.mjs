@@ -4,6 +4,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
+import { cleanNpmEnv, inheritedNpmConfigKeys } from './npm-env.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const fixture = join(root, 'test', 'fixtures', 'next-app');
@@ -94,7 +95,7 @@ async function checkRuntime(nextCli) {
   const child = spawn(process.execPath, [nextCli, 'start', '--hostname', 'localhost', '--port', String(port)], {
     cwd: target,
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, NEXT_TELEMETRY_DISABLED: '1' },
+    env: cleanNpmEnv({ NEXT_TELEMETRY_DISABLED: '1' }),
   });
   let output = '';
   child.stdout.on('data', (chunk) => { output += chunk.toString(); });
@@ -240,9 +241,22 @@ try {
            `next@${nextOverride}`, 'react@19', 'react-dom@19']
         : ['install', '--no-save', '--no-audit', '--no-fund',
            `next@${nextOverride}`, 'react@19', 'react-dom@19'],
-      { cwd: target, stdio: 'inherit', env: { ...process.env, NEXT_TELEMETRY_DISABLED: '1' } }
+      { cwd: target, stdio: 'inherit', env: cleanNpmEnv({ NEXT_TELEMETRY_DISABLED: '1' }) }
     );
     if (install.status !== 0) throw new Error(`Installing next@${nextOverride} failed.`);
+    // `npm install` reports success in dry-run mode while writing nothing, so a
+    // leaked `npm_config_*` turns into an ENOENT deep inside the later build.
+    // Name the cause while it is still recognizable. `cleanNpmEnv` already
+    // filters those keys out; if one still reaches this point, say which.
+    if (!existsSync(join(nextRoot(), 'package.json'))) {
+      const leaked = inheritedNpmConfigKeys();
+      throw new Error(
+        'Installing next@' + nextOverride + ' wrote no node_modules/next. ' +
+          (leaked.length > 0
+            ? `Inherited npm configuration that npm applies to nested installs: ${leaked.join(', ')}.`
+            : 'The install reported success without installing anything.')
+      );
+    }
   }
 
   // Linked after any install: npm prunes packages it does not know about, which
@@ -261,7 +275,7 @@ try {
   const result = spawnSync(process.execPath, [nextCli, 'build'], {
     cwd: target,
     stdio: 'inherit',
-    env: { ...process.env, NEXT_TELEMETRY_DISABLED: '1' },
+    env: cleanNpmEnv({ NEXT_TELEMETRY_DISABLED: '1' }),
   });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`Next integration build failed (${result.status}).`);
