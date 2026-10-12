@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { AppRouterContext } from 'next/dist/shared/lib/app-router-context.shared-runtime.js';
@@ -85,7 +86,10 @@ test('V19-01: a default set before any locale list is checked as a tag', async (
   // The "no locale list configured yet" branch reads module globals, so it is
   // only reachable in a process nothing else has configured. Measured in a
   // child rather than faked by reordering tests.
-  const module = path.resolve('dist/server.js').replaceAll('\\', '/');
+  // A file URL, not a POSIX-ified path: on Windows `D:/a/.../server.js` parses
+  // as a URL with the scheme `d:`, and the child dies with
+  // ERR_UNSUPPORTED_ESM_URL_SCHEME before the assertion is ever reached.
+  const module = pathToFileURL(path.resolve('dist/server.js')).href;
   const run = (code) =>
     new Promise((resolve) => {
       execFile(

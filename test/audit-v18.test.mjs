@@ -22,6 +22,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { execFile } from 'node:child_process';
 import test from 'node:test';
 
@@ -278,12 +279,14 @@ test('V18-03: check and the runtime keep the same duplicate definition', () => {
   });
 });
 
-test('V18-03: catalog order does not depend on the process locale', async () => {
+test('V18-03: catalog order does not depend on the process locale', async (t) => {
   // `localeCompare` collates by the ICU default locale, which Node takes from
   // the environment — so a build-time tool that sorted with it produced
   // different output on different machines. Read the same tree under two
   // collations, in child processes, and require the same answer.
-  const module = path.resolve('dist/catalog-io.js').replaceAll('\\', '/');
+  // A file URL, not a POSIX-ified path: a Windows drive letter parses as a URL
+  // scheme and the child dies with ERR_UNSUPPORTED_ESM_URL_SCHEME.
+  const module = pathToFileURL(path.resolve('dist/catalog-io.js')).href;
   const script =
     `import { readCatalogsByLocale } from '${module}';\n` +
     'process.stdout.write(JSON.stringify(readCatalogsByLocale(process.argv[2]).en));\n';
@@ -293,6 +296,14 @@ test('V18-03: catalog order does not depend on the process locale', async () => 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'next-fluent-v18-icu-'));
   try {
     fs.writeFileSync(path.join(dir, 'EN.ftl'), 'k = FROM_UPPER\n');
+    if (fs.existsSync(path.join(dir, 'en.ftl'))) {
+      // Windows and default macOS are case-insensitive, so `EN.ftl` and `en.ftl`
+      // are the same file there and the pair this test collates cannot exist.
+      // Skipping is the honest outcome: the property is about collation order,
+      // and this filesystem cannot express the input.
+      t.skip('the filesystem is case-insensitive, so EN.ftl and en.ftl are one file');
+      return;
+    }
     fs.writeFileSync(path.join(dir, 'en.ftl'), 'k = FROM_LOWER\n');
 
     const read = (env) =>
