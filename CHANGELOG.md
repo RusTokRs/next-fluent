@@ -201,6 +201,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The catalog watcher now reports an unusable target for both of its strategies.
+  The "is this a directory" check sat after the `unref` branch, and the Next.js
+  plugin always passes `unref: true` — so a `typegen.input` pointing at a single
+  catalog file generated types successfully and then watched nothing, silently:
+  `writeTypeDeclarations` accepts a file, and a snapshot of an unreadable path is
+  always the same empty string, so the poller never saw a change and never said
+  anything.
+
+
 - **`configureServerI18n` validated nothing, and it decided which locale the
   server rendered.** Every other configuration entry point in the package runs
   `validateI18nConfig`; this one accepted anything. `configureServerI18n({

@@ -332,6 +332,25 @@ export function watchCatalogs(
     }, 50);
   };
 
+  // Checked before either watch strategy, not just the `fs.watch` one. The
+  // polling branch used with `unref` compares snapshots, and a snapshot of
+  // something unreadable is always the same empty string — so an unusable target
+  // there never changes, never regenerates and never says anything. The Next.js
+  // plugin always passes `unref`, which made a `typegen.input` pointing at a
+  // single catalog file look like it was being watched while nothing was.
+  let stats: fs.Stats | undefined;
+  try {
+    stats = fs.statSync(input, { throwIfNoEntry: false });
+  } catch {
+    stats = undefined;
+  }
+  if (!stats?.isDirectory()) {
+    handlers.onError?.(
+      new Error(`[next-fluent] Cannot watch ${input}: it is not a directory.`)
+    );
+    return () => clearTimeout(timer);
+  }
+
   if (handlers.unref) {
     let signature = catalogSnapshot(input);
     const poller = setInterval(() => {
@@ -352,19 +371,6 @@ export function watchCatalogs(
   // throws synchronously, but Node 24 and Windows hand back a watcher that never
   // fires and never reports, leaving the dev watcher silently dead. Checking the
   // target first turns that into the `onError` the callers already expect.
-  let stats: fs.Stats | undefined;
-  try {
-    stats = fs.statSync(input, { throwIfNoEntry: false });
-  } catch {
-    stats = undefined;
-  }
-  if (!stats?.isDirectory()) {
-    handlers.onError?.(
-      new Error(`[next-fluent] Cannot watch ${input}: it is not a directory.`)
-    );
-    return () => clearTimeout(timer);
-  }
-
   let watcher: fs.FSWatcher;
   try {
     watcher = fs.watch(input, { recursive: true }, (_event, filename) => {

@@ -205,6 +205,18 @@ function watchCatalogs(input, output, handlers = {}) {
       }
     }, 50);
   };
+  let stats;
+  try {
+    stats = import_node_fs.default.statSync(input, { throwIfNoEntry: false });
+  } catch {
+    stats = void 0;
+  }
+  if (!stats?.isDirectory()) {
+    handlers.onError?.(
+      new Error(`[next-fluent] Cannot watch ${input}: it is not a directory.`)
+    );
+    return () => clearTimeout(timer);
+  }
   if (handlers.unref) {
     let signature = catalogSnapshot(input);
     const poller = setInterval(() => {
@@ -219,18 +231,6 @@ function watchCatalogs(input, output, handlers = {}) {
       clearInterval(poller);
       clearTimeout(timer);
     };
-  }
-  let stats;
-  try {
-    stats = import_node_fs.default.statSync(input, { throwIfNoEntry: false });
-  } catch {
-    stats = void 0;
-  }
-  if (!stats?.isDirectory()) {
-    handlers.onError?.(
-      new Error(`[next-fluent] Cannot watch ${input}: it is not a directory.`)
-    );
-    return () => clearTimeout(timer);
   }
   let watcher;
   try {
