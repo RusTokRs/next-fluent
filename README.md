@@ -307,7 +307,7 @@ export default async function RootLayout({
 
 > **Static rendering.** Next.js renders layouts and pages independently, so `setRequestLocale(locale)` must be called in **every page and every layout** that should be prerendered — not only in the root layout. Without it, `getTranslations()` falls back to reading request headers and the route silently opts into dynamic rendering (the CI fixture fails the build if any localized route stops being prerendered).
 
-Custom Fluent functions and callback-based rich values must be registered in a Client Component because React cannot serialize functions across the server/client boundary. For consistent date formatting, use `FluentServerProvider` or await `getRequestConfigSnapshot()` before calling the synchronous `getNow()` and `getTimeZone()` helpers.
+Custom Fluent functions and callback-based rich values must be registered in a Client Component because React cannot serialize functions across the server/client boundary — see [Custom Fluent functions](#custom-fluent-functions) for the request-config option and the client-side half. For consistent date formatting, use `FluentServerProvider` or await `getRequestConfigSnapshot()` before calling the synchronous `getNow()` and `getTimeZone()` helpers.
 
 ### 6. Navigation Helpers (`src/i18n/navigation.ts`)
 
@@ -537,6 +537,54 @@ An unknown format name or an unknown IANA `timeZone` is reported once (listing t
 name and the config option it belongs to) instead of silently degrading; date/time
 output keeps formatting in the runtime's zone rather than turning into an ISO
 string, so a typo in the config is visible but never breaks the page.
+
+### Custom Fluent functions
+
+Fluent ships `NUMBER`, `DATETIME`, `PLURAL` and friends. Add your own through the
+request config, and every message can call them:
+
+```ts
+// src/i18n/request.ts
+import { createDefaultFunctions } from 'next-fluent';
+
+export default setRequestConfig(async ({ locale }) => ({
+  locale,
+  messages: (await import(`../../messages/${locale}.ftl`)).default,
+  functions: {
+    ...createDefaultFunctions(locale),
+    BRL: ([amount]) => `R$ ${Number(amount.valueOf()).toFixed(2)}`,
+  },
+}));
+```
+
+```ftl
+price = Total: { BRL($amount) }
+```
+
+**They do not cross into Client Components.** A function is code, so no
+serializer can carry it over the Server Component boundary —
+`<FluentServerProvider>` forwards messages, fallbacks, `now`, `timeZone` and the
+serializable defaults, and cannot forward `functions`. A message that calls one
+therefore formats on the server and renders its own key in a Client Component.
+In development the provider warns and names every function it had to drop; the
+fix is to define them on the client side too:
+
+```tsx
+'use client';
+import { FluentProvider } from 'next-fluent';
+import { BRL } from '@/i18n/functions';   // a module both sides can import
+
+export function ClientProviders({ locale, messages, children }) {
+  return (
+    <FluentProvider locale={locale} messages={messages} functions={{ BRL }}>
+      {children}
+    </FluentProvider>
+  );
+}
+```
+
+Keeping the functions in a shared module with no server-only imports is what
+makes both sides agree.
 
 ### Non-HTML output (`useIsolating`)
 

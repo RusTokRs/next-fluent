@@ -7,6 +7,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`<FluentServerProvider>` now reports what it cannot serialize.** When the
+  request config defines Fluent functions, the provider warns in development and
+  names every one it had to drop. A function is code, so nothing can carry it
+  across the Server Component boundary: the message formats on the server and
+  renders its own key in a Client Component, and until now nothing said so. The
+  warning points at the fix — define the functions on a `<FluentProvider
+  functions={…}>` inside a `'use client'` wrapper as well. Production is
+  unaffected.
+- **Custom Fluent functions are documented.** The `functions` option of the
+  request config previously appeared nowhere in `README.md`; the boundary was
+  mentioned in a single sentence with no example and no description of the
+  symptom. There is now a section covering the request-config side, the
+  client-side half, and why both share one module.
 - **`getLocaleDirection(locale)`.** Returns `'rtl'` for Arabic, Hebrew, Persian,
   Urdu and the rest, `'ltr'` otherwise, so `<html lang={locale}
   dir={getLocaleDirection(locale)}>` works without keeping a locale list by hand.

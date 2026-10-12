@@ -6,6 +6,12 @@ async function FluentServerProvider({ children, locale }) {
   const defaultTranslationValues = config.defaultTranslationValues ? Object.fromEntries(Object.entries(config.defaultTranslationValues).filter(
     ([, value]) => typeof value !== "function"
   )) : void 0;
+  const customFunctions = config.functions ? Object.keys(config.functions) : [];
+  if (customFunctions.length > 0 && process.env.NODE_ENV !== "production") {
+    console.warn(
+      `[next-fluent] The request config defines Fluent function${customFunctions.length === 1 ? "" : "s"} ${customFunctions.map((name) => `"${name}"`).join(", ")}, which cannot cross the Server Component boundary. Messages that call them will not format in Client Components. Define them on a \`<FluentProvider functions={\u2026}>\` inside a \`'use client'\` wrapper as well.`
+    );
+  }
   return React.createElement(FluentProvider, {
     locale: config.locale,
     messages: config.messages,
