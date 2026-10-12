@@ -78,8 +78,18 @@ jobs:
       # Re-runs the suite under Node's coverage reporter and fails if the totals
       # drop below the floor in scripts/coverage.mjs. The audit reports quote
       # these numbers; before this step nothing recorded or enforced them.
+      # On failure the tail of the report is re-emitted as an annotation: job
+      # logs sit on a separate CDN, and the whole point of a numeric gate is
+      # that the number is readable where the failure is.
       - name: Verify coverage floor
-        run: npm run coverage
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run coverage 2>&1 | tee /tmp/coverage.log || {
+            MSG=$(tail -n 45 /tmp/coverage.log | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=coverage floor not met::${MSG}"
+            exit 1
+          }
 
       - name: Verify client bundle size budgets
         run: npm run size
