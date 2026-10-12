@@ -80,10 +80,7 @@ function getCachedFluentBundle(locale, rawSource, options = {}) {
   for (const src of sources) {
     if (!src || typeof src !== "string") continue;
     const resource = options.disableCache ? new FluentResource(src) : getOrCreateResource(src);
-    const errors = bundle.addResource(resource, { allowOverrides: true });
-    if (errors && errors.length > 0) {
-      console.warn(`[next-fluent] Warnings adding FTL resource for locale ${locale}:`, errors);
-    }
+    bundle.addResource(resource, { allowOverrides: true });
   }
   if (cache) {
     cache.set(cacheKey, {

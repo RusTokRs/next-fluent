@@ -7,6 +7,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+### Removed
+
+- An unreachable `console.warn` in the bundle cache. It reported errors returned
+  by `FluentBundle.addResource`, but that method only ever returns errors for
+  overrides it refused, and the library calls it with `allowOverrides: true` —
+  both `errors.push` calls in `@fluent/bundle` are guarded by
+  `allowOverrides === false`. Duplicate ids are resolved last-wins on purpose and
+  reported where the catalog is read, so the warning could not fire. A
+  diagnostic that cannot fire reads like one that exists.
+
+
 - **`<FluentServerProvider>` now reports what it cannot serialize.** A function is
   code, so nothing can carry one across the Server Component boundary — and the
   provider drops four kinds of them: custom Fluent `functions`, callback entries
