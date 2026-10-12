@@ -7,14 +7,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- **`<FluentServerProvider>` now reports what it cannot serialize.** When the
-  request config defines Fluent functions, the provider warns in development and
-  names every one it had to drop. A function is code, so nothing can carry it
-  across the Server Component boundary: the message formats on the server and
-  renders its own key in a Client Component, and until now nothing said so. The
-  warning points at the fix — define the functions on a `<FluentProvider
-  functions={…}>` inside a `'use client'` wrapper as well. Production is
-  unaffected.
+- **`<FluentServerProvider>` now reports what it cannot serialize.** A function is
+  code, so nothing can carry one across the Server Component boundary — and the
+  provider drops four kinds of them: custom Fluent `functions`, callback entries
+  of `defaultTranslationValues`, `onError` and `getMessageFallback`. In
+  development it now warns once and names all of them, with the fix: define them
+  on a `<FluentProvider …>` inside a `'use client'` wrapper as well. Without it a
+  message formats on the server and renders its own key in a Client Component, a
+  `{rich}` placeholder loses its callback, and a custom fallback reverts to
+  `locale:key` — none of which said why. Production is unaffected.
+- **`npm run coverage`.** Runs the suite under Node's coverage reporter and fails
+  if lines, branches or functions drop below the floor in `scripts/coverage.mjs`.
+  The audit reports have quoted coverage since pass 15 and nothing recorded or
+  enforced it; CI now has a `Verify coverage floor` step.
 - **Custom Fluent functions are documented.** The `functions` option of the
   request config previously appeared nowhere in `README.md`; the boundary was
   mentioned in a single sentence with no example and no description of the

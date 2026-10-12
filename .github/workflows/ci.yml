@@ -75,6 +75,12 @@ jobs:
       - name: Verify edge runtime compatibility
         run: npm run test:edge
 
+      # Re-runs the suite under Node's coverage reporter and fails if the totals
+      # drop below the floor in scripts/coverage.mjs. The audit reports quote
+      # these numbers; before this step nothing recorded or enforced them.
+      - name: Verify coverage floor
+        run: npm run coverage
+
       - name: Verify client bundle size budgets
         run: npm run size
 

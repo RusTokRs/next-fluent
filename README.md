@@ -566,8 +566,10 @@ serializer can carry it over the Server Component boundary —
 `<FluentServerProvider>` forwards messages, fallbacks, `now`, `timeZone` and the
 serializable defaults, and cannot forward `functions`. A message that calls one
 therefore formats on the server and renders its own key in a Client Component.
-In development the provider warns and names every function it had to drop; the
-fix is to define them on the client side too:
+The same is true of the other things that are code rather than data: callback
+entries of `defaultTranslationValues`, `onError` and `getMessageFallback`. In
+development the provider warns once and names everything it had to drop; the fix
+is the same for all of them — define them on the client side too:
 
 ```tsx
 'use client';

@@ -250,9 +250,18 @@ npm run size → "Size budgets respected."
    стоит задать про `onError`, `getMessageFallback`, `richValues` с колбэками и
    `useIsolating` — что из них переходит, что теряется и что при этом
    диагностируется.
-5. **Дифференциальный фаззинг на других парax.** Приём V20-04 обобщается:
-   `readCatalogsByLocale` против `loadMessages`, `buildLocalizeUrl` против
-   `matchLocalePrefix`, `parseFtl` против `createFluentBundle`.
+5. **Дифференциальный фаззинг на других парах.** Приём V20-04 обобщается на пары,
+   где одна функция строит, а другая разбирает то же самое: `prefixForLocale`
+   против `matchLocalePrefix`, `parseFtl` против `createFluentBundle`.
+
+   > **Поправка (внесена в V21).** В первой редакции этого пункта были названы
+   > `buildLocalizeUrl` и пара «`readCatalogsByLocale` против `loadMessages`».
+   > Оба неверны: `buildLocalizeUrl` в репозитории не существует (URL-хелперы —
+   > `resolveLocalizedPathname`, `switchLocaleHref`, `rewriteToInternalPath`), а
+   > `loadMessages` — это колбэк из request-конфига (`types.ts:391`), который
+   > пишет пользователь, а не вторая реализация чтения каталога. Парой с
+   > `readCatalogsByLocale` он быть не может: сравнивать нечего. Пункт назван без
+   > проверки имён по коду — ровно та ошибка, которую V20 вменял отчёту V19.
 
 ## Приложение А. Изменённые файлы
 
