@@ -132,6 +132,18 @@ export function createNavigation<Locales extends readonly string[] = readonly st
             if (domain && domainLocalePrefix(locales, config.localePrefix, domain).mode !== 'always') return;
           }
           const targetLocale = options?.locale ?? currentLocale ?? defaultLocale;
+          // Deliberately *not* wrapped in `switchLocaleHref`, unlike `push` and
+          // `replace`. Those hand the router a temporary *signal* URL
+          // (`/en/about-us`) when the canonical href is prefix-less and an
+          // explicit switch would otherwise be indistinguishable from an
+          // ordinary visit; the middleware canonicalizes that signal **with a
+          // redirect** while persisting the cookie. So the URL that actually
+          // carries the page payload is the canonical one — which is exactly
+          // what prefetching warms. Prefetching the signal instead would warm a
+          // 307 and leave the real destination cold.
+          //
+          // The asymmetry is easy to misread as a missed call, so it is written
+          // down here; `V16-03` pins the resulting URLs.
           const target = getPathname({
             href,
             locale: targetLocale,

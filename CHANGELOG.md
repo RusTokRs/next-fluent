@@ -7,6 +7,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`getLocaleDirection(locale)`.** Returns `'rtl'` for Arabic, Hebrew, Persian,
+  Urdu and the rest, `'ltr'` otherwise, so `<html lang={locale}
+  dir={getLocaleDirection(locale)}>` works without keeping a locale list by hand.
+  The answer comes from `Intl.Locale`, i.e. the same CLDR data the formatters
+  use, so it cannot drift from them. Unknown or unusable tags return `'ltr'`
+  rather than throwing — a layout render is not the place to fail over a bad tag,
+  and every configuration entry point already reports one.
+
 - **Multi-domain browser regression.** `npm run test:next:domains` exercises a
   production Next app behind a TLS reverse proxy using Chromium: all prefix
   strategies, custom prefixes, basePath, Link/router switches, cookies and
@@ -158,6 +166,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   harness can still fail.
 
 ### Fixed
+
+- **`configureServerI18n` validated nothing, and it decided which locale the
+  server rendered.** Every other configuration entry point in the package runs
+  `validateI18nConfig`; this one accepted anything. `configureServerI18n({
+  locales: ['ru', 'de'] })` — `defaultLocale` is optional in the type — left the
+  default at `'en'`, so every request whose locale was not pinned resolved to a
+  locale the app does not ship, `loadMessages` found nothing, and the page
+  rendered its own keys as text with no warning anywhere. An invalid tag such as
+  `defaultLocale: 'not a tag'` was stored verbatim and surfaced later as
+  `Request config returned an invalid locale.`, blaming the request config for a
+  value passed here. Both are now rejected at the call site, with the same
+  validator the rest of the package uses.
 
 - **`next-fluent check` ignored symlinked catalogs.** `readCatalogsByLocale`
   walked the catalog directory itself, and a `Dirent` for a symlink is neither

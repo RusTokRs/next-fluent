@@ -79,6 +79,7 @@ import {
 import {
   canonicalizeLocale,
   hasLocale,
+  getLocaleDirection,
   normalizeLocaleTag,
   matchSupportedLocale,
   localeLookupCandidates,
@@ -121,6 +122,7 @@ export {
   getFormats,
   getFormatter,
   getLocale,
+  getLocaleDirection,
   getMessages,
   getNow,
   getRequestConfigSnapshot,

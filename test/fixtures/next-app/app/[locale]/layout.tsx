@@ -1,6 +1,7 @@
 import { notFound } from 'next/navigation';
 import { FluentServerProvider } from 'next-fluent/server-provider';
 import { setRequestLocale } from 'next-fluent/server';
+import { getLocaleDirection } from 'next-fluent';
 import { routing } from '../../i18n/routing';
 
 export function generateStaticParams() {
@@ -17,5 +18,7 @@ export default async function Layout({
   const { locale } = await params;
   if (!routing.locales.some((item) => item === locale)) notFound();
   setRequestLocale(locale, routing.locales);
-  return <html lang={locale}><body><FluentServerProvider locale={locale}>{children}</FluentServerProvider></body></html>;
+  // `dir` comes from the same CLDR data the formatters use, so an app that adds
+  // an RTL locale does not have to start keeping a direction list by hand.
+  return <html lang={locale} dir={getLocaleDirection(locale)}><body><FluentServerProvider locale={locale}>{children}</FluentServerProvider></body></html>;
 }

@@ -274,7 +274,7 @@ Without this module, `Accept-Language` detection is silently inert and `createI1
 import { notFound } from 'next/navigation';
 import { FluentServerProvider } from 'next-fluent/server-provider';
 import { setRequestLocale, getStaticParams } from 'next-fluent/server';
-import { hasLocale } from 'next-fluent';
+import { getLocaleDirection, hasLocale } from 'next-fluent';
 import { routing } from '@/i18n/routing';
 
 export function generateStaticParams() {
@@ -293,7 +293,8 @@ export default async function RootLayout({
   setRequestLocale(locale, routing.locales);
 
   return (
-    <html lang={locale}>
+    // `dir` comes from CLDR, so adding an RTL locale needs no code change.
+    <html lang={locale} dir={getLocaleDirection(locale)}>
       <body>
         <FluentServerProvider locale={locale}>
           {children}
@@ -744,6 +745,7 @@ The analyzer never writes to a catalog. It is also available programmatically as
 | `onError` / `getMessageFallback` / `IntlErrorCode` | ✅ `FluentErrorCode` | server *and* client |
 | `setRequestLocale` | ✅ | required in every page + layout for static rendering |
 | `hasLocale` | ✅ | canonical, case-insensitive |
+| `getLocaleDirection` | `getLocaleDirection` | `'ltr' \| 'rtl'` from CLDR, for `<html dir>` |
 | `getRequestConfig` | `setRequestConfig` | |
 | `createNextIntlPlugin` | `createNextFluentPlugin` | Webpack + Turbopack config alias |
 | `defineRouting` (`pathnames`, `domains`, `basePath`, `localePrefix`) | ✅ | |

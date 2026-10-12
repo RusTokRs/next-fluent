@@ -2,7 +2,12 @@ import { createFluentBundle, createTranslator } from "./bundle.js";
 import { warnAboutDroppedEntries } from "./catalog-integrity.js";
 import { isJsonCatalog, toFluentSource } from "./catalog.js";
 import { createFormatter } from "./formatter.js";
-import { canonicalizeLocale, matchSupportedLocale, resolveAcceptLanguage } from "./utils.js";
+import {
+  canonicalizeLocale,
+  matchSupportedLocale,
+  resolveAcceptLanguage,
+  validateI18nConfig
+} from "./utils.js";
 import { cache } from "react";
 import { getRequestStore, isRequestScopeActive } from "./request-store.js";
 let globalConfigFn = null;
@@ -10,12 +15,22 @@ let globalLocales = ["en"];
 let globalDefaultLocale = "en";
 let globalLocalesConfigured = false;
 function configureServerI18n(config) {
-  if (config.locales && config.locales.length > 0) {
-    globalLocales = config.locales;
+  const localesProvided = Boolean(config.locales && config.locales.length > 0);
+  const locales = localesProvided ? config.locales : globalLocales;
+  const defaultLocale = config.defaultLocale ?? globalDefaultLocale;
+  if (localesProvided || globalLocalesConfigured) {
+    validateI18nConfig({ locales, defaultLocale });
+  } else if (config.defaultLocale !== void 0 && !canonicalizeLocale(config.defaultLocale)) {
+    throw new Error(
+      `[next-fluent] Invalid "defaultLocale": ${JSON.stringify(config.defaultLocale)}`
+    );
+  }
+  if (localesProvided) {
+    globalLocales = locales;
     globalLocalesConfigured = true;
   }
   if (config.defaultLocale) {
-    globalDefaultLocale = config.defaultLocale;
+    globalDefaultLocale = defaultLocale;
   }
 }
 function setRequestConfig(fn) {

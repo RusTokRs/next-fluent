@@ -295,6 +295,14 @@ async function checkRuntime(nextCli) {
     if (!link.includes('hreflang="en"') || !link.includes('hreflang="ru"') || !link.includes('hreflang="x-default"')) {
       throw new Error(`Missing hreflang alternates on the localized route.\n${link}\n${output}`);
     }
+    // The document direction is rendered from the locale, so an app adding an
+    // RTL locale gets `<html dir>` without keeping a list. Both fixture locales
+    // are LTR; the RTL side of the helper is covered by `test/audit-v19`.
+    if (!localizedHtml.includes('dir="ltr"')) {
+      throw new Error(`Localized route did not render a document direction.\n${localizedHtml.slice(0, 300)}\n${output}`);
+    }
+    console.log('[next-fluent] Document direction rendered from the locale.');
+
     // `redirect()` without an explicit locale must resolve against the request
     // locale, not the default one. Both routes call `redirect('/about')`; only
     // `setRequestLocale` tells them apart, and the pathname mapping

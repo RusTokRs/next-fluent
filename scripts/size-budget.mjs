@@ -196,7 +196,15 @@ BUDGETS.push(
     entry: ceilingEntry,
     extraExternal: ['@fluent/bundle'],
     // Measured after the FTL-side diagnostics: 39.67 kB minified / 13.47 kB gzip.
-    maxMinified: 40.0 * 1024,
+    // Raised once, on measurement, by pass 19 (+135 B minified, 40894 → 41029 B):
+    // `getLocaleDirection` joins the browser-reachable surface, so an app can
+    // render `<html dir>` from a locale it already has instead of keeping a
+    // direction list by hand. The answer is read from `Intl.Locale`, i.e. the
+    // same CLDR data the formatters use, so the cost is the lookup and the
+    // fallback, not a locale table. The `configureServerI18n` validation this
+    // pass added is server-only and costs this ceiling nothing. Gzip is
+    // unchanged at 13.7 kB, inside the previous budget.
+    maxMinified: 40.25 * 1024,
     maxGzip: 14.0 * 1024,
   }
 );
