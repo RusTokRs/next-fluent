@@ -7,6 +7,48 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+### Removed
+
+- An unreachable `console.warn` in the bundle cache. It reported errors returned
+  by `FluentBundle.addResource`, but that method only ever returns errors for
+  overrides it refused, and the library calls it with `allowOverrides: true` —
+  both `errors.push` calls in `@fluent/bundle` are guarded by
+  `allowOverrides === false`. Duplicate ids are resolved last-wins on purpose and
+  reported where the catalog is read, so the warning could not fire. A
+  diagnostic that cannot fire reads like one that exists.
+
+
+- **`<FluentServerProvider>` now reports what it cannot serialize.** A function is
+  code, so nothing can carry one across the Server Component boundary — and the
+  provider drops four kinds of them: custom Fluent `functions`, callback entries
+  of `defaultTranslationValues`, `onError` and `getMessageFallback`. In
+  development it now warns once and names all of them, with the fix: define them
+  on a `<FluentProvider …>` inside a `'use client'` wrapper as well. Without it a
+  message formats on the server and renders its own key in a Client Component, a
+  `{rich}` placeholder loses its callback, and a custom fallback reverts to
+  `locale:key` — none of which said why. Production is unaffected.
+- **`npm run coverage`.** Runs the suite under Node's coverage reporter, scoped to
+  `dist/` with `--test-coverage-include`, and fails on Node's own
+  `--test-coverage-lines/-branches/-functions` thresholds. The audit reports have
+  quoted coverage since pass 15 and nothing recorded or enforced it; CI now has a
+  `Verify coverage floor` step. Scoping matters: Node's `# all files` row averages
+  in the test files and the scripts that run them, so the figures quoted in earlier
+  reports were library and harness together, and moved with every stub callback a
+  test defined. Library-only they are 97.34% lines / 93.48% branches / 96.80%
+  functions, against floors of 97 / 93 / 96.5.
+- **Custom Fluent functions are documented.** The `functions` option of the
+  request config previously appeared nowhere in `README.md`; the boundary was
+  mentioned in a single sentence with no example and no description of the
+  symptom. There is now a section covering the request-config side, the
+  client-side half, and why both share one module.
+- **`getLocaleDirection(locale)`.** Returns `'rtl'` for Arabic, Hebrew, Persian,
+  Urdu and the rest, `'ltr'` otherwise, so `<html lang={locale}
+  dir={getLocaleDirection(locale)}>` works without keeping a locale list by hand.
+  The answer comes from `Intl.Locale`, i.e. the same CLDR data the formatters
+  use, so it cannot drift from them. Unknown or unusable tags return `'ltr'`
+  rather than throwing — a layout render is not the place to fail over a bad tag,
+  and every configuration entry point already reports one.
+
 - **Multi-domain browser regression.** `npm run test:next:domains` exercises a
   production Next app behind a TLS reverse proxy using Chromium: all prefix
   strategies, custom prefixes, basePath, Link/router switches, cookies and
@@ -158,6 +200,65 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   harness can still fail.
 
 ### Fixed
+
+- The catalog watcher now reports an unusable target for both of its strategies.
+  The "is this a directory" check sat after the `unref` branch, and the Next.js
+  plugin always passes `unref: true` — so a `typegen.input` pointing at a single
+  catalog file generated types successfully and then watched nothing, silently:
+  `writeTypeDeclarations` accepts a file, and a snapshot of an unreadable path is
+  always the same empty string, so the poller never saw a change and never said
+  anything.
+
+
+- **`configureServerI18n` validated nothing, and it decided which locale the
+  server rendered.** Every other configuration entry point in the package runs
+  `validateI18nConfig`; this one accepted anything. `configureServerI18n({
+  locales: ['ru', 'de'] })` — `defaultLocale` is optional in the type — left the
+  default at `'en'`, so every request whose locale was not pinned resolved to a
+  locale the app does not ship, `loadMessages` found nothing, and the page
+  rendered its own keys as text with no warning anywhere. An invalid tag such as
+  `defaultLocale: 'not a tag'` was stored verbatim and surfaced later as
+  `Request config returned an invalid locale.`, blaming the request config for a
+  value passed here. Both are now rejected at the call site, with the same
+  validator the rest of the package uses.
+
+- **`next-fluent check` ignored symlinked catalogs.** `readCatalogsByLocale`
+  walked the catalog directory itself, and a `Dirent` for a symlink is neither
+  `isFile()` nor `isDirectory()`, so `messages/en.ftl → ../shared/en.ftl` — how a
+  monorepo shares one catalog between apps — never became a locale at all.
+  `check` then elected a different reference locale, compared every other locale
+  against a smaller key set, and did not report translations that really were
+  missing, while `typegen` in the same command read the same file without
+  trouble. The grouping is now derived from the same walk the runtime and
+  `typegen` use, so agreement is structural rather than something two
+  implementations have to keep remembering.
+
+- **`next-fluent check` and the runtime disagreed about which duplicate wins.**
+  Fluent resolves a duplicate message id last-wins, so the read order decides
+  which of two definitions ships. `check` sorted catalogs with `localeCompare` —
+  the process's ICU collation, i.e. a different answer on a different machine —
+  while the runtime and `typegen` sorted by code units. For `EN.ftl` beside
+  `en.ftl` the two kept opposite definitions, and the duplicate warning that
+  says "Fluent keeps the last definition" pointed the developer at the wrong
+  entry to delete. There is now one sort, in one place.
+
+- **A JSON catalog could define the same FTL attribute twice.** `normalizeId`
+  folds `.` into `-` and a leading `.` is accepted as the attribute marker, so
+  `"label"` beside `".label"` — or `"a.b"` beside `"a-b"` — both landed on one
+  attribute. The runtime silently kept the last one and `typegen` dropped one of
+  them, so an author's translation disappeared with nothing to say so. Message
+  ids were already guarded against exactly this; attributes now are too, with
+  both JSON paths named.
+
+- **`redirect()` always meant the default locale.** `useRouter().push` resolved
+  an href against `options.locale ?? currentLocale ?? defaultLocale`, while
+  `redirect` skipped the middle term because a Server Component has no hook to
+  read it from — so on a Russian page `redirect('/about')` sent the visitor to
+  the English pathname while the button beside it calling `push('/about')` kept
+  them on the Russian one. `redirect` and `permanentRedirect` now resolve the
+  locale `setRequestLocale` stored, falling back to `defaultLocale` exactly as
+  before when no request locale is known. Verified against live requests on
+  Next.js 15 and 16.
 
 - **`next-fluent check` reported "no issues" for translations that were missing.**
   A catalog directory whose name resolved to a locale already claimed by a flat

@@ -20,6 +20,7 @@ var utils_exports = {};
 __export(utils_exports, {
   buildKeyCandidates: () => buildKeyCandidates,
   canonicalizeLocale: () => canonicalizeLocale,
+  getLocaleDirection: () => getLocaleDirection,
   hasLocale: () => hasLocale,
   localeLookupCandidates: () => localeLookupCandidates,
   matchSupportedLocale: () => matchSupportedLocale,
@@ -235,6 +236,14 @@ const VALID_HEADER_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 function hasLocale(locales, locale) {
   return matchSupportedLocale(locale ?? void 0, locales) !== void 0;
 }
+function getLocaleDirection(locale) {
+  try {
+    const info = new Intl.Locale(canonicalizeLocale(locale) ?? locale);
+    return info.textInfo?.direction === "rtl" ? "rtl" : "ltr";
+  } catch {
+    return "ltr";
+  }
+}
 function validateI18nConfig(options) {
   if (!options || !Array.isArray(options.locales) || options.locales.length === 0) {
     throw new Error('[next-fluent] "locales" must be a non-empty array.');
@@ -309,6 +318,7 @@ function buildKeyCandidates(namespace, key, options) {
 0 && (module.exports = {
   buildKeyCandidates,
   canonicalizeLocale,
+  getLocaleDirection,
   hasLocale,
   localeLookupCandidates,
   matchSupportedLocale,

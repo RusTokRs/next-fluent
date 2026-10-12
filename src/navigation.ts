@@ -22,6 +22,7 @@ import {
 } from './nav-url';
 import { LocalizedLink, useLocale } from './client';
 import { domainLocalePrefix, findLocaleDomain } from './domain-routing';
+import { requestLocale } from './request-store';
 
 // Pure URL helpers stay available from this entry for backwards compatibility.
 export { formatUrlObject, resolveLocalizedPathname, assertSafeHref, isExternalUrl } from './nav-url';
@@ -131,6 +132,18 @@ export function createNavigation<Locales extends readonly string[] = readonly st
             if (domain && domainLocalePrefix(locales, config.localePrefix, domain).mode !== 'always') return;
           }
           const targetLocale = options?.locale ?? currentLocale ?? defaultLocale;
+          // Deliberately *not* wrapped in `switchLocaleHref`, unlike `push` and
+          // `replace`. Those hand the router a temporary *signal* URL
+          // (`/en/about-us`) when the canonical href is prefix-less and an
+          // explicit switch would otherwise be indistinguishable from an
+          // ordinary visit; the middleware canonicalizes that signal **with a
+          // redirect** while persisting the cookie. So the URL that actually
+          // carries the page payload is the canonical one — which is exactly
+          // what prefetching warms. Prefetching the signal instead would warm a
+          // 307 and leave the real destination cold.
+          //
+          // The asymmetry is easy to misread as a missed call, so it is written
+          // down here; `V16-03` pins the resulting URLs.
           const target = getPathname({
             href,
             locale: targetLocale,
@@ -171,12 +184,31 @@ export function createNavigation<Locales extends readonly string[] = readonly st
     return [href, { ...rest, ...extra }];
   }
 
+  /**
+   * Locale a redirect resolves against when the caller does not name one.
+   *
+   * `useRouter().push` resolves against `options.locale ?? currentLocale ??
+   * defaultLocale`; `redirect` skipped the middle term, because in a Server
+   * Component there is no hook to read. It is not missing though — the locale
+   * `setRequestLocale` stored is exactly the current one, and the README
+   * already requires that call on every prerendered page. Without it,
+   * `redirect('/about')` on a Russian page sent the visitor to the *English*
+   * pathname, while the button beside it that called `push('/about')` kept
+   * them on the Russian one: the same href, two locales, one API object.
+   *
+   * Outside a request scope `requestLocale()` is `undefined` and the
+   * `defaultLocale` fallback behaves exactly as it did before.
+   */
+  function redirectLocale(explicit: string | undefined): string {
+    return explicit ?? requestLocale() ?? defaultLocale;
+  }
+
   function redirect(
     url: string | ({ href: string } & RedirectOptions),
     options?: RedirectOptions | 'push' | 'replace'
   ): never {
     const [href, opts] = redirectArgs(url, options);
-    const target = getPathname({ href, locale: opts.locale ?? defaultLocale, forcePrefix: opts.forcePrefix });
+    const target = getPathname({ href, locale: redirectLocale(opts.locale), forcePrefix: opts.forcePrefix });
     return nextRedirect(target, opts.type as any) as never;
   }
 
@@ -185,7 +217,7 @@ export function createNavigation<Locales extends readonly string[] = readonly st
     options?: RedirectOptions | 'push' | 'replace'
   ): never {
     const [href, opts] = redirectArgs(url, options);
-    const target = getPathname({ href, locale: opts.locale ?? defaultLocale, forcePrefix: opts.forcePrefix });
+    const target = getPathname({ href, locale: redirectLocale(opts.locale), forcePrefix: opts.forcePrefix });
     return nextPermanentRedirect(target, opts.type as any) as never;
   }
 

@@ -274,7 +274,7 @@ Without this module, `Accept-Language` detection is silently inert and `createI1
 import { notFound } from 'next/navigation';
 import { FluentServerProvider } from 'next-fluent/server-provider';
 import { setRequestLocale, getStaticParams } from 'next-fluent/server';
-import { hasLocale } from 'next-fluent';
+import { getLocaleDirection, hasLocale } from 'next-fluent';
 import { routing } from '@/i18n/routing';
 
 export function generateStaticParams() {
@@ -293,7 +293,8 @@ export default async function RootLayout({
   setRequestLocale(locale, routing.locales);
 
   return (
-    <html lang={locale}>
+    // `dir` comes from CLDR, so adding an RTL locale needs no code change.
+    <html lang={locale} dir={getLocaleDirection(locale)}>
       <body>
         <FluentServerProvider locale={locale}>
           {children}
@@ -306,7 +307,7 @@ export default async function RootLayout({
 
 > **Static rendering.** Next.js renders layouts and pages independently, so `setRequestLocale(locale)` must be called in **every page and every layout** that should be prerendered — not only in the root layout. Without it, `getTranslations()` falls back to reading request headers and the route silently opts into dynamic rendering (the CI fixture fails the build if any localized route stops being prerendered).
 
-Custom Fluent functions and callback-based rich values must be registered in a Client Component because React cannot serialize functions across the server/client boundary. For consistent date formatting, use `FluentServerProvider` or await `getRequestConfigSnapshot()` before calling the synchronous `getNow()` and `getTimeZone()` helpers.
+Custom Fluent functions and callback-based rich values must be registered in a Client Component because React cannot serialize functions across the server/client boundary — see [Custom Fluent functions](#custom-fluent-functions) for the request-config option and the client-side half. For consistent date formatting, use `FluentServerProvider` or await `getRequestConfigSnapshot()` before calling the synchronous `getNow()` and `getTimeZone()` helpers.
 
 ### 6. Navigation Helpers (`src/i18n/navigation.ts`)
 
@@ -333,6 +334,13 @@ It is a no-op in `localePrefix: 'never'`, where prefixed URLs do not exist.
 `redirect()` accepts both `redirect(url, { locale })` and next-intl's
 `redirect({ href, locale, forcePrefix }, type)`, so migrating call sites does not
 require rewriting them.
+
+A `redirect()` call that names no locale resolves against the **current request
+locale** — the one `setRequestLocale` stored — so `redirect('/about')` on a
+Russian page goes to `/ru/o-nas`, the same page `useRouter().push('/about')`
+would reach. Outside a request scope, where there is no locale to read, it falls
+back to `defaultLocale`. Pass `locale` explicitly when the switch is the point of
+the call.
 
 ---
 
@@ -529,6 +537,56 @@ An unknown format name or an unknown IANA `timeZone` is reported once (listing t
 name and the config option it belongs to) instead of silently degrading; date/time
 output keeps formatting in the runtime's zone rather than turning into an ISO
 string, so a typo in the config is visible but never breaks the page.
+
+### Custom Fluent functions
+
+Fluent ships `NUMBER`, `DATETIME`, `PLURAL` and friends. Add your own through the
+request config, and every message can call them:
+
+```ts
+// src/i18n/request.ts
+import { createDefaultFunctions } from 'next-fluent';
+
+export default setRequestConfig(async ({ locale }) => ({
+  locale,
+  messages: (await import(`../../messages/${locale}.ftl`)).default,
+  functions: {
+    ...createDefaultFunctions(locale),
+    BRL: ([amount]) => `R$ ${Number(amount.valueOf()).toFixed(2)}`,
+  },
+}));
+```
+
+```ftl
+price = Total: { BRL($amount) }
+```
+
+**They do not cross into Client Components.** A function is code, so no
+serializer can carry it over the Server Component boundary —
+`<FluentServerProvider>` forwards messages, fallbacks, `now`, `timeZone` and the
+serializable defaults, and cannot forward `functions`. A message that calls one
+therefore formats on the server and renders its own key in a Client Component.
+The same is true of the other things that are code rather than data: callback
+entries of `defaultTranslationValues`, `onError` and `getMessageFallback`. In
+development the provider warns once and names everything it had to drop; the fix
+is the same for all of them — define them on the client side too:
+
+```tsx
+'use client';
+import { FluentProvider } from 'next-fluent';
+import { BRL } from '@/i18n/functions';   // a module both sides can import
+
+export function ClientProviders({ locale, messages, children }) {
+  return (
+    <FluentProvider locale={locale} messages={messages} functions={{ BRL }}>
+      {children}
+    </FluentProvider>
+  );
+}
+```
+
+Keeping the functions in a shared module with no server-only imports is what
+makes both sides agree.
 
 ### Non-HTML output (`useIsolating`)
 
@@ -737,6 +795,7 @@ The analyzer never writes to a catalog. It is also available programmatically as
 | `onError` / `getMessageFallback` / `IntlErrorCode` | ✅ `FluentErrorCode` | server *and* client |
 | `setRequestLocale` | ✅ | required in every page + layout for static rendering |
 | `hasLocale` | ✅ | canonical, case-insensitive |
+| `getLocaleDirection` | `getLocaleDirection` | `'ltr' \| 'rtl'` from CLDR, for `<html dir>` |
 | `getRequestConfig` | `setRequestConfig` | |
 | `createNextIntlPlugin` | `createNextFluentPlugin` | Webpack + Turbopack config alias |
 | `defineRouting` (`pathnames`, `domains`, `basePath`, `localePrefix`) | ✅ | |

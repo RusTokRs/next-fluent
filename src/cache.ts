@@ -149,10 +149,15 @@ export function getCachedFluentBundle(
     const resource = options.disableCache
       ? new FluentResource(src)
       : getOrCreateResource(src);
-    const errors = bundle.addResource(resource, { allowOverrides: true });
-    if (errors && errors.length > 0) {
-      console.warn(`[next-fluent] Warnings adding FTL resource for locale ${locale}:`, errors);
-    }
+    // `addResource` returns errors only for overrides it *refused*, and
+    // `allowOverrides: true` refuses nothing: duplicate ids are resolved
+    // last-wins on purpose, and the drop is reported where the catalog is read
+    // (`warnAboutDroppedEntries`), not here. The return value is therefore
+    // always empty — verified against `@fluent/bundle`, whose only two
+    // `errors.push` calls are both guarded by `allowOverrides === false`. A
+    // warning that cannot fire is worse than none: it reads like a diagnostic
+    // that exists.
+    bundle.addResource(resource, { allowOverrides: true });
   }
 
   if (cache) {

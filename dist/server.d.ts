@@ -1,4 +1,4 @@
-import type { FluentBundle, FluentFunction } from '@fluent/bundle';
+import type { FluentFunction } from '@fluent/bundle';
 import type { DefaultKey, Formatter, Formats, FluentMessages, GetMessageFallbackFn, GetTranslationsOptions, OnErrorFn, RequestConfigFn, RequestConfigResult, RichTranslationValues, Translations, NamespaceArgs, NamespaceKeys } from './types';
 import { type MessageSource } from './catalog';
 export interface ServerI18nOptions {
@@ -8,25 +8,35 @@ export interface ServerI18nOptions {
     cookieNames?: readonly string[];
     headerName?: string;
 }
+/**
+ * Establishes the locales the server side negotiates against.
+ *
+ * Validates the pair that will be in force after the call, the way every other
+ * configuration entry point in the package does (`defineRouting`,
+ * `createNavigation` and the middleware all run `validateI18nConfig`). This one
+ * used to accept anything, and it is the entry point that decides which locale
+ * a Server Component renders — so its silence was expensive:
+ *
+ * - `configureServerI18n({ locales: ['ru', 'de'] })`, with no `defaultLocale`,
+ *   left the default at `'en'`. Every request whose locale was not pinned by
+ *   `setRequestLocale`, a header or a cookie then resolved to a locale the app
+ *   does not ship, `loadMessages('en')` found nothing, and the page rendered its
+ *   own keys as text — with no warning anywhere.
+ * - `defaultLocale: 'not a tag'` was stored verbatim and surfaced much later as
+ *   `[next-fluent] Request config returned an invalid locale.`, blaming the
+ *   request config for a value the caller passed here.
+ *
+ * Both are configuration errors, so both are rejected at the call site, which
+ * is module scope and therefore fails on the first run rather than in
+ * production.
+ */
 export declare function configureServerI18n(config: {
     locales?: readonly string[];
     defaultLocale?: string;
 }): void;
 export declare function setRequestConfig(fn: RequestConfigFn): RequestConfigFn;
 export declare function getRequestConfig(): RequestConfigFn | null;
-interface RequestStore {
-    locale?: string;
-    timeZone?: string;
-    now?: Date;
-    defaultTranslationValues?: RichTranslationValues;
-    formats?: Formats;
-    useIsolating?: boolean;
-    onError?: OnErrorFn;
-    getMessageFallback?: GetMessageFallbackFn;
-    strictNamespace?: boolean;
-    bundles: Map<string, FluentBundle>;
-}
-export declare const getRequestStore: () => RequestStore;
+export { getRequestStore, type RequestStore } from './request-store';
 export declare function setRequestLocale(locale: string, locales?: readonly string[]): void;
 export declare function getLocale(options?: ServerI18nOptions): Promise<string>;
 export declare function getMessages(localeArg?: string): Promise<MessageSource>;
@@ -72,4 +82,3 @@ export declare function getTranslations<Namespace extends string>(namespace: Nam
 export declare function getTranslations<Key extends string = DefaultKey, ArgsMap extends Record<string, any> = FluentMessages>(options?: string | ({
     locale?: string;
 } & GetTranslationsOptions)): Promise<Translations<Key, ArgsMap>>;
-export {};

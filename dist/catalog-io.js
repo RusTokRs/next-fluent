@@ -54,20 +54,13 @@ function localeFromCatalogName(name) {
 }
 function readCatalogsByLocale(dir) {
   const catalogs = /* @__PURE__ */ Object.create(null);
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort(
-    (a, b) => a.name.localeCompare(b.name)
-  )) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      const files = collectCatalogFiles(full);
-      if (files.length > 0) {
-        const locale = localeFromCatalogName(entry.name);
-        (catalogs[locale] ??= []).push(...files.map(readCatalog));
-      }
-    } else if (entry.isFile() && isCatalogFile(entry.name)) {
-      const locale = localeFromCatalogName(path.basename(entry.name, path.extname(entry.name)));
-      (catalogs[locale] ??= []).push(readCatalog(full));
-    }
+  const root = path.resolve(dir);
+  for (const file of collectCatalogFiles(dir)) {
+    const relative = path.relative(root, path.resolve(file));
+    const segments = relative.split(path.sep);
+    const top = segments[0];
+    const locale = segments.length > 1 ? localeFromCatalogName(top) : localeFromCatalogName(path.basename(top, path.extname(top)));
+    (catalogs[locale] ??= []).push(readCatalog(file));
   }
   return catalogs;
 }
@@ -170,6 +163,18 @@ function watchCatalogs(input, output, handlers = {}) {
       }
     }, 50);
   };
+  let stats;
+  try {
+    stats = fs.statSync(input, { throwIfNoEntry: false });
+  } catch {
+    stats = void 0;
+  }
+  if (!stats?.isDirectory()) {
+    handlers.onError?.(
+      new Error(`[next-fluent] Cannot watch ${input}: it is not a directory.`)
+    );
+    return () => clearTimeout(timer);
+  }
   if (handlers.unref) {
     let signature = catalogSnapshot(input);
     const poller = setInterval(() => {
@@ -184,18 +189,6 @@ function watchCatalogs(input, output, handlers = {}) {
       clearInterval(poller);
       clearTimeout(timer);
     };
-  }
-  let stats;
-  try {
-    stats = fs.statSync(input, { throwIfNoEntry: false });
-  } catch {
-    stats = void 0;
-  }
-  if (!stats?.isDirectory()) {
-    handlers.onError?.(
-      new Error(`[next-fluent] Cannot watch ${input}: it is not a directory.`)
-    );
-    return () => clearTimeout(timer);
   }
   let watcher;
   try {

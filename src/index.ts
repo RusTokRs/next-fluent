@@ -112,6 +112,8 @@ export {
 export {
   canonicalizeLocale,
   hasLocale,
+  getLocaleDirection,
+  type LocaleDirection,
   normalizeLocaleTag,
   matchSupportedLocale,
   localeLookupCandidates,

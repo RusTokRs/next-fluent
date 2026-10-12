@@ -115,7 +115,17 @@ const BUDGETS = [
     // with an empty message object is rejected instead of dropping the message.
     // Measured after that pass: 48.42 kB minified / 16.32 kB gzip; 48.83 kB /
     // 16.53 kB once the FTL-side `Intl` diagnostics landed as well.
-    maxMinified: 49.0 * 1024,
+    // Raised again, on measurement, by pass 18 (+365 B minified / +113 B gzip,
+    // 49892 → 50257 B minified and 16857 → 16970 B gzip): a JSON catalog whose
+    // keys collide onto one FTL attribute is rejected instead of emitting that
+    // attribute twice and letting the runtime drop one of the author's
+    // translations, and `redirect()` resolves against the locale
+    // `setRequestLocale` stored instead of silently meaning `defaultLocale`.
+    // 99 B of the delta is the shared request-store module the second fix needs;
+    // the rest is the attribute-collision diagnostic, which names both JSON
+    // paths and is the part that makes the error actionable. Gzip stays inside
+    // the previous budget.
+    maxMinified: 49.5 * 1024,
     maxGzip: 16.75 * 1024,
   },
   {
@@ -186,7 +196,15 @@ BUDGETS.push(
     entry: ceilingEntry,
     extraExternal: ['@fluent/bundle'],
     // Measured after the FTL-side diagnostics: 39.67 kB minified / 13.47 kB gzip.
-    maxMinified: 40.0 * 1024,
+    // Raised once, on measurement, by pass 19 (+135 B minified, 40894 → 41029 B):
+    // `getLocaleDirection` joins the browser-reachable surface, so an app can
+    // render `<html dir>` from a locale it already has instead of keeping a
+    // direction list by hand. The answer is read from `Intl.Locale`, i.e. the
+    // same CLDR data the formatters use, so the cost is the lookup and the
+    // fallback, not a locale table. The `configureServerI18n` validation this
+    // pass added is server-only and costs this ceiling nothing. Gzip is
+    // unchanged at 13.7 kB, inside the previous budget.
+    maxMinified: 40.25 * 1024,
     maxGzip: 14.0 * 1024,
   }
 );

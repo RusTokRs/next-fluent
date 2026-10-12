@@ -146,15 +146,24 @@ function walk(value, id, path, out, depth = 0, seen = /* @__PURE__ */ new Map())
     }
     declareId(seen, id, path);
     out.push(`${id} = ${renderFluentPattern(String(own ?? ""))}`);
+    const declaredAttributes = /* @__PURE__ */ new Map();
     for (const [key, attr] of entries) {
       if (key === "") continue;
       if (typeof attr === "object" && attr !== null) {
         throw invalid(`JSON catalog attribute "${path}.${key}" must be a string.`, `${path}.${key}`);
       }
       const attributeName = key.startsWith(".") ? key.slice(1) : key;
-      out.push(
-        `    .${normalizeId(attributeName, `${path}.${key}`)} = ${renderFluentPattern(String(attr))}`
-      );
+      const attributePath = `${path}.${key}`;
+      const attributeId = normalizeId(attributeName, attributePath);
+      const existing = declaredAttributes.get(attributeId);
+      if (existing !== void 0) {
+        throw invalid(
+          `JSON catalog keys "${existing}" and "${attributePath}" both map to the attribute ".${attributeId}" of the message "${id}". Rename one of them: a message cannot define the same attribute twice.`,
+          attributePath
+        );
+      }
+      declaredAttributes.set(attributeId, attributePath);
+      out.push(`    .${attributeId} = ${renderFluentPattern(String(attr))}`);
     }
     return;
   }

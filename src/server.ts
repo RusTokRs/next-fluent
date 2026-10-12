@@ -1,4 +1,3 @@
-import { cache } from 'react';
 import type { FluentBundle, FluentFunction } from '@fluent/bundle';
 import type {
   DefaultKey,
@@ -19,7 +18,14 @@ import { createFluentBundle, createTranslator } from './bundle';
 import { warnAboutDroppedEntries } from './catalog-integrity';
 import { isJsonCatalog, toFluentSource, type MessageSource } from './catalog';
 import { createFormatter } from './formatter';
-import { canonicalizeLocale, matchSupportedLocale, resolveAcceptLanguage } from './utils';
+import {
+  canonicalizeLocale,
+  matchSupportedLocale,
+  resolveAcceptLanguage,
+  validateI18nConfig,
+} from './utils';
+import { cache } from 'react';
+import { getRequestStore, isRequestScopeActive } from './request-store';
 
 let globalConfigFn: RequestConfigFn | null = null;
 let globalLocales: readonly string[] = ['en'];
@@ -34,16 +40,53 @@ export interface ServerI18nOptions {
   headerName?: string;
 }
 
+/**
+ * Establishes the locales the server side negotiates against.
+ *
+ * Validates the pair that will be in force after the call, the way every other
+ * configuration entry point in the package does (`defineRouting`,
+ * `createNavigation` and the middleware all run `validateI18nConfig`). This one
+ * used to accept anything, and it is the entry point that decides which locale
+ * a Server Component renders — so its silence was expensive:
+ *
+ * - `configureServerI18n({ locales: ['ru', 'de'] })`, with no `defaultLocale`,
+ *   left the default at `'en'`. Every request whose locale was not pinned by
+ *   `setRequestLocale`, a header or a cookie then resolved to a locale the app
+ *   does not ship, `loadMessages('en')` found nothing, and the page rendered its
+ *   own keys as text — with no warning anywhere.
+ * - `defaultLocale: 'not a tag'` was stored verbatim and surfaced much later as
+ *   `[next-fluent] Request config returned an invalid locale.`, blaming the
+ *   request config for a value the caller passed here.
+ *
+ * Both are configuration errors, so both are rejected at the call site, which
+ * is module scope and therefore fails on the first run rather than in
+ * production.
+ */
 export function configureServerI18n(config: {
   locales?: readonly string[];
   defaultLocale?: string;
 }): void {
-  if (config.locales && config.locales.length > 0) {
-    globalLocales = config.locales;
+  const localesProvided = Boolean(config.locales && config.locales.length > 0);
+  const locales = localesProvided ? config.locales! : globalLocales;
+  const defaultLocale = config.defaultLocale ?? globalDefaultLocale;
+
+  if (localesProvided || globalLocalesConfigured) {
+    // Checks that every tag canonicalizes, that no two spellings claim one
+    // locale, and that the default is one of them.
+    validateI18nConfig({ locales, defaultLocale });
+  } else if (config.defaultLocale !== undefined && !canonicalizeLocale(config.defaultLocale)) {
+    // No locale list exists yet, so only the tag itself can be checked.
+    throw new Error(
+      `[next-fluent] Invalid "defaultLocale": ${JSON.stringify(config.defaultLocale)}`
+    );
+  }
+
+  if (localesProvided) {
+    globalLocales = locales;
     globalLocalesConfigured = true;
   }
   if (config.defaultLocale) {
-    globalDefaultLocale = config.defaultLocale;
+    globalDefaultLocale = defaultLocale;
   }
 }
 
@@ -74,31 +117,10 @@ function createServerBundle(
   return createFluentBundle(locale, normalized, options);
 }
 
-interface RequestStore {
-  locale?: string;
-  timeZone?: string;
-  now?: Date;
-  defaultTranslationValues?: RichTranslationValues;
-  formats?: Formats;
-  useIsolating?: boolean;
-  onError?: OnErrorFn;
-  getMessageFallback?: GetMessageFallbackFn;
-  strictNamespace?: boolean;
-  bundles: Map<string, FluentBundle>;
-}
-
-export const getRequestStore = cache((): RequestStore => ({
-  bundles: new Map(),
-}));
-
-/**
- * True when React is memoizing per-request state, i.e. the call happens inside
- * a render/request scope. Outside one, `cache()` hands back a fresh object per
- * call, so a stored locale would vanish immediately.
- */
-function isRequestScopeActive(): boolean {
-  return getRequestStore() === getRequestStore();
-}
+// `getRequestStore` stays part of this module's public surface: the request
+// store itself now lives in `request-store.ts` so the navigation helpers can
+// read the request locale without importing this (server-only) module.
+export { getRequestStore, type RequestStore } from './request-store';
 
 export function setRequestLocale(locale: string, locales?: readonly string[]): void {
   const canonical = canonicalizeLocale(locale);

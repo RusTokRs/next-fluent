@@ -21,7 +21,18 @@ export function isCatalogFile(name: string): boolean {
   return CATALOG_EXTENSIONS.some((ext) => name.toLowerCase().endsWith(ext));
 }
 
-/** Recursively collects catalog files, sorted for deterministic output. */
+/**
+ * Recursively collects catalog files, sorted for deterministic output.
+ *
+ * The sort is the plain code-unit one, and it is load-bearing: Fluent resolves
+ * a duplicate message id last-wins, so this order decides *which* of two
+ * definitions survives. `localeCompare` would not do — it collates by the
+ * process's ICU locale, so the winner changed between machines. `check` sorted
+ * that way while this walk sorted by code units, and the two disagreed about
+ * which catalog was "last" for the very message `check` tells the developer
+ * Fluent keeps. Every consumer now derives its order from this walk instead of
+ * sorting again; see `readCatalogsByLocale`.
+ */
 export function collectCatalogFiles(target: string): string[] {
   if (!fs.existsSync(target)) return [];
   const stat = fs.statSync(target);
@@ -94,32 +105,54 @@ export function localeFromCatalogName(name: string): string {
   return name;
 }
 
-/** Groups catalogs by locale: `messages/en.ftl` or `messages/en/app.ftl` → `en`. */
+/**
+ * Groups catalogs by locale: `messages/en.ftl` or `messages/en/app.ftl` → `en`.
+ *
+ * The file list comes from `collectCatalogFiles` rather than from a second,
+ * independent directory walk. This function used to read the directory itself,
+ * which diverged from the walk every other consumer uses in two ways:
+ *
+ * - **Symlinked catalogs were dropped.** A `Dirent` for a symlink is neither
+ *   `isFile()` nor `isDirectory()`, so `messages/en.ftl → ../shared/en.ftl` —
+ *   how a monorepo shares one catalog with several apps — never became a
+ *   locale at all. `check` then elected a different reference locale, compared
+ *   the rest against a smaller key set, and answered "No issues found" for
+ *   translations that really were missing. `typegen`, in the same package and
+ *   the same CLI invocation, read the same file without blinking.
+ * - **The merge order followed `localeCompare`**, i.e. the process's ICU
+ *   locale, while the runtime and `typegen` sort by code units. Fluent resolves
+ *   a duplicate id last-wins, so the two disagreed about *which* definition
+ *   survived: the validator pointed the developer at one entry to delete while
+ *   the app shipped the other.
+ *
+ * Deriving the grouping from the same walk makes agreement structural instead
+ * of something two implementations have to keep remembering. The locale of a
+ * file is decided by its first path segment under `dir`: a segment that is a
+ * directory names the locale (`en/app.ftl`), a segment that is the file itself
+ * is a namespaced flat catalog (`en-app.ftl`).
+ *
+ * Directory symlinks stay out of both walks, exactly as in `collectCatalogFiles`:
+ * following them recursively would let `messages/en → ..` loop forever.
+ */
 export function readCatalogsByLocale(dir: string): Record<string, string[]> {
   // Null prototype: a catalog named `__proto__.ftl` must be a normal key, not a
   // prototype assignment (which crashed the check command outright).
   const catalogs: Record<string, string[]> = Object.create(null);
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
-    a.name.localeCompare(b.name)
-  )) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      const files = collectCatalogFiles(full);
-      if (files.length > 0) {
-        // Merged, like the flat namespaced files beside it. Assigning here
-        // dropped whatever had already been collected for this locale, so a
-        // directory whose name sorts after a flat file (`messages/en-x.ftl`
-        // beside `messages/en-z/`) silently erased that file. The reference
-        // locale then held fewer keys than the project actually ships, and
-        // `check` reported "no issues" for translations that were missing.
-        const locale = localeFromCatalogName(entry.name);
-        (catalogs[locale] ??= []).push(...files.map(readCatalog));
-      }
-    } else if (entry.isFile() && isCatalogFile(entry.name)) {
-      const locale = localeFromCatalogName(path.basename(entry.name, path.extname(entry.name)));
-      (catalogs[locale] ??= []).push(readCatalog(full));
-    }
+  const root = path.resolve(dir);
+
+  for (const file of collectCatalogFiles(dir)) {
+    const relative = path.relative(root, path.resolve(file));
+    const segments = relative.split(path.sep);
+    // `collectCatalogFiles` only ever returns files under `dir`, so there is
+    // always at least one segment; no defensive fallback to leave uncovered.
+    const top = segments[0];
+    const locale =
+      segments.length > 1
+        ? localeFromCatalogName(top)
+        : localeFromCatalogName(path.basename(top, path.extname(top)));
+    (catalogs[locale] ??= []).push(readCatalog(file));
   }
+
   return catalogs;
 }
 
@@ -299,6 +332,25 @@ export function watchCatalogs(
     }, 50);
   };
 
+  // Checked before either watch strategy, not just the `fs.watch` one. The
+  // polling branch used with `unref` compares snapshots, and a snapshot of
+  // something unreadable is always the same empty string — so an unusable target
+  // there never changes, never regenerates and never says anything. The Next.js
+  // plugin always passes `unref`, which made a `typegen.input` pointing at a
+  // single catalog file look like it was being watched while nothing was.
+  let stats: fs.Stats | undefined;
+  try {
+    stats = fs.statSync(input, { throwIfNoEntry: false });
+  } catch {
+    stats = undefined;
+  }
+  if (!stats?.isDirectory()) {
+    handlers.onError?.(
+      new Error(`[next-fluent] Cannot watch ${input}: it is not a directory.`)
+    );
+    return () => clearTimeout(timer);
+  }
+
   if (handlers.unref) {
     let signature = catalogSnapshot(input);
     const poller = setInterval(() => {
@@ -319,19 +371,6 @@ export function watchCatalogs(
   // throws synchronously, but Node 24 and Windows hand back a watcher that never
   // fires and never reports, leaving the dev watcher silently dead. Checking the
   // target first turns that into the `onError` the callers already expect.
-  let stats: fs.Stats | undefined;
-  try {
-    stats = fs.statSync(input, { throwIfNoEntry: false });
-  } catch {
-    stats = undefined;
-  }
-  if (!stats?.isDirectory()) {
-    handlers.onError?.(
-      new Error(`[next-fluent] Cannot watch ${input}: it is not a directory.`)
-    );
-    return () => clearTimeout(timer);
-  }
-
   let watcher: fs.FSWatcher;
   try {
     watcher = fs.watch(input, { recursive: true }, (_event, filename) => {

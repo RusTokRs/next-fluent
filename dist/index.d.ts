@@ -13,5 +13,5 @@ export { createDefaultFunctions, unwrapFluentValue, clearFunctionsCache, } from 
 export { parseRichText, } from './rich';
 export { pseudoLocalizeText, pseudoLocalizeFtl, type PseudoOptions, } from './pseudo';
 export { extractMessagesFromFtl, generateTypeDeclarations, type ExtractedMessage, } from './typegen';
-export { canonicalizeLocale, hasLocale, normalizeLocaleTag, matchSupportedLocale, localeLookupCandidates, resolveAcceptLanguage, validateI18nConfig, withKebabKey, buildKeyCandidates, } from './utils';
+export { canonicalizeLocale, hasLocale, getLocaleDirection, type LocaleDirection, normalizeLocaleTag, matchSupportedLocale, localeLookupCandidates, resolveAcceptLanguage, validateI18nConfig, withKebabKey, buildKeyCandidates, } from './utils';
 export type { FluentBundle, FluentArgs, FluentVariable, FluentFunction, FluentMessages, DefaultKey, NonEmptyArray, TagRenderFn, RichTranslationValues, MessageArgsFor, TranslationFn, Translations, RequestConfigFn, RequestConfigParams, RequestConfigResult, GetTranslationsOptions, I18nMiddlewareOptions, I18nConfig, Formatter, FormatterOptions, Formats, LocaleCookieConfig, Navigation, NavigationConfig, LocalePrefixMode, Href, UrlObject, GetPathnameOptions, } from './types';
