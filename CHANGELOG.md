@@ -16,10 +16,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   message formats on the server and renders its own key in a Client Component, a
   `{rich}` placeholder loses its callback, and a custom fallback reverts to
   `locale:key` — none of which said why. Production is unaffected.
-- **`npm run coverage`.** Runs the suite under Node's coverage reporter and fails
-  if lines, branches or functions drop below the floor in `scripts/coverage.mjs`.
-  The audit reports have quoted coverage since pass 15 and nothing recorded or
-  enforced it; CI now has a `Verify coverage floor` step.
+- **`npm run coverage`.** Runs the suite under Node's coverage reporter, scoped to
+  `dist/` with `--test-coverage-include`, and fails on Node's own
+  `--test-coverage-lines/-branches/-functions` thresholds. The audit reports have
+  quoted coverage since pass 15 and nothing recorded or enforced it; CI now has a
+  `Verify coverage floor` step. Scoping matters: Node's `# all files` row averages
+  in the test files and the scripts that run them, so the figures quoted in earlier
+  reports were library and harness together, and moved with every stub callback a
+  test defined. Library-only they are 97.34% lines / 93.48% branches / 96.80%
+  functions, against floors of 97 / 93 / 96.5.
 - **Custom Fluent functions are documented.** The `functions` option of the
   request config previously appeared nowhere in `README.md`; the boundary was
   mentioned in a single sentence with no example and no description of the
