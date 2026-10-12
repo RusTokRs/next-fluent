@@ -9,7 +9,18 @@ export declare const CATALOG_EXTENSIONS: string[];
 /** Directories probed when a command runs without `--input`. */
 export declare const DEFAULT_CATALOG_DIRS: string[];
 export declare function isCatalogFile(name: string): boolean;
-/** Recursively collects catalog files, sorted for deterministic output. */
+/**
+ * Recursively collects catalog files, sorted for deterministic output.
+ *
+ * The sort is the plain code-unit one, and it is load-bearing: Fluent resolves
+ * a duplicate message id last-wins, so this order decides *which* of two
+ * definitions survives. `localeCompare` would not do — it collates by the
+ * process's ICU locale, so the winner changed between machines. `check` sorted
+ * that way while this walk sorted by code units, and the two disagreed about
+ * which catalog was "last" for the very message `check` tells the developer
+ * Fluent keeps. Every consumer now derives its order from this walk instead of
+ * sorting again; see `readCatalogsByLocale`.
+ */
 export declare function collectCatalogFiles(target: string): string[];
 /** Reads a catalog file, converting JSON catalogs into FTL source. */
 export declare function readCatalog(file: string): string;
@@ -27,7 +38,35 @@ export declare function readCatalog(file: string): string;
  * as `__proto__.ftl` is still reported instead of being dropped or crashing.
  */
 export declare function localeFromCatalogName(name: string): string;
-/** Groups catalogs by locale: `messages/en.ftl` or `messages/en/app.ftl` → `en`. */
+/**
+ * Groups catalogs by locale: `messages/en.ftl` or `messages/en/app.ftl` → `en`.
+ *
+ * The file list comes from `collectCatalogFiles` rather than from a second,
+ * independent directory walk. This function used to read the directory itself,
+ * which diverged from the walk every other consumer uses in two ways:
+ *
+ * - **Symlinked catalogs were dropped.** A `Dirent` for a symlink is neither
+ *   `isFile()` nor `isDirectory()`, so `messages/en.ftl → ../shared/en.ftl` —
+ *   how a monorepo shares one catalog with several apps — never became a
+ *   locale at all. `check` then elected a different reference locale, compared
+ *   the rest against a smaller key set, and answered "No issues found" for
+ *   translations that really were missing. `typegen`, in the same package and
+ *   the same CLI invocation, read the same file without blinking.
+ * - **The merge order followed `localeCompare`**, i.e. the process's ICU
+ *   locale, while the runtime and `typegen` sort by code units. Fluent resolves
+ *   a duplicate id last-wins, so the two disagreed about *which* definition
+ *   survived: the validator pointed the developer at one entry to delete while
+ *   the app shipped the other.
+ *
+ * Deriving the grouping from the same walk makes agreement structural instead
+ * of something two implementations have to keep remembering. The locale of a
+ * file is decided by its first path segment under `dir`: a segment that is a
+ * directory names the locale (`en/app.ftl`), a segment that is the file itself
+ * is a namespaced flat catalog (`en-app.ftl`).
+ *
+ * Directory symlinks stay out of both walks, exactly as in `collectCatalogFiles`:
+ * following them recursively would let `messages/en → ..` loop forever.
+ */
 export declare function readCatalogsByLocale(dir: string): Record<string, string[]>;
 /**
  * Collects source files worth scanning for message usage.

@@ -96,20 +96,13 @@ function localeFromCatalogName(name) {
 }
 function readCatalogsByLocale(dir) {
   const catalogs = /* @__PURE__ */ Object.create(null);
-  for (const entry of import_node_fs.default.readdirSync(dir, { withFileTypes: true }).sort(
-    (a, b) => a.name.localeCompare(b.name)
-  )) {
-    const full = import_node_path.default.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      const files = collectCatalogFiles(full);
-      if (files.length > 0) {
-        const locale = localeFromCatalogName(entry.name);
-        (catalogs[locale] ??= []).push(...files.map(readCatalog));
-      }
-    } else if (entry.isFile() && isCatalogFile(entry.name)) {
-      const locale = localeFromCatalogName(import_node_path.default.basename(entry.name, import_node_path.default.extname(entry.name)));
-      (catalogs[locale] ??= []).push(readCatalog(full));
-    }
+  const root = import_node_path.default.resolve(dir);
+  for (const file of collectCatalogFiles(dir)) {
+    const relative = import_node_path.default.relative(root, import_node_path.default.resolve(file));
+    const segments = relative.split(import_node_path.default.sep);
+    const top = segments[0];
+    const locale = segments.length > 1 ? localeFromCatalogName(top) : localeFromCatalogName(import_node_path.default.basename(top, import_node_path.default.extname(top)));
+    (catalogs[locale] ??= []).push(readCatalog(file));
   }
   return catalogs;
 }

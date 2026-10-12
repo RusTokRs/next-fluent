@@ -295,6 +295,26 @@ async function checkRuntime(nextCli) {
     if (!link.includes('hreflang="en"') || !link.includes('hreflang="ru"') || !link.includes('hreflang="x-default"')) {
       throw new Error(`Missing hreflang alternates on the localized route.\n${link}\n${output}`);
     }
+    // `redirect()` without an explicit locale must resolve against the request
+    // locale, not the default one. Both routes call `redirect('/about')`; only
+    // `setRequestLocale` tells them apart, and the pathname mapping
+    // (`/about` → `/about-us` / `/o-nas`) makes the difference observable.
+    // A request scope only exists inside a real Next.js render, so this
+    // assertion cannot be made from `node --test`.
+    for (const [route, pathname] of [['/go-about', '/about-us'], ['/ru/go-about', '/ru/o-nas']]) {
+      const jumped = await fetch(`${base}${route}`, { redirect: 'manual' });
+      const location = jumped.headers.get('location');
+      if (![302, 303, 307, 308].includes(jumped.status)) {
+        throw new Error(`redirect() from ${route} did not redirect (${jumped.status}).\n${output}`);
+      }
+      if (new URL(location, base).pathname !== pathname) {
+        throw new Error(
+          `redirect() from ${route} ignored the request locale: expected ${pathname}, got ${location}.\n${output}`
+        );
+      }
+    }
+    console.log('[next-fluent] redirect() follows the request locale.');
+
     // A request that already carries the effective locale must stay cacheable.
     const cached = await fetch(`${base}/ru/o-nas`, {
       redirect: 'manual',

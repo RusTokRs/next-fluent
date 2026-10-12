@@ -1,4 +1,4 @@
-import type { FluentBundle, FluentFunction } from '@fluent/bundle';
+import type { FluentFunction } from '@fluent/bundle';
 import type { DefaultKey, Formatter, Formats, FluentMessages, GetMessageFallbackFn, GetTranslationsOptions, OnErrorFn, RequestConfigFn, RequestConfigResult, RichTranslationValues, Translations, NamespaceArgs, NamespaceKeys } from './types';
 import { type MessageSource } from './catalog';
 export interface ServerI18nOptions {
@@ -14,19 +14,7 @@ export declare function configureServerI18n(config: {
 }): void;
 export declare function setRequestConfig(fn: RequestConfigFn): RequestConfigFn;
 export declare function getRequestConfig(): RequestConfigFn | null;
-interface RequestStore {
-    locale?: string;
-    timeZone?: string;
-    now?: Date;
-    defaultTranslationValues?: RichTranslationValues;
-    formats?: Formats;
-    useIsolating?: boolean;
-    onError?: OnErrorFn;
-    getMessageFallback?: GetMessageFallbackFn;
-    strictNamespace?: boolean;
-    bundles: Map<string, FluentBundle>;
-}
-export declare const getRequestStore: () => RequestStore;
+export { getRequestStore, type RequestStore } from './request-store';
 export declare function setRequestLocale(locale: string, locales?: readonly string[]): void;
 export declare function getLocale(options?: ServerI18nOptions): Promise<string>;
 export declare function getMessages(localeArg?: string): Promise<MessageSource>;
@@ -72,4 +60,3 @@ export declare function getTranslations<Namespace extends string>(namespace: Nam
 export declare function getTranslations<Key extends string = DefaultKey, ArgsMap extends Record<string, any> = FluentMessages>(options?: string | ({
     locale?: string;
 } & GetTranslationsOptions)): Promise<Translations<Key, ArgsMap>>;
-export {};

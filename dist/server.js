@@ -1,9 +1,10 @@
-import { cache } from "react";
 import { createFluentBundle, createTranslator } from "./bundle.js";
 import { warnAboutDroppedEntries } from "./catalog-integrity.js";
 import { isJsonCatalog, toFluentSource } from "./catalog.js";
 import { createFormatter } from "./formatter.js";
 import { canonicalizeLocale, matchSupportedLocale, resolveAcceptLanguage } from "./utils.js";
+import { cache } from "react";
+import { getRequestStore, isRequestScopeActive } from "./request-store.js";
 let globalConfigFn = null;
 let globalLocales = ["en"];
 let globalDefaultLocale = "en";
@@ -29,12 +30,7 @@ function createServerBundle(locale, source, options) {
   warnAboutDroppedEntries(locale, normalized);
   return createFluentBundle(locale, normalized, options);
 }
-const getRequestStore = cache(() => ({
-  bundles: /* @__PURE__ */ new Map()
-}));
-function isRequestScopeActive() {
-  return getRequestStore() === getRequestStore();
-}
+import { getRequestStore as getRequestStore2 } from "./request-store.js";
 function setRequestLocale(locale, locales) {
   const canonical = canonicalizeLocale(locale);
   if (!canonical) throw new Error("[next-fluent] Invalid request locale.");
@@ -327,7 +323,7 @@ export {
   getNow,
   getRequestConfig,
   getRequestConfigSnapshot,
-  getRequestStore,
+  getRequestStore2 as getRequestStore,
   getStaticParams,
   getTimeZone,
   getTranslations,

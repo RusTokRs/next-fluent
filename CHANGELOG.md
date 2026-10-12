@@ -159,6 +159,44 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`next-fluent check` ignored symlinked catalogs.** `readCatalogsByLocale`
+  walked the catalog directory itself, and a `Dirent` for a symlink is neither
+  `isFile()` nor `isDirectory()`, so `messages/en.ftl → ../shared/en.ftl` — how a
+  monorepo shares one catalog between apps — never became a locale at all.
+  `check` then elected a different reference locale, compared every other locale
+  against a smaller key set, and did not report translations that really were
+  missing, while `typegen` in the same command read the same file without
+  trouble. The grouping is now derived from the same walk the runtime and
+  `typegen` use, so agreement is structural rather than something two
+  implementations have to keep remembering.
+
+- **`next-fluent check` and the runtime disagreed about which duplicate wins.**
+  Fluent resolves a duplicate message id last-wins, so the read order decides
+  which of two definitions ships. `check` sorted catalogs with `localeCompare` —
+  the process's ICU collation, i.e. a different answer on a different machine —
+  while the runtime and `typegen` sorted by code units. For `EN.ftl` beside
+  `en.ftl` the two kept opposite definitions, and the duplicate warning that
+  says "Fluent keeps the last definition" pointed the developer at the wrong
+  entry to delete. There is now one sort, in one place.
+
+- **A JSON catalog could define the same FTL attribute twice.** `normalizeId`
+  folds `.` into `-` and a leading `.` is accepted as the attribute marker, so
+  `"label"` beside `".label"` — or `"a.b"` beside `"a-b"` — both landed on one
+  attribute. The runtime silently kept the last one and `typegen` dropped one of
+  them, so an author's translation disappeared with nothing to say so. Message
+  ids were already guarded against exactly this; attributes now are too, with
+  both JSON paths named.
+
+- **`redirect()` always meant the default locale.** `useRouter().push` resolved
+  an href against `options.locale ?? currentLocale ?? defaultLocale`, while
+  `redirect` skipped the middle term because a Server Component has no hook to
+  read it from — so on a Russian page `redirect('/about')` sent the visitor to
+  the English pathname while the button beside it calling `push('/about')` kept
+  them on the Russian one. `redirect` and `permanentRedirect` now resolve the
+  locale `setRequestLocale` stored, falling back to `defaultLocale` exactly as
+  before when no request locale is known. Verified against live requests on
+  Next.js 15 and 16.
+
 - **`next-fluent check` reported "no issues" for translations that were missing.**
   A catalog directory whose name resolved to a locale already claimed by a flat
   file (`messages/en-z/` beside `messages/en-x.ftl`) overwrote the collected

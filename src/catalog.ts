@@ -230,6 +230,17 @@ function walk(
     }
     declareId(seen, id, path);
     out.push(`${id} = ${renderFluentPattern(String(own ?? ''))}`);
+    /**
+     * Attribute names already emitted for this message, mapped to the JSON path
+     * that produced them. The same collision `declareId` guards for message ids
+     * exists one level down: `normalizeId` folds `.` into `-`, and a leading
+     * `.` is accepted as the attribute marker, so `"label"` and `".label"` —
+     * and just as easily `"a.b"` and `"a-b"` — all land on the same FTL
+     * attribute. Emitting both produced `.label` twice, the runtime silently
+     * kept the last one and `typegen` dropped one of them: the author's other
+     * translation was gone with nothing to say so.
+     */
+    const declaredAttributes = new Map<string, string>();
     for (const [key, attr] of entries) {
       if (key === '') continue;
       if (typeof attr === 'object' && attr !== null) {
@@ -242,9 +253,19 @@ function walk(
       // `-`, which is not a legal id start, so such a key used to fail with an
       // error about the message id `a..attr` instead of naming the real problem.
       const attributeName = key.startsWith('.') ? key.slice(1) : key;
-      out.push(
-        `    .${normalizeId(attributeName, `${path}.${key}`)} = ${renderFluentPattern(String(attr))}`
-      );
+      const attributePath = `${path}.${key}`;
+      const attributeId = normalizeId(attributeName, attributePath);
+      const existing = declaredAttributes.get(attributeId);
+      if (existing !== undefined) {
+        throw invalid(
+          `JSON catalog keys "${existing}" and "${attributePath}" both map to the attribute ` +
+            `".${attributeId}" of the message "${id}". Rename one of them: a message cannot ` +
+            'define the same attribute twice.',
+          attributePath
+        );
+      }
+      declaredAttributes.set(attributeId, attributePath);
+      out.push(`    .${attributeId} = ${renderFluentPattern(String(attr))}`);
     }
     return;
   }

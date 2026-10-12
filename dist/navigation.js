@@ -15,6 +15,7 @@ import {
 } from "./nav-url.js";
 import { LocalizedLink, useLocale } from "./client.js";
 import { domainLocalePrefix, findLocaleDomain } from "./domain-routing.js";
+import { requestLocale } from "./request-store.js";
 import { formatUrlObject, resolveLocalizedPathname as resolveLocalizedPathname2, assertSafeHref, isExternalUrl } from "./nav-url.js";
 function createNavigation(config) {
   validateI18nConfig({
@@ -109,14 +110,17 @@ function createNavigation(config) {
     const { href, ...rest } = url;
     return [href, { ...rest, ...extra }];
   }
+  function redirectLocale(explicit) {
+    return explicit ?? requestLocale() ?? defaultLocale;
+  }
   function redirect(url, options) {
     const [href, opts] = redirectArgs(url, options);
-    const target = getPathname({ href, locale: opts.locale ?? defaultLocale, forcePrefix: opts.forcePrefix });
+    const target = getPathname({ href, locale: redirectLocale(opts.locale), forcePrefix: opts.forcePrefix });
     return nextRedirect(target, opts.type);
   }
   function permanentRedirect(url, options) {
     const [href, opts] = redirectArgs(url, options);
-    const target = getPathname({ href, locale: opts.locale ?? defaultLocale, forcePrefix: opts.forcePrefix });
+    const target = getPathname({ href, locale: redirectLocale(opts.locale), forcePrefix: opts.forcePrefix });
     return nextPermanentRedirect(target, opts.type);
   }
   return {

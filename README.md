@@ -334,6 +334,13 @@ It is a no-op in `localePrefix: 'never'`, where prefixed URLs do not exist.
 `redirect({ href, locale, forcePrefix }, type)`, so migrating call sites does not
 require rewriting them.
 
+A `redirect()` call that names no locale resolves against the **current request
+locale** — the one `setRequestLocale` stored — so `redirect('/about')` on a
+Russian page goes to `/ru/o-nas`, the same page `useRouter().push('/about')`
+would reach. Outside a request scope, where there is no locale to read, it falls
+back to `defaultLocale`. Pass `locale` explicitly when the switch is the point of
+the call.
+
 ---
 
 ## Usage in Components

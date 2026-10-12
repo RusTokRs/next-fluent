@@ -1,4 +1,3 @@
-import { cache } from 'react';
 import type { FluentBundle, FluentFunction } from '@fluent/bundle';
 import type {
   DefaultKey,
@@ -20,6 +19,8 @@ import { warnAboutDroppedEntries } from './catalog-integrity';
 import { isJsonCatalog, toFluentSource, type MessageSource } from './catalog';
 import { createFormatter } from './formatter';
 import { canonicalizeLocale, matchSupportedLocale, resolveAcceptLanguage } from './utils';
+import { cache } from 'react';
+import { getRequestStore, isRequestScopeActive } from './request-store';
 
 let globalConfigFn: RequestConfigFn | null = null;
 let globalLocales: readonly string[] = ['en'];
@@ -74,31 +75,10 @@ function createServerBundle(
   return createFluentBundle(locale, normalized, options);
 }
 
-interface RequestStore {
-  locale?: string;
-  timeZone?: string;
-  now?: Date;
-  defaultTranslationValues?: RichTranslationValues;
-  formats?: Formats;
-  useIsolating?: boolean;
-  onError?: OnErrorFn;
-  getMessageFallback?: GetMessageFallbackFn;
-  strictNamespace?: boolean;
-  bundles: Map<string, FluentBundle>;
-}
-
-export const getRequestStore = cache((): RequestStore => ({
-  bundles: new Map(),
-}));
-
-/**
- * True when React is memoizing per-request state, i.e. the call happens inside
- * a render/request scope. Outside one, `cache()` hands back a fresh object per
- * call, so a stored locale would vanish immediately.
- */
-function isRequestScopeActive(): boolean {
-  return getRequestStore() === getRequestStore();
-}
+// `getRequestStore` stays part of this module's public surface: the request
+// store itself now lives in `request-store.ts` so the navigation helpers can
+// read the request locale without importing this (server-only) module.
+export { getRequestStore, type RequestStore } from './request-store';
 
 export function setRequestLocale(locale: string, locales?: readonly string[]): void {
   const canonical = canonicalizeLocale(locale);
